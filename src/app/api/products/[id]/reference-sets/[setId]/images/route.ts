@@ -3,6 +3,10 @@ import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 
+export const runtime = 'nodejs'
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 
 export async function POST(
