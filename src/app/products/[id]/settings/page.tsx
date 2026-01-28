@@ -1,8 +1,9 @@
 'use client'
 
 import { use, useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
-import { Save, CheckCircle, Settings, Camera, Palette } from 'lucide-react'
+import { Save, CheckCircle, Settings, Camera, Palette, Trash2 } from 'lucide-react'
 import type { GlobalStyleSettings } from '@/lib/types'
 
 export default function ProductSettingsPage({
@@ -11,13 +12,15 @@ export default function ProductSettingsPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = use(params)
-  const { currentProduct, fetchProduct, updateProduct } = useAppStore()
+  const router = useRouter()
+  const { currentProduct, fetchProduct, updateProduct, deleteProduct } = useAppStore()
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [settings, setSettings] = useState<GlobalStyleSettings>({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     fetchProduct(id)
@@ -198,6 +201,38 @@ export default function ProductSettingsPage({
             Settings saved successfully
           </span>
         )}
+      </div>
+
+      <hr className="border-zinc-800" />
+
+      {/* Danger Zone */}
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold text-red-400">Danger Zone</h2>
+        <div className="rounded-lg border border-red-900/50 bg-red-950/20 p-4 flex items-center justify-between">
+          <div>
+            <p className="font-medium text-zinc-100">Delete this product</p>
+            <p className="text-sm text-zinc-400">
+              This action cannot be undone. All images and settings will be permanently deleted.
+            </p>
+          </div>
+          <button
+            onClick={async () => {
+              if (!window.confirm(`Delete "${currentProduct.name}"? This cannot be undone.`)) return
+              setDeleting(true)
+              try {
+                await deleteProduct(id)
+                router.push('/')
+              } finally {
+                setDeleting(false)
+              }
+            }}
+            disabled={deleting}
+            className="flex items-center gap-2 rounded-lg border border-red-700 bg-red-900/30 px-4 py-2 font-medium text-red-400 hover:bg-red-900/60 disabled:opacity-50 transition-colors shrink-0 ml-4"
+          >
+            <Trash2 className="w-4 h-4" />
+            {deleting ? 'Deleting...' : 'Delete Product'}
+          </button>
+        </div>
       </div>
     </div>
   )
