@@ -56,6 +56,7 @@ interface AppState {
     reference_set_id?: string
   }) => Promise<GenerationJob>
   fetchJobStatus: (productId: string, jobId: string) => Promise<void>
+  clearGenerationQueue: (productId: string) => Promise<void>
 
   // Gallery
   galleryImages: GeneratedImage[]
@@ -370,6 +371,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchJobStatus: async (productId, jobId) => {
     const data = await api(`/api/products/${productId}/generate/${jobId}`)
     set({ currentJob: { ...data.job, images: data.images } })
+  },
+  clearGenerationQueue: async (productId) => {
+    await api(`/api/products/${productId}/generate`, { method: 'DELETE' })
+    await get().fetchGenerationJobs(productId)
   },
 
   // Gallery
