@@ -17,6 +17,66 @@ export async function POST(
     const { id: productId, setId } = await params
     const supabase = createServiceClient()
 
+    const contentType = request.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      const body = await request.json()
+      const uploads = (body?.uploads || []) as Array<{
+        storage_path: string
+        file_name: string
+        mime_type: string
+        file_size: number
+        display_order?: number
+      }>
+
+      if (!Array.isArray(uploads) || uploads.length === 0) {
+        return NextResponse.json({ error: 'No uploads provided' }, { status: 400 })
+      }
+
+      const { data: existing } = await supabase
+        .from(T.reference_images)
+        .select('display_order')
+        .eq('reference_set_id', setId)
+        .order('display_order', { ascending: false })
+
+      const existingCount = existing?.length ?? 0
+      const MAX_REFERENCE_IMAGES = 14
+
+      if (existingCount + uploads.length > MAX_REFERENCE_IMAGES) {
+        return NextResponse.json(
+          {
+            error: `Maximum ${MAX_REFERENCE_IMAGES} reference images allowed per set. Currently ${existingCount}, trying to add ${uploads.length}.`,
+          },
+          { status: 400 }
+        )
+      }
+
+      let nextOrder = (existing?.[0]?.display_order ?? -1) + 1
+      const results = []
+
+      for (const upload of uploads) {
+        const { data: record, error: dbError } = await supabase
+          .from(T.reference_images)
+          .insert({
+            reference_set_id: setId,
+            storage_path: upload.storage_path,
+            file_name: upload.file_name,
+            mime_type: upload.mime_type,
+            file_size: upload.file_size,
+            display_order: Number.isFinite(upload.display_order) ? upload.display_order : nextOrder++,
+          })
+          .select()
+          .single()
+
+        if (dbError) {
+          results.push({ file: upload.file_name, error: dbError.message })
+        } else {
+          results.push(record)
+        }
+      }
+
+      return NextResponse.json(results, { status: 201 })
+    }
+
     const formData = await request.formData()
     const files = formData.getAll('files') as File[]
 

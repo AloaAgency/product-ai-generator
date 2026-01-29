@@ -174,15 +174,121 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   uploadReferenceImages: async (productId, setId, files) => {
-    const formData = new FormData()
-    files.forEach((f) => formData.append('files', f))
-    const data = await api(`/api/products/${productId}/reference-sets/${setId}/images`, {
-      method: 'POST',
-      body: formData,
-    })
-    const payload = data as Array<ReferenceImage & { error?: string; file?: string }>
+    const uploadSpecs = files.map((file, index) => ({
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      clientId: `${index}-${Date.now()}`,
+    }))
+
+    const signed = await api(
+      `/api/products/${productId}/reference-sets/${setId}/images/upload-urls`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: uploadSpecs }),
+      }
+    )
+
+    const signedPayload = signed as Array<
+      | {
+          clientId: string
+          signedUrl: string
+          storage_path: string
+          file_name: string
+          mime_type: string
+          file_size: number
+          display_order: number
+        }
+      | { clientId: string; error: string }
+    >
+
+    const fileMap = new Map(uploadSpecs.map((spec, idx) => [spec.clientId, files[idx]]))
+    const uploadResults: Array<{
+      storage_path: string
+      file_name: string
+      mime_type: string
+      file_size: number
+      display_order: number
+      clientId: string
+      error?: string
+    }> = []
+
+    for (const item of signedPayload) {
+      if (!('signedUrl' in item)) {
+        uploadResults.push({
+          clientId: item.clientId,
+          storage_path: '',
+          file_name: '',
+          mime_type: '',
+          file_size: 0,
+          display_order: 0,
+          error: item.error || 'Failed to sign upload',
+        })
+        continue
+      }
+
+      const file = fileMap.get(item.clientId)
+      if (!file) {
+        uploadResults.push({
+          clientId: item.clientId,
+          storage_path: '',
+          file_name: item.file_name,
+          mime_type: item.mime_type,
+          file_size: item.file_size,
+          display_order: item.display_order,
+          error: 'Missing file data',
+        })
+        continue
+      }
+
+      const uploadResp = await fetch(item.signedUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+        },
+        body: file,
+      })
+
+      if (!uploadResp.ok) {
+        uploadResults.push({
+          clientId: item.clientId,
+          storage_path: item.storage_path,
+          file_name: item.file_name,
+          mime_type: item.mime_type,
+          file_size: item.file_size,
+          display_order: item.display_order,
+          error: `Upload failed (${uploadResp.status})`,
+        })
+        continue
+      }
+
+      uploadResults.push({
+        clientId: item.clientId,
+        storage_path: item.storage_path,
+        file_name: item.file_name,
+        mime_type: item.mime_type,
+        file_size: item.file_size,
+        display_order: item.display_order,
+      })
+    }
+
+    const successfulUploads = uploadResults.filter((u) => !u.error)
+    let payload: Array<ReferenceImage & { error?: string; file?: string }> = []
+    if (successfulUploads.length > 0) {
+      const data = await api(`/api/products/${productId}/reference-sets/${setId}/images`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uploads: successfulUploads }),
+      })
+      payload = data as Array<ReferenceImage & { error?: string; file?: string }>
+    }
+
     const uploaded = payload.filter((img) => Boolean(img?.id))
-    const errors = payload.filter((img) => !img?.id && img?.error)
+    const errors = [
+      ...uploadResults.filter((u) => u.error),
+      ...payload.filter((img) => !img?.id && img?.error),
+    ]
     set((s) => ({
       referenceImages: {
         ...s.referenceImages,
@@ -190,7 +296,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     }))
     if (uploaded.length === 0 && errors.length > 0) {
-      throw new Error(errors[0]?.error || 'Upload failed')
+      const firstError =
+        errors[0] && typeof errors[0] === 'object' && 'error' in errors[0]
+          ? (errors[0] as { error?: string }).error
+          : null
+      throw new Error(firstError || 'Upload failed')
     }
   },
   deleteReferenceImage: async (productId, setId, imgId) => {
