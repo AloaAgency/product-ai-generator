@@ -51,6 +51,7 @@ export interface PromptTemplate {
   name: string
   prompt_text: string
   scene_title: string | null
+  prompt_type: 'image' | 'video'
   tags: string[]
   created_at: string
   updated_at: string
@@ -77,7 +78,7 @@ export interface GenerationJob {
 
 export interface GeneratedImage {
   id: string
-  job_id: string
+  job_id: string | null
   variation_number: number
   storage_path: string
   public_url: string | null
@@ -89,6 +90,9 @@ export interface GeneratedImage {
   file_size: number | null
   approval_status: 'approved' | 'rejected' | 'pending' | null
   notes: string | null
+  media_type: 'image' | 'video'
+  scene_id: string | null
+  scene_name: string | null
   created_at: string
 }
 
@@ -104,11 +108,14 @@ export interface Storyboard {
 
 export interface StoryboardScene {
   id: string
-  storyboard_id: string
-  scene_order: number
+  product_id: string
+  storyboard_id: string | null
+  scene_order: number | null
   title: string | null
   prompt_text: string | null
   end_frame_prompt: string | null
+  motion_prompt: string | null
+  generation_model: string
   paired: boolean
   start_frame_image_id: string | null
   end_frame_image_id: string | null

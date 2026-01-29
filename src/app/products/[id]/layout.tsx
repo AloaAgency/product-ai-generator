@@ -14,6 +14,7 @@ import {
   GalleryHorizontalEnd,
   FileText,
   Film,
+  Clapperboard,
 } from 'lucide-react'
 
 const navItems = [
@@ -24,6 +25,7 @@ const navItems = [
   { label: 'Generate', href: '/generate', icon: Sparkles },
   { label: 'Gallery', href: '/gallery', icon: GalleryHorizontalEnd },
   { label: 'Storyboard', href: '/storyboard', icon: Film },
+  { label: 'Scenes', href: '/scenes', icon: Clapperboard },
 ]
 
 export default function ProductLayout({

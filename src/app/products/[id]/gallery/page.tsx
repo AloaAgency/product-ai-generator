@@ -11,6 +11,9 @@ import {
   ImageIcon,
   Loader2,
   Layers,
+  Video,
+  Play,
+  X,
 } from 'lucide-react'
 import Link from 'next/link'
 
@@ -46,8 +49,10 @@ export default function GalleryPage({
   } = useAppStore()
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [mediaFilter, setMediaFilter] = useState<'all' | 'image' | 'video'>('all')
   const [jobFilter, setJobFilter] = useState<string>('all')
   const [groupByScene, setGroupByScene] = useState(false)
+  const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null)
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [signedUrlsById, setSignedUrlsById] = useState<Record<string, SignedImageUrls>>({})
@@ -68,7 +73,13 @@ export default function GalleryPage({
 
   // Unique job IDs for filter dropdown
   const jobIds = useMemo(() => {
-    const ids = Array.from(new Set(galleryImages.map((img) => img.job_id)))
+    const ids = Array.from(
+      new Set(
+        galleryImages
+          .map((img) => img.job_id)
+          .filter((id): id is string => Boolean(id))
+      )
+    )
     return ids
   }, [galleryImages])
 
@@ -79,10 +90,14 @@ export default function GalleryPage({
         const imgStatus = img.approval_status ?? 'pending'
         if (imgStatus !== statusFilter) return false
       }
+      if (mediaFilter !== 'all') {
+        const mt = (img as unknown as Record<string, unknown>).media_type as string || 'image'
+        if (mt !== mediaFilter) return false
+      }
       if (jobFilter !== 'all' && img.job_id !== jobFilter) return false
       return true
     })
-  }, [galleryImages, statusFilter, jobFilter])
+  }, [galleryImages, statusFilter, mediaFilter, jobFilter])
 
   // Build a template lookup map
   const templateMap = useMemo(() => {
@@ -91,11 +106,16 @@ export default function GalleryPage({
     return map
   }, [promptTemplates])
 
+  const imageOnly = useMemo(
+    () => filteredImages.filter((img) => (img as unknown as Record<string, unknown>).media_type !== 'video'),
+    [filteredImages]
+  )
+
   // Group images by scene (prompt_template_id)
   const sceneGroups = useMemo(() => {
-    if (!groupByScene) return null
-    const groups = new Map<string, typeof filteredImages>()
-    for (const img of filteredImages) {
+    if (!groupByScene || mediaFilter === 'video') return null
+    const groups = new Map<string, typeof imageOnly>()
+    for (const img of imageOnly) {
       const key = (img as unknown as Record<string, unknown>).prompt_template_id as string | null ?? '__ungrouped__'
       const arr = groups.get(key)
       if (arr) arr.push(img)
@@ -109,11 +129,11 @@ export default function GalleryPage({
         images,
       }
     })
-  }, [groupByScene, filteredImages, templateMap])
+  }, [groupByScene, mediaFilter, imageOnly, templateMap])
 
   // Map to lightbox format
   const lightboxImages: LightboxImage[] = useMemo(() => {
-    return filteredImages.map((img) => ({
+    return imageOnly.map((img) => ({
       id: img.id,
       public_url: img.public_url,
       thumb_public_url: img.thumb_public_url,
@@ -126,7 +146,7 @@ export default function GalleryPage({
       approval_status: img.approval_status ?? 'pending',
       notes: img.notes,
     }))
-  }, [filteredImages, signedUrlsById])
+  }, [imageOnly, signedUrlsById])
 
   const ensureSignedUrls = useCallback(async (imageId: string) => {
     const cached = signedUrlsRef.current[imageId]
@@ -148,7 +168,7 @@ export default function GalleryPage({
       await deleteImage(imageId)
       // Adjust lightbox after deletion
       if (lightboxIndex !== null) {
-        const newFiltered = filteredImages.filter((img) => img.id !== imageId)
+        const newFiltered = imageOnly.filter((img) => img.id !== imageId)
         if (newFiltered.length === 0) {
           setLightboxIndex(null)
         } else if (lightboxIndex >= newFiltered.length) {
@@ -206,16 +226,16 @@ export default function GalleryPage({
 
   useEffect(() => {
     if (lightboxIndex === null) return
-    const current = filteredImages[lightboxIndex]
+    const current = imageOnly[lightboxIndex]
     if (!current) return
     void ensureSignedUrls(current.id)
 
-    const next = filteredImages[lightboxIndex + 1]
+    const next = imageOnly[lightboxIndex + 1]
     if (next) void ensureSignedUrls(next.id)
 
-    const prev = filteredImages[lightboxIndex - 1]
+    const prev = imageOnly[lightboxIndex - 1]
     if (prev) void ensureSignedUrls(prev.id)
-  }, [lightboxIndex, filteredImages, ensureSignedUrls])
+  }, [lightboxIndex, imageOnly, ensureSignedUrls])
 
   const statusBadge = (status: string | null) => {
     switch (status) {
@@ -283,6 +303,31 @@ export default function GalleryPage({
             ))}
           </div>
 
+          <div className="mx-2 h-5 w-px bg-zinc-700" />
+
+          <div className="flex items-center gap-1.5">
+            {([
+              { label: 'All', value: 'all' as const, icon: null },
+              { label: 'Images', value: 'image' as const, icon: ImageIcon },
+              { label: 'Videos', value: 'video' as const, icon: Video },
+            ]).map((f) => (
+              <button
+                key={f.value}
+                onClick={() => setMediaFilter(f.value)}
+                className={`flex items-center gap-1 rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+                  mediaFilter === f.value
+                    ? 'bg-zinc-100 text-zinc-900'
+                    : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                }`}
+              >
+                {f.icon && <f.icon className="h-3.5 w-3.5" />}
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="mx-2 h-5 w-px bg-zinc-700" />
+
           <button
             onClick={() => setGroupByScene((v) => !v)}
             className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition-colors ${
@@ -339,11 +384,13 @@ export default function GalleryPage({
                 </div>
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                   {group.images.map((img) => {
-                    const globalIndex = filteredImages.indexOf(img)
+                    const globalIndex = imageOnly.findIndex((item) => item.id === img.id)
                     return (
                       <button
                         key={img.id}
-                        onClick={() => setLightboxIndex(globalIndex)}
+                        onClick={() => {
+                          if (globalIndex !== -1) setLightboxIndex(globalIndex)
+                        }}
                         className="group relative aspect-square overflow-hidden rounded-lg border border-zinc-800 bg-zinc-800 hover:border-zinc-600 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500"
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -362,24 +409,65 @@ export default function GalleryPage({
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-4 p-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-            {filteredImages.map((img, index) => (
-              <button
-                key={img.id}
-                onClick={() => setLightboxIndex(index)}
-                className="group relative aspect-square overflow-hidden rounded-lg border border-zinc-800 bg-zinc-800 hover:border-zinc-600 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={img.thumb_public_url ?? img.public_url ?? undefined}
-                  alt={`Variation ${img.variation_number}`}
-                  className="h-full w-full object-cover transition-transform group-hover:scale-105"
-                />
-                {statusBadge(img.approval_status)}
-              </button>
-            ))}
+            {filteredImages.map((img, index) => {
+              const isVideo = (img as unknown as Record<string, unknown>).media_type === 'video'
+              const imageIndex = imageOnly.findIndex((item) => item.id === img.id)
+              return (
+                <button
+                  key={img.id}
+                  onClick={() => {
+                    if (isVideo && img.public_url) {
+                      setPlayingVideoUrl(img.public_url)
+                    } else {
+                      if (imageIndex !== -1) setLightboxIndex(imageIndex)
+                    }
+                  }}
+                  className="group relative aspect-square overflow-hidden rounded-lg border border-zinc-800 bg-zinc-800 hover:border-zinc-600 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500"
+                >
+                  {isVideo ? (
+                    <div className="flex h-full w-full items-center justify-center bg-zinc-800">
+                      <Play className="h-10 w-10 text-zinc-400 group-hover:text-zinc-200 transition-colors" />
+                    </div>
+                  ) : (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      src={img.thumb_public_url ?? img.public_url ?? undefined}
+                      alt={`Variation ${img.variation_number}`}
+                      className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                    />
+                  )}
+                  {isVideo && (
+                    <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded bg-purple-600/80 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                      <Video className="h-3 w-3" /> Video
+                    </span>
+                  )}
+                  {statusBadge(img.approval_status)}
+                </button>
+              )
+            })}
           </div>
         )
       }
+
+      {/* Video playback overlay */}
+      {playingVideoUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
+          <div className="relative w-full max-w-4xl mx-4">
+            <button
+              onClick={() => setPlayingVideoUrl(null)}
+              className="absolute -top-10 right-0 rounded p-1 text-zinc-400 hover:text-zinc-100"
+            >
+              <X className="h-6 w-6" />
+            </button>
+            <video
+              src={playingVideoUrl}
+              controls
+              autoPlay
+              className="w-full rounded-lg"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Lightbox */}
       {lightboxIndex !== null && (

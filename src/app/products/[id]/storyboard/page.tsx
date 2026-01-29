@@ -1,6 +1,6 @@
 'use client'
 
-import { use, useEffect, useState, useCallback, useRef } from 'react'
+import { use, useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useAppStore } from '@/lib/store'
 import type { Storyboard as StoryboardRecord, StoryboardScene } from '@/lib/types'
 import {
@@ -17,6 +17,7 @@ import {
   ToggleRight,
   Image as ImageIcon,
   Clapperboard,
+  Video,
 } from 'lucide-react'
 
 type SignedImageUrls = {
@@ -48,6 +49,10 @@ export default function StoryboardPage({
 }) {
   const { id } = use(params)
   const { galleryImages, loadingGallery, fetchGallery } = useAppStore()
+  const galleryImageItems = useMemo(
+    () => galleryImages.filter((img) => img.media_type !== 'video'),
+    [galleryImages]
+  )
 
   // Storyboard state
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
@@ -61,6 +66,8 @@ export default function StoryboardPage({
   const [scenes, setScenes] = useState<StoryboardScene[]>([])
   const [loadingScenes, setLoadingScenes] = useState(false)
   const [generatingScene, setGeneratingScene] = useState<string | null>(null)
+  const [generatingVideo, setGeneratingVideo] = useState<string | null>(null)
+  const [sceneVideos, setSceneVideos] = useState<Record<string, Array<{ id: string; public_url: string | null; created_at: string }>>>({})
 
   // Presentation state
   const [presenting, setPresenting] = useState<Storyboard | null>(null)
@@ -180,6 +187,36 @@ export default function StoryboardPage({
       setScenes((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
     } finally {
       setGeneratingScene(null)
+    }
+  }
+
+  async function loadSceneVideos(sceneId: string, boardId: string) {
+    try {
+      const data = await api(`/api/products/${id}/storyboards/${boardId}/scenes/${sceneId}/videos`)
+      setSceneVideos((prev) => ({ ...prev, [sceneId]: data.videos || [] }))
+    } catch {
+      // ignore
+    }
+  }
+
+  async function generateVideo(sceneId: string) {
+    if (!activeBoard) return
+    setGeneratingVideo(sceneId)
+    try {
+      const scene = scenes.find((s) => s.id === sceneId)
+      const model = scene?.generation_model || 'veo3'
+      await api(
+        `/api/products/${id}/storyboards/${activeBoard.id}/scenes/${sceneId}/generate-video`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model }),
+        }
+      )
+      // Reload videos for this scene
+      await loadSceneVideos(sceneId, activeBoard.id)
+    } finally {
+      setGeneratingVideo(null)
     }
   }
 
@@ -329,13 +366,13 @@ export default function StoryboardPage({
 
   // Helper: get best thumbnail URL for an image
   function thumbUrl(imgId: string): string {
-    const img = galleryImages.find((g) => g.id === imgId)
+    const img = galleryImageItems.find((g) => g.id === imgId)
     const signed = signedUrlsById[imgId]
     return signed?.thumb_signed_url ?? img?.thumb_public_url ?? img?.public_url ?? ''
   }
 
   function fullUrl(imgId: string): string {
-    const img = galleryImages.find((g) => g.id === imgId)
+    const img = galleryImageItems.find((g) => g.id === imgId)
     const signed = signedUrlsById[imgId]
     return signed?.signed_url ?? signed?.preview_signed_url ?? img?.public_url ?? ''
   }
@@ -450,10 +487,14 @@ export default function StoryboardPage({
                 index={idx}
                 total={scenes.length}
                 isGenerating={generatingScene === scene.id}
+                isGeneratingVideo={generatingVideo === scene.id}
+                videos={sceneVideos[scene.id] || []}
                 onUpdate={(updates) => updateScene(scene.id, updates)}
                 onDelete={() => deleteScene(scene.id)}
                 onMove={(dir) => moveScene(idx, dir)}
                 onGenerate={(frame) => generateFrame(scene.id, frame)}
+                onGenerateVideo={() => generateVideo(scene.id)}
+                onLoadVideos={() => activeBoard && loadSceneVideos(scene.id, activeBoard.id)}
                 sceneThumbUrl={sceneThumbUrl}
               />
             ))
@@ -547,11 +588,11 @@ export default function StoryboardPage({
               <div className="flex justify-center py-8">
                 <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
               </div>
-            ) : galleryImages.length === 0 ? (
+            ) : galleryImageItems.length === 0 ? (
               <p className="py-8 text-center text-sm text-zinc-500">No gallery images available.</p>
             ) : (
               <div className="grid grid-cols-5 gap-2 max-h-64 overflow-y-auto sm:grid-cols-6 md:grid-cols-8">
-                {galleryImages.map((img) => {
+                {galleryImageItems.map((img) => {
                   const seqIndex = editorImageIds.indexOf(img.id)
                   const selected = seqIndex !== -1
                   return (
@@ -698,33 +739,47 @@ function SceneCard({
   index,
   total,
   isGenerating,
+  isGeneratingVideo,
+  videos,
   onUpdate,
   onDelete,
   onMove,
   onGenerate,
+  onGenerateVideo,
+  onLoadVideos,
   sceneThumbUrl,
 }: {
   scene: StoryboardScene
   index: number
   total: number
   isGenerating: boolean
+  isGeneratingVideo: boolean
+  videos: Array<{ id: string; public_url: string | null; created_at: string }>
   onUpdate: (updates: Partial<StoryboardScene>) => void
   onDelete: () => void
   onMove: (dir: -1 | 1) => void
   onGenerate: (frame: 'start' | 'end' | 'both') => void
+  onGenerateVideo: () => void
+  onLoadVideos: () => void
   sceneThumbUrl: (id: string | null) => string
 }) {
   const [localTitle, setLocalTitle] = useState(scene.title || '')
   const [localPrompt, setLocalPrompt] = useState(scene.prompt_text || '')
   const [localEndPrompt, setLocalEndPrompt] = useState(scene.end_frame_prompt || '')
+  const [localMotionPrompt, setLocalMotionPrompt] = useState(scene.motion_prompt || '')
+  const [localModel, setLocalModel] = useState(scene.generation_model || 'veo3')
   const [showGenMenu, setShowGenMenu] = useState(false)
+  const [showVideos, setShowVideos] = useState(false)
+  const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null)
 
   // Sync local state when scene updates from server
   useEffect(() => {
     setLocalTitle(scene.title || '')
     setLocalPrompt(scene.prompt_text || '')
     setLocalEndPrompt(scene.end_frame_prompt || '')
-  }, [scene.title, scene.prompt_text, scene.end_frame_prompt])
+    setLocalMotionPrompt(scene.motion_prompt || '')
+    setLocalModel(scene.generation_model || 'veo3')
+  }, [scene.title, scene.prompt_text, scene.end_frame_prompt, scene.motion_prompt, scene.generation_model])
 
   const saveField = (field: string, value: string | boolean) => {
     onUpdate({ [field]: value } as Partial<StoryboardScene>)
@@ -818,6 +873,101 @@ function SceneCard({
           </div>
         )}
       </div>
+
+      {/* Motion prompt + Video generation */}
+      <div className="space-y-2 mb-3">
+        <label className="text-xs font-medium text-zinc-400">Motion Prompt (Video)</label>
+        <textarea
+          value={localMotionPrompt}
+          onChange={(e) => setLocalMotionPrompt(e.target.value)}
+          onBlur={() => { if (localMotionPrompt !== (scene.motion_prompt || '')) saveField('motion_prompt', localMotionPrompt) }}
+          placeholder="Describe the motion/video transition..."
+          rows={2}
+          className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-purple-500 resize-none"
+        />
+        <div className="flex items-center gap-2">
+          <select
+            value={localModel}
+            onChange={(e) => {
+              setLocalModel(e.target.value)
+              saveField('generation_model', e.target.value)
+            }}
+            className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 outline-none focus:border-zinc-500"
+          >
+            <option value="veo3">Veo 3</option>
+            <option value="ltx">LTX Video</option>
+          </select>
+          {isGeneratingVideo ? (
+            <div className="flex items-center gap-2 text-sm text-zinc-400">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Generating video...
+            </div>
+          ) : (
+            <button
+              onClick={onGenerateVideo}
+              disabled={!localMotionPrompt.trim() || !scene.start_frame_image_id}
+              className="flex items-center gap-1.5 rounded-lg bg-purple-600 px-3 py-1.5 text-sm text-white hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <Video className="h-3.5 w-3.5" />
+              Generate Video
+            </button>
+          )}
+          <button
+            onClick={() => {
+              setShowVideos(!showVideos)
+              if (!showVideos) onLoadVideos()
+            }}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-zinc-400 hover:bg-zinc-700 transition-colors"
+          >
+            <Film className="h-3.5 w-3.5" />
+            Videos {videos.length > 0 && `(${videos.length})`}
+          </button>
+        </div>
+      </div>
+
+      {/* Video history */}
+      {showVideos && (
+        <div className="mb-3 rounded-lg border border-zinc-700 bg-zinc-800/50 p-3">
+          <h4 className="mb-2 text-xs font-medium text-zinc-400">Video History</h4>
+          {videos.length === 0 ? (
+            <p className="text-xs text-zinc-500">No videos generated yet.</p>
+          ) : (
+            <div className="flex gap-2 overflow-x-auto">
+              {videos.map((v) => (
+                <button
+                  key={v.id}
+                  onClick={() => setPlayingVideoUrl(v.public_url)}
+                  className="relative flex-shrink-0 h-20 w-32 overflow-hidden rounded-lg border border-zinc-600 bg-zinc-700 hover:border-zinc-400 transition-colors"
+                >
+                  <div className="flex h-full w-full items-center justify-center">
+                    <Play className="h-6 w-6 text-zinc-300" />
+                  </div>
+                  <span className="absolute bottom-0.5 right-1 text-[9px] text-zinc-400">
+                    {new Date(v.created_at).toLocaleDateString()}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Video playback overlay */}
+      {playingVideoUrl && (
+        <div className="mb-3 rounded-lg border border-zinc-700 bg-black p-2">
+          <div className="flex justify-end mb-1">
+            <button onClick={() => setPlayingVideoUrl(null)} className="p-0.5 text-zinc-400 hover:text-zinc-200">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <video
+            src={playingVideoUrl}
+            controls
+            autoPlay
+            className="w-full rounded"
+          />
+        </div>
+      )}
 
       {/* Generate button */}
       <div className="relative">

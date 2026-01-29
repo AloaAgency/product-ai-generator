@@ -13,6 +13,8 @@ import {
   FileText,
   Upload,
   Download,
+  Image as ImageIcon,
+  Video,
 } from 'lucide-react'
 
 export default function PromptsPage({
@@ -46,6 +48,8 @@ export default function PromptsPage({
 
   const [batchUploading, setBatchUploading] = useState(false)
   const [batchResult, setBatchResult] = useState<{ total: number; created: number } | null>(null)
+  const [promptTypeFilter, setPromptTypeFilter] = useState<'all' | 'image' | 'video'>('all')
+  const [newPromptType, setNewPromptType] = useState<'image' | 'video'>('image')
 
   useEffect(() => {
     fetchPromptTemplates(id)
@@ -112,6 +116,7 @@ export default function PromptsPage({
         name: newName.trim(),
         prompt_text: newText.trim(),
         tags: tags.length > 0 ? tags : undefined,
+        prompt_type: newPromptType,
       })
       setNewName('')
       setNewText('')
@@ -197,6 +202,28 @@ export default function PromptsPage({
         </div>
       </div>
 
+      {/* Prompt type filter */}
+      <div className="flex items-center gap-1.5">
+        {([
+          { label: 'All', value: 'all' as const },
+          { label: 'Image', value: 'image' as const, icon: ImageIcon },
+          { label: 'Video', value: 'video' as const, icon: Video },
+        ]).map((f) => (
+          <button
+            key={f.value}
+            onClick={() => setPromptTypeFilter(f.value)}
+            className={`flex items-center gap-1 rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+              promptTypeFilter === f.value
+                ? 'bg-zinc-100 text-zinc-900'
+                : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+            }`}
+          >
+            {f.icon && <f.icon className="h-3.5 w-3.5" />}
+            {f.label}
+          </button>
+        ))}
+      </div>
+
       {/* Batch upload result */}
       {batchResult && (
         <div className="flex items-center justify-between rounded-lg border border-green-800 bg-green-950/40 px-4 py-3 text-sm text-green-300">
@@ -210,7 +237,27 @@ export default function PromptsPage({
       {/* Create Form */}
       {showCreate && (
         <div className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-5 space-y-4">
-          <h2 className="text-sm font-semibold text-zinc-300">Create Template</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-zinc-300">Create Template</h2>
+            <div className="flex items-center gap-1 rounded-lg border border-zinc-700 p-0.5">
+              <button
+                onClick={() => setNewPromptType('image')}
+                className={`flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                  newPromptType === 'image' ? 'bg-zinc-600 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <ImageIcon className="h-3 w-3" /> Image
+              </button>
+              <button
+                onClick={() => setNewPromptType('video')}
+                className={`flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                  newPromptType === 'video' ? 'bg-purple-600 text-white' : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <Video className="h-3 w-3" /> Video
+              </button>
+            </div>
+          </div>
           <input
             type="text"
             placeholder="Template name"
@@ -253,14 +300,18 @@ export default function PromptsPage({
       )}
 
       {/* Template List */}
-      {promptTemplates.length === 0 ? (
+      {(() => {
+        const filtered = promptTypeFilter === 'all'
+          ? promptTemplates
+          : promptTemplates.filter((t) => (t.prompt_type || 'image') === promptTypeFilter)
+        return filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-zinc-800 bg-zinc-800/20 py-16 text-zinc-500">
           <FileText className="h-10 w-10 mb-3" />
           <p className="text-sm">No prompt templates yet.</p>
         </div>
       ) : (
         <div className="space-y-3">
-          {promptTemplates.map((t) => (
+          {filtered.map((t) => (
             <div
               key={t.id}
               className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-4 space-y-3"
@@ -356,24 +407,30 @@ export default function PromptsPage({
                       )}
                     </div>
                   </div>
-                  {t.tags && t.tags.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {t.tags.map((tag) => (
-                        <span
-                          key={tag}
-                          className="rounded-full bg-zinc-700/60 px-2.5 py-0.5 text-xs text-zinc-400"
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                  <div className="flex flex-wrap gap-1.5">
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                      t.prompt_type === 'video'
+                        ? 'bg-purple-600/20 text-purple-400'
+                        : 'bg-zinc-700/60 text-zinc-400'
+                    }`}>
+                      {t.prompt_type === 'video' ? 'Video' : 'Image'}
+                    </span>
+                    {t.tags && t.tags.length > 0 && t.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded-full bg-zinc-700/60 px-2.5 py-0.5 text-xs text-zinc-400"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
                 </>
               )}
             </div>
           ))}
         </div>
-      )}
+      )
+      })()}
     </div>
   )
 }
