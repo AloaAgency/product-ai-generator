@@ -188,14 +188,22 @@ export default function GalleryPage({
       const signed = await ensureSignedUrls(img.id)
       const url = signed?.download_url || signed?.signed_url || img.public_url
       if (!url) continue
-      const link = document.createElement('a')
-      link.href = url
-      link.download = img.storage_path?.split('/').pop() ?? `product-gen-${img.variation_number || 0}.png`
-      link.rel = 'noopener'
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      await new Promise((resolve) => setTimeout(resolve, 200))
+      try {
+        const fileName = img.storage_path?.split('/').pop() ?? `product-gen-${img.variation_number || 0}.png`
+        const resp = await fetch(url)
+        const blob = await resp.blob()
+        const blobUrl = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = blobUrl
+        link.download = fileName
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(blobUrl)
+        await new Promise((resolve) => setTimeout(resolve, 300))
+      } catch (err) {
+        console.error('Download failed for image', img.id, err)
+      }
     }
   }
 

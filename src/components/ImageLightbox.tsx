@@ -98,13 +98,17 @@ export function ImageLightbox({
     if (!url) return
 
     try {
+      const fileName = currentImage.file_name || `product-gen-${currentImage.variation_number || 0}.png`
+      const resp = await fetch(url)
+      const blob = await resp.blob()
+      const blobUrl = URL.createObjectURL(blob)
       const link = document.createElement('a')
-      link.href = url
-      link.download = currentImage.file_name || `product-gen-${currentImage.variation_number || 0}.png`
-      link.rel = 'noopener'
+      link.href = blobUrl
+      link.download = fileName
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
+      URL.revokeObjectURL(blobUrl)
     } catch (error) {
       console.error('Download failed:', error)
     }
