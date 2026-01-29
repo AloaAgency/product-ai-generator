@@ -171,12 +171,25 @@ export async function POST(
         if (parallelism) url.searchParams.set('parallel', parallelism)
         if (budget) url.searchParams.set('budget', budget)
 
-        void fetch(url.toString(), {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${cronSecret}`,
-          },
-        })
+        void (async () => {
+          try {
+            const res = await fetch(url.toString(), {
+              method: 'GET',
+              headers: {
+                Authorization: `Bearer ${cronSecret}`,
+              },
+            })
+            console.log('[Generate] Worker kick', {
+              jobId: job.id,
+              status: res.status,
+            })
+          } catch (err) {
+            console.warn('[Generate] Worker kick failed', {
+              jobId: job.id,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        })()
       }
     }
 

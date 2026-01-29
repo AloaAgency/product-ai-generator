@@ -33,6 +33,13 @@ export async function GET(request: NextRequest) {
   const timeBudgetMs = Number(url.searchParams.get('budget') || process.env.GENERATION_TIME_BUDGET_MS || 50000)
 
   try {
+    console.log('[Worker] Trigger', {
+      jobId: jobId || null,
+      batchSize,
+      parallelism,
+      jobBatchSize,
+      timeBudgetMs,
+    })
     if (jobId) {
       const result = await processGenerationJob(jobId, { batchSize, parallelism, timeBudgetMs })
       return NextResponse.json({ processed: 1, results: [result] })
@@ -58,8 +65,10 @@ export async function GET(request: NextRequest) {
       const result = await processGenerationJob(job.id, { batchSize, parallelism, timeBudgetMs })
       results.push(result)
     }
+    console.log('[Worker] Completed', { processed: results.length })
     return NextResponse.json({ processed: results.length, results })
   } catch (err) {
+    console.warn('[Worker] Error', err)
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Worker error' },
       { status: 500 }
