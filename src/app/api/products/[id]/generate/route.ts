@@ -159,6 +159,25 @@ export async function POST(
       const finalParallel = Number.isFinite(overrideParallel) && overrideParallel > 0 ? overrideParallel : parallelism
       const finalBudget = Number.isFinite(overrideBudget) && overrideBudget > 0 ? overrideBudget : timeBudgetMs
       void processGenerationJob(job.id, { batchSize: finalBatch, parallelism: finalParallel, timeBudgetMs: finalBudget })
+    } else {
+      const cronSecret = process.env.CRON_SECRET
+      if (cronSecret) {
+        const url = new URL('/api/worker/generate', request.url)
+        url.searchParams.set('jobId', job.id)
+        const batchSize = process.env.GENERATION_BATCH_SIZE
+        const parallelism = process.env.GENERATION_PARALLELISM
+        const budget = process.env.GENERATION_TIME_BUDGET_MS
+        if (batchSize) url.searchParams.set('batch', batchSize)
+        if (parallelism) url.searchParams.set('parallel', parallelism)
+        if (budget) url.searchParams.set('budget', budget)
+
+        void fetch(url.toString(), {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${cronSecret}`,
+          },
+        })
+      }
     }
 
     return NextResponse.json({ job }, { status: 201 })

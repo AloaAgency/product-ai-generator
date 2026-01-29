@@ -57,6 +57,8 @@ interface AppState {
   }) => Promise<GenerationJob>
   fetchJobStatus: (productId: string, jobId: string) => Promise<void>
   clearGenerationQueue: (productId: string) => Promise<void>
+  devParallelGeneration: boolean
+  setDevParallelGeneration: (enabled: boolean) => void
 
   // Gallery
   galleryImages: GeneratedImage[]
@@ -80,7 +82,21 @@ const api = async (url: string, options?: RequestInit) => {
   return res.json()
 }
 
+const getDevParallelDefault = () => {
+  if (typeof window === 'undefined') return true
+  const stored = window.localStorage.getItem('devParallelGeneration')
+  if (stored === null) return true
+  return stored === 'true'
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
+  devParallelGeneration: getDevParallelDefault(),
+  setDevParallelGeneration: (enabled) => {
+    set({ devParallelGeneration: enabled })
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('devParallelGeneration', String(enabled))
+    }
+  },
   // Products
   products: [],
   currentProduct: null,
@@ -359,10 +375,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   startGeneration: async (productId, data) => {
+    const devParallel = get().devParallelGeneration
+    const body = {
+      ...data,
+      ...(process.env.NODE_ENV === 'development' && !devParallel
+        ? { parallelism_override: 1, batch_override: 1 }
+        : {}),
+    }
     const result = await api(`/api/products/${productId}/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify(body),
     })
     const job = result.job ?? result
     set((s) => ({ generationJobs: [job, ...s.generationJobs] }))
