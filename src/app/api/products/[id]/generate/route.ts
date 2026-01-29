@@ -47,6 +47,9 @@ export async function POST(
       resolution = '4K',
       aspect_ratio = '16:9',
       reference_set_id = null,
+      parallelism_override,
+      batch_override,
+      time_budget_ms_override,
     } = body
 
     if (!prompt_text) {
@@ -141,7 +144,21 @@ export async function POST(
       process.env.INLINE_GENERATION === 'true' || process.env.NODE_ENV === 'development'
 
     if (shouldRunInline) {
-      void processGenerationJob(job.id, { batchSize: variation_count })
+      const batchSizeRaw = Number(process.env.GENERATION_BATCH_SIZE)
+      const batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0
+        ? batchSizeRaw
+        : variation_count || 1
+      const parallelismRaw = Number(process.env.GENERATION_PARALLELISM)
+      const parallelism = Number.isFinite(parallelismRaw) && parallelismRaw > 0 ? parallelismRaw : 1
+      const timeBudgetMsRaw = Number(process.env.GENERATION_TIME_BUDGET_MS)
+      const timeBudgetMs = Number.isFinite(timeBudgetMsRaw) && timeBudgetMsRaw > 0 ? timeBudgetMsRaw : 760000
+      const overrideBatch = Number(batch_override)
+      const overrideParallel = Number(parallelism_override)
+      const overrideBudget = Number(time_budget_ms_override)
+      const finalBatch = Number.isFinite(overrideBatch) && overrideBatch > 0 ? overrideBatch : batchSize
+      const finalParallel = Number.isFinite(overrideParallel) && overrideParallel > 0 ? overrideParallel : parallelism
+      const finalBudget = Number.isFinite(overrideBudget) && overrideBudget > 0 ? overrideBudget : timeBudgetMs
+      void processGenerationJob(job.id, { batchSize: finalBatch, parallelism: finalParallel, timeBudgetMs: finalBudget })
     }
 
     return NextResponse.json({ job }, { status: 201 })
