@@ -49,7 +49,7 @@ export async function POST(
     const { id: product_id } = await params
     const supabase = createServiceClient()
     const body = await request.json()
-    const { name, prompt_text, tags } = body
+    const { name, prompt_text, tags, prompt_type } = body
 
     if (!name || !prompt_text) {
       return NextResponse.json({ error: 'name and prompt_text are required' }, { status: 400 })
@@ -62,6 +62,7 @@ export async function POST(
         name,
         prompt_text,
         tags: tags ?? [],
+        ...(prompt_type ? { prompt_type } : {}),
       })
       .select()
       .single()

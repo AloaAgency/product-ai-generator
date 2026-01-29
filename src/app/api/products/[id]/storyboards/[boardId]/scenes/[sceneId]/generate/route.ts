@@ -21,6 +21,8 @@ async function generateAndStoreImage(
   settings: Product['global_style_settings'],
   referenceImages: ReferenceImage[],
   extraReferenceBase64?: { mimeType: string; base64: string },
+  sceneId?: string,
+  sceneName?: string | null,
 ) {
   // Download reference images
   const refImagesBase64: { mimeType: string; base64: string }[] = []
@@ -76,6 +78,9 @@ async function generateAndStoreImage(
       mime_type: result.mimeType,
       file_size: imageBuffer.length,
       approval_status: 'pending',
+      media_type: 'image',
+      scene_id: sceneId ?? null,
+      scene_name: sceneName ?? null,
     })
     .select()
     .single()
@@ -156,7 +161,16 @@ export async function POST(
       if (!scene.prompt_text) {
         return NextResponse.json({ error: 'Scene prompt_text is required for start frame' }, { status: 400 })
       }
-      const { imageId } = await generateAndStoreImage(supabase, productId, scene.prompt_text, settings, referenceImages)
+      const { imageId } = await generateAndStoreImage(
+        supabase,
+        productId,
+        scene.prompt_text,
+        settings,
+        referenceImages,
+        undefined,
+        scene.id,
+        scene.title
+      )
       result.start_frame_image_id = imageId
       await supabase
         .from(T.storyboard_scenes)
@@ -196,7 +210,16 @@ export async function POST(
         }
       }
 
-      const { imageId } = await generateAndStoreImage(supabase, productId, endPrompt, settings, referenceImages, extraRef)
+      const { imageId } = await generateAndStoreImage(
+        supabase,
+        productId,
+        endPrompt,
+        settings,
+        referenceImages,
+        extraRef,
+        scene.id,
+        scene.title
+      )
       result.end_frame_image_id = imageId
       await supabase
         .from(T.storyboard_scenes)

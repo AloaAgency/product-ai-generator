@@ -38,7 +38,7 @@ interface AppState {
   // Prompt Templates
   promptTemplates: PromptTemplate[]
   fetchPromptTemplates: (productId: string) => Promise<void>
-  createPromptTemplate: (productId: string, data: { name: string; prompt_text: string; tags?: string[] }) => Promise<PromptTemplate>
+  createPromptTemplate: (productId: string, data: { name: string; prompt_text: string; tags?: string[]; prompt_type?: 'image' | 'video' }) => Promise<PromptTemplate>
   updatePromptTemplate: (productId: string, promptId: string, data: Partial<Pick<PromptTemplate, 'name' | 'prompt_text' | 'tags'>>) => Promise<void>
   deletePromptTemplate: (productId: string, promptId: string) => Promise<void>
 
@@ -60,7 +60,7 @@ interface AppState {
   // Gallery
   galleryImages: GeneratedImage[]
   loadingGallery: boolean
-  fetchGallery: (productId: string, filters?: { job_id?: string; approval_status?: string }) => Promise<void>
+  fetchGallery: (productId: string, filters?: { job_id?: string; approval_status?: string; media_type?: string; scene_id?: string }) => Promise<void>
   updateImageApproval: (imageId: string, approval_status: string | null, notes?: string) => Promise<void>
   deleteImage: (imageId: string) => Promise<void>
 
@@ -272,6 +272,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const params = new URLSearchParams()
       if (filters?.job_id) params.set('job_id', filters.job_id)
       if (filters?.approval_status) params.set('approval_status', filters.approval_status)
+      if (filters?.media_type) params.set('media_type', filters.media_type)
+      if (filters?.scene_id) params.set('scene_id', filters.scene_id)
       const qs = params.toString()
       const data = await api(`/api/products/${productId}/gallery${qs ? `?${qs}` : ''}`)
       set({ galleryImages: data.images ?? data })

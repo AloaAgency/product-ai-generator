@@ -2,10 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string; boardId: string; sceneId: string }> }
-) {
+type Params = { params: Promise<{ id: string; sceneId: string }> }
+
+export async function PATCH(request: NextRequest, { params }: Params) {
   try {
     const { sceneId } = await params
     const supabase = createServiceClient()
@@ -21,6 +20,7 @@ export async function PATCH(
     if (body.generation_model !== undefined) updates.generation_model = body.generation_model
     if (body.paired !== undefined) updates.paired = body.paired
     if (body.scene_order !== undefined) updates.scene_order = body.scene_order
+    if (body.storyboard_id !== undefined) updates.storyboard_id = body.storyboard_id
 
     if (Object.keys(updates).length === 1) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })
@@ -40,10 +40,7 @@ export async function PATCH(
   }
 }
 
-export async function DELETE(
-  _request: NextRequest,
-  { params }: { params: Promise<{ id: string; boardId: string; sceneId: string }> }
-) {
+export async function DELETE(_request: NextRequest, { params }: Params) {
   try {
     const { sceneId } = await params
     const supabase = createServiceClient()

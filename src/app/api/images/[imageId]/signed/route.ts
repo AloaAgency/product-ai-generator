@@ -23,19 +23,23 @@ export async function GET(
       return NextResponse.json({ error: 'Image not found' }, { status: 404 })
     }
 
+    const bucket = image.media_type === 'video' ? 'generated-videos' : 'generated-images'
+
     const signPath = async (path: string | null) => {
       if (!path) return null
       const { data: signed, error: signedError } = await supabase.storage
-        .from('generated-images')
+        .from(bucket)
         .createSignedUrl(path, SIGNED_URL_TTL_SECONDS)
       return signedError ? null : (signed?.signedUrl ?? null)
     }
 
-    const [signedUrl, thumbSignedUrl, previewSignedUrl] = await Promise.all([
-      signPath(image.storage_path),
-      signPath(image.thumb_storage_path),
-      signPath(image.preview_storage_path),
-    ])
+    const [signedUrl, thumbSignedUrl, previewSignedUrl] = image.media_type === 'video'
+      ? [await signPath(image.storage_path), null, null]
+      : await Promise.all([
+          signPath(image.storage_path),
+          signPath(image.thumb_storage_path),
+          signPath(image.preview_storage_path),
+        ])
 
     return NextResponse.json({
       image_id: imageId,
