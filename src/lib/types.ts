@@ -21,6 +21,7 @@ export interface GlobalStyleSettings {
   default_aspect_ratio?: '16:9' | '1:1' | '9:16'
   default_fidelity?: string
   custom_suffix?: string
+  default_variation_count?: number
 }
 
 export interface ReferenceSet {

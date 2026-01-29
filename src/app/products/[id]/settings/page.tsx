@@ -182,6 +182,23 @@ export default function ProductSettingsPage({
             '9:16',
           ])}
           {textInput('Default Fidelity', 'default_fidelity')}
+          <div>
+            <label className="block text-sm font-medium text-zinc-300 mb-1">
+              Default Variations
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={settings.default_variation_count ?? ''}
+              onChange={(e) => {
+                const val = e.target.value ? parseInt(e.target.value, 10) : undefined
+                setSettings((prev) => ({ ...prev, default_variation_count: val }))
+              }}
+              placeholder="15"
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
         </div>
       </div>
 
