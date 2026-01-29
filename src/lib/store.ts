@@ -427,7 +427,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const updated = data.image ?? data
     set((s) => ({
-      galleryImages: s.galleryImages.map((i) => (i.id === imageId ? updated : i)),
+      galleryImages: s.galleryImages.map((i) =>
+        i.id === imageId ? { ...i, ...updated } : i
+      ),
     }))
   },
   deleteImage: async (imageId) => {

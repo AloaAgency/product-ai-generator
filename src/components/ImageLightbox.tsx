@@ -16,6 +16,7 @@ export type ApprovalStatus = 'approved' | 'rejected' | 'pending' | null
 export interface LightboxImage {
   id: string
   signed_url?: string | null
+  download_url?: string | null
   public_url?: string | null
   thumb_signed_url?: string | null
   thumb_public_url?: string | null
@@ -36,6 +37,7 @@ interface ImageLightboxProps {
   promptName?: string | null
   onRequestSignedUrls?: (imageId: string) => Promise<{
     signed_url?: string | null
+    download_url?: string | null
     thumb_signed_url?: string | null
     preview_signed_url?: string | null
   } | null>
@@ -88,10 +90,10 @@ export function ImageLightbox({
 
   const handleDownload = useCallback(async () => {
     if (!currentImage) return
-    let url = currentImage.signed_url || currentImage.public_url
+    let url = currentImage.download_url || currentImage.signed_url || currentImage.public_url
     if (!url && onRequestSignedUrls) {
       const signed = await onRequestSignedUrls(currentImage.id)
-      url = signed?.signed_url || url
+      url = signed?.download_url || signed?.signed_url || url
     }
     if (!url) return
 
@@ -125,6 +127,16 @@ export function ImageLightbox({
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onClose, handlePrev, handleNext, handleApprove, handleReject, handleDownload])
+
+  // Fetch signed URLs when the current image changes and has no displayable URL
+  useEffect(() => {
+    if (!currentImage || !onRequestSignedUrls) return
+    const hasUrl = currentImage.preview_signed_url || currentImage.preview_public_url
+      || currentImage.signed_url || currentImage.public_url
+    if (!hasUrl) {
+      void onRequestSignedUrls(currentImage.id)
+    }
+  }, [currentImage?.id, currentImage?.signed_url, currentImage?.preview_signed_url, currentImage?.preview_public_url, currentImage?.public_url, onRequestSignedUrls])
 
   if (!currentImage) return null
 
