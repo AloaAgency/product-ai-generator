@@ -1,18 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { buildFullPrompt } from '@/lib/prompt-builder'
-import { generateGeminiImage } from '@/lib/gemini'
-import {
-  createThumbnail,
-  createPreview,
-  buildImageStoragePath,
-  buildThumbnailPath,
-  buildPreviewPath,
-  slugify,
-  resolveExtension,
-} from '@/lib/image-utils'
 import type { Product, ReferenceSet, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
+import { processGenerationJob } from '@/lib/generation-worker'
+
+export const runtime = 'nodejs'
+export const maxDuration = 300
 
 export async function GET(
   _request: NextRequest,
@@ -143,132 +137,47 @@ export async function POST(
       return NextResponse.json({ error: 'Failed to create generation job' }, { status: 500 })
     }
 
-    // Fire-and-forget background generation
-    ;(async () => {
-      try {
-        const bgSupabase = createServiceClient()
+    const shouldRunInline =
+      process.env.INLINE_GENERATION === 'true' || process.env.NODE_ENV === 'development'
 
-        // Update job to running
-        await bgSupabase
-          .from(T.generation_jobs)
-          .update({ status: 'running', started_at: new Date().toISOString() })
-          .eq('id', job.id)
-
-        const promptSlug = slugify(prompt_text, 30)
-
-        for (let i = 1; i <= variation_count; i++) {
-          try {
-            // Download each reference image and convert to base64
-            const refImagesBase64: { mimeType: string; base64: string }[] = []
-            for (const refImg of referenceImages) {
-              const { data: fileData } = await bgSupabase.storage
-                .from('reference-images')
-                .download(refImg.storage_path)
-
-              if (fileData) {
-                const arrayBuffer = await fileData.arrayBuffer()
-                const base64 = Buffer.from(arrayBuffer).toString('base64')
-                refImagesBase64.push({ mimeType: refImg.mime_type, base64 })
-              }
-            }
-
-            // Generate image
-            const result = await generateGeminiImage({
-              prompt: finalPrompt,
-              resolution: resolution as '2K' | '4K',
-              aspectRatio: aspect_ratio as '16:9' | '1:1' | '9:16',
-              referenceImages: refImagesBase64,
-            })
-
-            const imageBuffer = Buffer.from(result.base64Data, 'base64')
-            const ext = resolveExtension(result.mimeType)
-
-            // Create thumbnail and preview
-            const thumb = await createThumbnail(imageBuffer)
-            const preview = await createPreview(imageBuffer)
-
-            // Build storage paths
-            const storagePath = buildImageStoragePath(productId, job.id, i, promptSlug, ext)
-            const thumbPath = buildThumbnailPath(storagePath, thumb.extension)
-            const previewPath = buildPreviewPath(storagePath, preview.extension)
-
-            // Upload original
-            await bgSupabase.storage
-              .from('generated-images')
-              .upload(storagePath, imageBuffer, { contentType: result.mimeType })
-
-            // Upload thumbnail
-            await bgSupabase.storage
-              .from('generated-images')
-              .upload(thumbPath, thumb.buffer, { contentType: thumb.mimeType })
-
-            // Upload preview
-            await bgSupabase.storage
-              .from('generated-images')
-              .upload(previewPath, preview.buffer, { contentType: preview.mimeType })
-
-            // Insert generated_images record
-            await bgSupabase.from(T.generated_images).insert({
-              job_id: job.id,
-              variation_number: i,
-              storage_path: storagePath,
-              thumb_storage_path: thumbPath,
-              preview_storage_path: previewPath,
-              mime_type: result.mimeType,
-              file_size: imageBuffer.length,
-              approval_status: 'pending',
-            })
-
-            // Update completed count
-            await bgSupabase
-              .from(T.generation_jobs)
-              .update({ completed_count: i - (job.failed_count || 0) })
-              .eq('id', job.id)
-          } catch (varError) {
-            console.error(`[Generate] Variation ${i} failed:`, varError)
-            try {
-              const { data: current } = await bgSupabase
-                .from(T.generation_jobs)
-                .select('failed_count')
-                .eq('id', job.id)
-                .single()
-              if (current) {
-                await bgSupabase
-                  .from(T.generation_jobs)
-                  .update({ failed_count: (current.failed_count || 0) + 1 })
-                  .eq('id', job.id)
-              }
-            } catch { /* ignore */ }
-          }
-
-          // Wait 500ms between variations
-          if (i < variation_count) {
-            await new Promise((resolve) => setTimeout(resolve, 500))
-          }
-        }
-
-        // Mark job as completed
-        await bgSupabase
-          .from(T.generation_jobs)
-          .update({ status: 'completed', completed_at: new Date().toISOString() })
-          .eq('id', job.id)
-      } catch (err) {
-        console.error('[Generate] Background job failed:', err)
-        const bgSupabase = createServiceClient()
-        await bgSupabase
-          .from(T.generation_jobs)
-          .update({
-            status: 'failed',
-            error_message: err instanceof Error ? err.message : 'Unknown error',
-            completed_at: new Date().toISOString(),
-          })
-          .eq('id', job.id)
-      }
-    })()
+    if (shouldRunInline) {
+      void processGenerationJob(job.id, { batchSize: variation_count })
+    }
 
     return NextResponse.json({ job }, { status: 201 })
   } catch (err) {
     console.error('[Generate] Error:', err)
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: productId } = await params
+  try {
+    const supabase = createServiceClient()
+    const { data, error } = await supabase
+      .from(T.generation_jobs)
+      .update({
+        status: 'cancelled',
+        error_message: 'Cancelled by user',
+        completed_at: new Date().toISOString(),
+      })
+      .eq('product_id', productId)
+      .in('status', ['pending', 'running'])
+      .select('id')
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+
+    return NextResponse.json({ cancelled: data?.length || 0 })
+  } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal server error' },
       { status: 500 }

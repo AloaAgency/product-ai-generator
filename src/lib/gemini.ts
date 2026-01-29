@@ -8,6 +8,7 @@ export interface GeminiImageRequest {
   aspectRatio?: '16:9' | '1:1' | '9:16'
   model?: string
   requestId?: string
+  signal?: AbortSignal
   /** Base64-encoded reference images to include in the request */
   referenceImages?: { mimeType: string; base64: string }[]
 }
@@ -111,6 +112,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
         'x-goog-api-key': apiKey,
       },
       body: JSON.stringify(payload),
+      signal: request.signal,
     })
 
     const raw = await response.json().catch(() => ({}))

@@ -13,8 +13,9 @@ export default function GlobalGenerationQueue({
 }: {
   productId: string
 }) {
-  const { generationJobs, loadingJobs, fetchGenerationJobs } = useAppStore()
+  const { generationJobs, loadingJobs, fetchGenerationJobs, clearGenerationQueue } = useAppStore()
   const [expanded, setExpanded] = useState(false)
+  const [clearing, setClearing] = useState(false)
 
   useEffect(() => {
     fetchGenerationJobs(productId)
@@ -61,13 +62,13 @@ export default function GlobalGenerationQueue({
 
   return (
     <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/70 backdrop-blur">
-      <button
-        type="button"
-        onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-        aria-expanded={expanded}
-      >
-        <div className="flex items-center gap-3">
+      <div className="flex w-full items-center justify-between gap-3 px-4 py-3">
+        <button
+          type="button"
+          onClick={() => setExpanded((prev) => !prev)}
+          className="flex flex-1 items-center gap-3 text-left"
+          aria-expanded={expanded}
+        >
           <div className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-500/10 text-blue-400">
             {loadingJobs ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -85,8 +86,29 @@ export default function GlobalGenerationQueue({
                   : 'No active generations'}
             </p>
           </div>
-        </div>
+        </button>
         <div className="flex items-center gap-3 text-xs text-zinc-400">
+          {hasActiveJobs && (
+            <button
+              type="button"
+              className="rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={async (event) => {
+                event.stopPropagation()
+                if (clearing) return
+                const confirmed = window.confirm('Clear active generation queue? This will cancel pending and running jobs.')
+                if (!confirmed) return
+                try {
+                  setClearing(true)
+                  await clearGenerationQueue(productId)
+                } finally {
+                  setClearing(false)
+                }
+              }}
+              disabled={clearing}
+            >
+              {clearing ? 'Clearing…' : 'Clear'}
+            </button>
+          )}
           <span>
             {totals.totalCompleted}/{totals.totalVariations} images
           </span>
@@ -96,7 +118,7 @@ export default function GlobalGenerationQueue({
             <ChevronDown className="h-4 w-4" />
           )}
         </div>
-      </button>
+      </div>
 
       <div className="px-4 pb-4">
         <div className="flex items-center justify-between text-xs text-zinc-400">
