@@ -27,6 +27,7 @@ const STATUS_FILTERS: { label: string; value: StatusFilter }[] = [
 
 type SignedImageUrls = {
   signed_url: string | null
+  download_url: string | null
   thumb_signed_url: string | null
   preview_signed_url: string | null
   expires_at: number
@@ -139,6 +140,7 @@ export default function GalleryPage({
       thumb_public_url: img.thumb_public_url,
       preview_public_url: img.preview_public_url,
       signed_url: signedUrlsById[img.id]?.signed_url ?? null,
+      download_url: signedUrlsById[img.id]?.download_url ?? null,
       thumb_signed_url: signedUrlsById[img.id]?.thumb_signed_url ?? null,
       preview_signed_url: signedUrlsById[img.id]?.preview_signed_url ?? null,
       file_name: img.storage_path?.split('/').pop() ?? null,
@@ -182,13 +184,19 @@ export default function GalleryPage({
 
   const handleDownloadApproved = async () => {
     const approved = galleryImages.filter((img) => img.approval_status === 'approved')
-    const signed = await Promise.all(approved.map((img) => ensureSignedUrls(img.id)))
-    approved.forEach((img, index) => {
-      const url = signed[index]?.signed_url || img.public_url
-      if (url) {
-        window.open(url, '_blank')
-      }
-    })
+    for (const img of approved) {
+      const signed = await ensureSignedUrls(img.id)
+      const url = signed?.download_url || signed?.signed_url || img.public_url
+      if (!url) continue
+      const link = document.createElement('a')
+      link.href = url
+      link.download = img.storage_path?.split('/').pop() ?? `product-gen-${img.variation_number || 0}.png`
+      link.rel = 'noopener'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
   }
 
   useEffect(() => {

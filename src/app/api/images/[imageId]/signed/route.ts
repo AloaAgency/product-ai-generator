@@ -33,12 +33,22 @@ export async function GET(
       return signedError ? null : (signed?.signedUrl ?? null)
     }
 
-    const [signedUrl, thumbSignedUrl, previewSignedUrl] = image.media_type === 'video'
-      ? [await signPath(image.storage_path), null, null]
+    const signDownloadPath = async (path: string | null) => {
+      if (!path) return null
+      const fileName = path.split('/').pop() || undefined
+      const { data: signed, error: signedError } = await supabase.storage
+        .from(bucket)
+        .createSignedUrl(path, SIGNED_URL_TTL_SECONDS, { download: fileName || true })
+      return signedError ? null : (signed?.signedUrl ?? null)
+    }
+
+    const [signedUrl, thumbSignedUrl, previewSignedUrl, downloadUrl] = image.media_type === 'video'
+      ? [await signPath(image.storage_path), null, null, await signDownloadPath(image.storage_path)]
       : await Promise.all([
           signPath(image.storage_path),
           signPath(image.thumb_storage_path),
           signPath(image.preview_storage_path),
+          signDownloadPath(image.storage_path),
         ])
 
     return NextResponse.json({
@@ -46,6 +56,7 @@ export async function GET(
       signed_url: signedUrl,
       thumb_signed_url: thumbSignedUrl,
       preview_signed_url: previewSignedUrl,
+      download_url: downloadUrl,
       expires_at: Date.now() + SIGNED_URL_TTL_SECONDS * 1000,
     })
   } catch (err) {

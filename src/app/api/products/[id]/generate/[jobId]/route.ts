@@ -32,17 +32,19 @@ export async function GET(
       .eq('job_id', jobId)
       .order('variation_number', { ascending: true })
 
-    const thumbPaths = (images || [])
-      .map((img) => img.thumb_storage_path)
-      .filter(Boolean) as string[]
+    const allPaths = (images || []).flatMap((img) => [
+      img.storage_path,
+      img.thumb_storage_path,
+      img.preview_storage_path,
+    ].filter(Boolean)) as string[]
 
-    let signedThumbs = new Map<string, string>()
-    if (thumbPaths.length > 0) {
+    let signedMap = new Map<string, string>()
+    if (allPaths.length > 0) {
       const { data: signed } = await supabase.storage
         .from('generated-images')
-        .createSignedUrls(thumbPaths, SIGNED_URL_TTL_SECONDS)
+        .createSignedUrls(allPaths, SIGNED_URL_TTL_SECONDS)
       if (signed) {
-        signedThumbs = new Map(
+        signedMap = new Map(
           signed
             .filter((item) => item?.signedUrl && item?.path)
             .map((item) => [item.path!, item.signedUrl])
@@ -52,10 +54,14 @@ export async function GET(
 
     const signedImages = (images || []).map((img) => ({
       ...img,
-      public_url: null,
-      preview_public_url: null,
+      public_url: img.storage_path
+        ? (signedMap.get(img.storage_path) ?? null)
+        : null,
+      preview_public_url: img.preview_storage_path
+        ? (signedMap.get(img.preview_storage_path) ?? null)
+        : null,
       thumb_public_url: img.thumb_storage_path
-        ? (signedThumbs.get(img.thumb_storage_path) ?? null)
+        ? (signedMap.get(img.thumb_storage_path) ?? null)
         : null,
     }))
 
