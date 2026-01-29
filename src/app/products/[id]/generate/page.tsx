@@ -1,7 +1,8 @@
 'use client'
 
-import { use, useEffect, useRef, useState } from 'react'
+import { use, useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useAppStore } from '@/lib/store'
+import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
 import {
   Sparkles,
   Lightbulb,
@@ -51,6 +52,22 @@ export default function GeneratePage({
   const [templateName, setTemplateName] = useState('')
   const [savingTemplate, setSavingTemplate] = useState(false)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+  const [signedUrlsById, setSignedUrlsById] = useState<Record<string, { signed_url?: string | null; thumb_signed_url?: string | null; preview_signed_url?: string | null; expires_at?: number }>>({})
+  const signedUrlsRef = useRef(signedUrlsById)
+  useEffect(() => { signedUrlsRef.current = signedUrlsById }, [signedUrlsById])
+
+  const ensureSignedUrls = useCallback(async (imageId: string) => {
+    const cached = signedUrlsRef.current[imageId]
+    if (cached?.expires_at && cached.expires_at - Date.now() > 60_000) return cached
+    const res = await fetch(`/api/images/${imageId}/signed`)
+    if (!res.ok) return null
+    const data = await res.json()
+    const next = { ...signedUrlsRef.current, [imageId]: data }
+    signedUrlsRef.current = next
+    setSignedUrlsById(next)
+    return data
+  }, [])
 
   useEffect(() => {
     fetchPromptTemplates(id)
@@ -69,6 +86,9 @@ export default function GeneratePage({
     }
     if (defaults.default_aspect_ratio) {
       setAspectRatio(defaults.default_aspect_ratio)
+    }
+    if (defaults.default_variation_count) {
+      setVariationCount(defaults.default_variation_count)
     }
     setDidInitDefaults(true)
   }, [currentProduct, id, didInitDefaults])
@@ -135,6 +155,33 @@ export default function GeneratePage({
       setActiveJobId(job.id)
     } catch {
       setGenerating(false)
+    }
+  }
+
+  const { updateImageApproval, deleteImage } = useAppStore()
+
+  const lightboxImages: LightboxImage[] = useMemo(() => {
+    if (!currentJob?.images) return []
+    return currentJob.images.map((img) => ({
+      id: img.id,
+      public_url: img.public_url,
+      thumb_public_url: img.thumb_public_url,
+      preview_public_url: img.preview_public_url,
+      signed_url: signedUrlsById[img.id]?.signed_url ?? null,
+      thumb_signed_url: signedUrlsById[img.id]?.thumb_signed_url ?? null,
+      preview_signed_url: signedUrlsById[img.id]?.preview_signed_url ?? null,
+      file_name: img.storage_path?.split('/').pop() ?? null,
+      variation_number: img.variation_number,
+      approval_status: img.approval_status ?? 'pending',
+      notes: img.notes,
+    }))
+  }, [currentJob?.images, signedUrlsById])
+
+  const handleApprovalChange = async (imageId: string, status: ApprovalStatus) => {
+    if (status === 'rejected') {
+      await deleteImage(imageId)
+    } else {
+      await updateImageApproval(imageId, status)
     }
   }
 
@@ -434,27 +481,41 @@ export default function GeneratePage({
           {/* Generated image thumbnails */}
           {currentJob.images && currentJob.images.length > 0 && (
             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
-              {currentJob.images.map((img) => (
-                <div
+              {currentJob.images.map((img, index) => (
+                <button
                   key={img.id}
-                  className="relative aspect-square overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900"
+                  onClick={() => setLightboxIndex(index)}
+                  className="group relative aspect-square overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 hover:border-zinc-500 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500"
                 >
                   {(img.thumb_public_url || img.public_url) ? (
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={img.thumb_public_url || img.public_url || ''}
                       alt=""
-                      className="h-full w-full object-cover"
+                      className="h-full w-full object-cover transition-transform group-hover:scale-105"
                     />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center">
                       <ImageIcon className="h-6 w-6 text-zinc-600" />
                     </div>
                   )}
-                </div>
+                </button>
               ))}
             </div>
           )}
         </section>
+      )}
+
+      {/* Lightbox */}
+      {lightboxIndex !== null && lightboxImages.length > 0 && (
+        <ImageLightbox
+          images={lightboxImages}
+          currentIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          onNavigate={(index) => setLightboxIndex(index)}
+          onApprovalChange={handleApprovalChange}
+          onRequestSignedUrls={ensureSignedUrls}
+        />
       )}
     </div>
   )
