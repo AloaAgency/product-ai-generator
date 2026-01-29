@@ -13,7 +13,14 @@ export default function GlobalGenerationQueue({
 }: {
   productId: string
 }) {
-  const { generationJobs, loadingJobs, fetchGenerationJobs, clearGenerationQueue } = useAppStore()
+  const {
+    generationJobs,
+    loadingJobs,
+    fetchGenerationJobs,
+    clearGenerationQueue,
+    devParallelGeneration,
+    setDevParallelGeneration,
+  } = useAppStore()
   const [expanded, setExpanded] = useState(false)
   const [clearing, setClearing] = useState(false)
 
@@ -88,6 +95,18 @@ export default function GlobalGenerationQueue({
           </div>
         </button>
         <div className="flex items-center gap-3 text-xs text-zinc-400">
+          {process.env.NODE_ENV === 'development' && (
+            <button
+              type="button"
+              className="rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100"
+              onClick={(event) => {
+                event.stopPropagation()
+                setDevParallelGeneration(!devParallelGeneration)
+              }}
+            >
+              Dev parallel: {devParallelGeneration ? 'On' : 'Off'}
+            </button>
+          )}
           {hasActiveJobs && (
             <button
               type="button"
