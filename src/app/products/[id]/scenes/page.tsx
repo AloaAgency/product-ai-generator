@@ -146,9 +146,39 @@ export default function ScenesPage({
 
   async function handleFrameUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
-    if (!file || !framePicker || !framePicker.sceneId) return
+    if (!file || !framePicker) return
     setUploading(true)
     try {
+      if (framePicker.mode === 'create') {
+        const results = await api(`/api/products/${id}/gallery/upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            files: [{
+              file_name: file.name,
+              mime_type: file.type,
+              file_size: file.size,
+            }],
+          }),
+        })
+        const firstResult = Array.isArray(results) ? results[0] : null
+        if (!firstResult || firstResult.error || !firstResult.signed_url || !firstResult.image?.id) {
+          throw new Error(firstResult?.error || 'Failed to prepare upload')
+        }
+        await fetch(firstResult.signed_url, {
+          method: 'PUT',
+          headers: { 'Content-Type': file.type || 'application/octet-stream' },
+          body: file,
+        })
+        if (framePicker.slot === 'start') {
+          setNewStartFrameId(firstResult.image.id)
+        } else {
+          setNewEndFrameId(firstResult.image.id)
+        }
+        setFramePicker(null)
+        return
+      }
+      if (!framePicker.sceneId) return
       const { signed_url, image } = await api(`/api/products/${id}/scenes/${framePicker.sceneId}/upload-frame`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -159,13 +189,11 @@ export default function ScenesPage({
           file_size: file.size,
         }),
       })
-      // Upload to signed URL
       await fetch(signed_url, {
         method: 'PUT',
         headers: { 'Content-Type': file.type || 'application/octet-stream' },
         body: file,
       })
-      // The upload-frame endpoint already updated the scene, re-fetch to get latest
       const field = framePicker.slot === 'start' ? 'start_frame_image_id' : 'end_frame_image_id'
       setScenes((prev) => prev.map((s) =>
         s.id === framePicker.sceneId ? { ...s, [field]: image.id } : s
@@ -395,7 +423,7 @@ export default function ScenesPage({
     }
   }
 
-  const uploadDisabled = framePicker?.mode === 'create' || !framePicker?.sceneId
+  const uploadDisabled = !framePicker || (framePicker.mode !== 'create' && !framePicker.sceneId)
 
   return (
     <div className="min-h-screen bg-zinc-900 text-zinc-100">
