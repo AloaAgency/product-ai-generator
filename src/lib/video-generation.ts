@@ -5,6 +5,13 @@ import { slugify } from '@/lib/image-utils'
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 
 type FrameRef = { url: string; mimeType: string }
+type SceneVideoSettings = {
+  resolution?: string | null
+  aspectRatio?: string | null
+  durationSeconds?: number | null
+  fps?: number | null
+  generateAudio?: boolean | null
+}
 
 export async function generateSceneVideo(productId: string, sceneId: string, model: string) {
   const supabase = createServiceClient()
@@ -19,8 +26,17 @@ export async function generateSceneVideo(productId: string, sceneId: string, mod
   if (sceneErr || !scene) throw new Error('Scene not found')
   if (!scene.motion_prompt) throw new Error('Scene has no motion prompt')
 
+  const isLtx = model.toLowerCase().startsWith('ltx')
+
   // Get signed URLs for start/end frame images
   const frameRefs: { start?: FrameRef; end?: FrameRef } = {}
+  const videoSettings: SceneVideoSettings = {
+    resolution: scene.video_resolution,
+    aspectRatio: scene.video_aspect_ratio,
+    durationSeconds: scene.video_duration_seconds,
+    fps: scene.video_fps,
+    generateAudio: scene.video_generate_audio,
+  }
 
   if (scene.start_frame_image_id) {
     const { data: startImg } = await supabase
@@ -39,7 +55,7 @@ export async function generateSceneVideo(productId: string, sceneId: string, mod
     }
   }
 
-  if (scene.end_frame_image_id) {
+  if (scene.end_frame_image_id && !isLtx) {
     const { data: endImg } = await supabase
       .from(T.generated_images)
       .select('storage_path, mime_type')
@@ -62,12 +78,12 @@ export async function generateSceneVideo(productId: string, sceneId: string, mod
   let extension: string
 
   if (model === 'veo3') {
-    const result = await generateWithVeo3(scene.motion_prompt, frameRefs)
+    const result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings)
     videoBuffer = result.buffer
     mimeType = result.mimeType
     extension = result.extension
-  } else if (model === 'ltx') {
-    const result = await generateWithLtx(scene.motion_prompt, frameRefs)
+  } else if (isLtx) {
+    const result = await generateWithLtx(scene.motion_prompt, frameRefs, videoSettings)
     videoBuffer = result.buffer
     mimeType = result.mimeType
     extension = result.extension
@@ -114,14 +130,16 @@ export async function generateSceneVideo(productId: string, sceneId: string, mod
 
 async function generateWithVeo3(
   prompt: string,
-  frameRefs: { start?: FrameRef; end?: FrameRef }
+  frameRefs: { start?: FrameRef; end?: FrameRef },
+  settings: SceneVideoSettings
 ): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
   const apiKey = process.env.GOOGLE_AI_API_KEY
   if (!apiKey) throw new Error('GOOGLE_AI_API_KEY not configured')
 
   const model = process.env.VEO_MODEL || 'veo-3.1-generate-preview'
   const baseUrl = 'https://generativelanguage.googleapis.com/v1beta'
-  const instances: Array<Record<string, unknown>> = [{ prompt }]
+  const instance: Record<string, unknown> = { prompt }
+  const instances: Array<Record<string, unknown>> = [instance]
   const parameters: Record<string, unknown> = {}
 
   if (frameRefs.start?.url) {
@@ -129,11 +147,9 @@ async function generateWithVeo3(
     if (!imgResp.ok) throw new Error(`Failed to fetch start frame (${imgResp.status})`)
     const imgBuf = Buffer.from(await imgResp.arrayBuffer())
     const mimeType = frameRefs.start.mimeType || imgResp.headers.get('content-type') || 'image/png'
-    instances[0].image = {
-      inlineData: {
-        mimeType,
-        data: imgBuf.toString('base64'),
-      },
+    instance.image = {
+      mimeType,
+      bytesBase64Encoded: imgBuf.toString('base64'),
     }
   }
 
@@ -145,19 +161,21 @@ async function generateWithVeo3(
       if (!imgResp.ok) throw new Error(`Failed to fetch end frame (${imgResp.status})`)
       const imgBuf = Buffer.from(await imgResp.arrayBuffer())
       const mimeType = frameRefs.end.mimeType || imgResp.headers.get('content-type') || 'image/png'
-      parameters.lastFrame = {
-        inlineData: {
-          mimeType,
-          data: imgBuf.toString('base64'),
-        },
+      instance.lastFrame = {
+        mimeType,
+        bytesBase64Encoded: imgBuf.toString('base64'),
       }
     }
   }
 
-  const aspectRatio = process.env.VEO_ASPECT_RATIO
+  const aspectRatio = settings.aspectRatio || process.env.VEO_ASPECT_RATIO
   if (aspectRatio) parameters.aspectRatio = aspectRatio
-  const resolution = process.env.VEO_RESOLUTION
+  const resolution = settings.resolution || process.env.VEO_RESOLUTION
   if (resolution) parameters.resolution = resolution
+  const durationSeconds = typeof settings.durationSeconds === 'number' && settings.durationSeconds > 0
+    ? settings.durationSeconds
+    : Number(process.env.VEO_DURATION_SECONDS || 0) || null
+  if (durationSeconds) parameters.durationSeconds = durationSeconds
 
   const payload: Record<string, unknown> = { instances }
   if (Object.keys(parameters).length) payload.parameters = parameters
@@ -228,16 +246,21 @@ async function generateWithVeo3(
 
 async function generateWithLtx(
   prompt: string,
-  frameRefs: { start?: FrameRef; end?: FrameRef }
+  frameRefs: { start?: FrameRef; end?: FrameRef },
+  settings: SceneVideoSettings
 ): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
   const apiKey = process.env.LTX_API_KEY
   if (!apiKey) throw new Error('LTX_API_KEY not configured')
 
   const baseUrl = (process.env.LTX_API_BASE_URL || 'https://api.ltx.video/v1').replace(/\/$/, '')
   const model = process.env.LTX_MODEL || 'ltx-2-pro'
-  const duration = Number(process.env.LTX_DURATION ?? '8')
+  const duration = typeof settings.durationSeconds === 'number' && settings.durationSeconds > 0
+    ? settings.durationSeconds
+    : Number(process.env.LTX_DURATION ?? '8')
   const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 8
-  const resolution = process.env.LTX_RESOLUTION || '1920x1080'
+  const resolution = settings.resolution || process.env.LTX_RESOLUTION || '1920x1080'
+  const fps = typeof settings.fps === 'number' && settings.fps > 0 ? settings.fps : null
+  const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
 
   const payload: Record<string, unknown> = {
     prompt,
@@ -245,6 +268,8 @@ async function generateWithLtx(
     duration: safeDuration,
     resolution,
   }
+  if (fps) payload.fps = fps
+  if (generateAudio !== null) payload.generate_audio = generateAudio
 
   const endpoint = frameRefs.start?.url ? 'image-to-video' : 'text-to-video'
   if (frameRefs.start?.url) payload.image_uri = frameRefs.start.url

@@ -27,6 +27,17 @@ type SignedImageUrls = {
   expires_at: number
 }
 
+const VEO_RESOLUTIONS = ['720p', '1080p', '4k'] as const
+const VEO_ASPECT_RATIOS = ['16:9', '9:16'] as const
+const LTX_RESOLUTIONS = ['1920x1080', '1080x1920', '1280x720', '720x1280', '3840x2160'] as const
+const DEFAULT_VEO = { resolution: '1080p', aspectRatio: '16:9', duration: 8 }
+const DEFAULT_LTX = { resolution: '1920x1080', duration: 8, fps: 25, generateAudio: true }
+const isLtxModel = (model: string | null | undefined) => {
+  if (!model) return false
+  return model.toLowerCase().startsWith('ltx')
+}
+const supportsEndFrame = (model: string | null | undefined) => !isLtxModel(model)
+
 const api = async (url: string, options?: RequestInit) => {
   const res = await fetch(url, options)
   if (!res.ok) {
@@ -54,9 +65,16 @@ export default function ScenesPage({
   const [showCreate, setShowCreate] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newPrompt, setNewPrompt] = useState('')
+  const [newEndPrompt, setNewEndPrompt] = useState('')
   const [newMotionPrompt, setNewMotionPrompt] = useState('')
   const [newModel, setNewModel] = useState('veo3')
-  const [newPaired, setNewPaired] = useState(false)
+  const [newStartFrameId, setNewStartFrameId] = useState<string | null>(null)
+  const [newEndFrameId, setNewEndFrameId] = useState<string | null>(null)
+  const [newResolution, setNewResolution] = useState(DEFAULT_VEO.resolution)
+  const [newAspectRatio, setNewAspectRatio] = useState(DEFAULT_VEO.aspectRatio)
+  const [newDuration, setNewDuration] = useState(DEFAULT_VEO.duration)
+  const [newFps, setNewFps] = useState(DEFAULT_LTX.fps)
+  const [newGenerateAudio, setNewGenerateAudio] = useState(DEFAULT_LTX.generateAudio)
   const [creating, setCreating] = useState(false)
 
   // Edit state
@@ -66,22 +84,30 @@ export default function ScenesPage({
   const [editEndPrompt, setEditEndPrompt] = useState('')
   const [editMotionPrompt, setEditMotionPrompt] = useState('')
   const [editModel, setEditModel] = useState('veo3')
-  const [editPaired, setEditPaired] = useState(false)
+  const [editResolution, setEditResolution] = useState(DEFAULT_VEO.resolution)
+  const [editAspectRatio, setEditAspectRatio] = useState(DEFAULT_VEO.aspectRatio)
+  const [editDuration, setEditDuration] = useState(DEFAULT_VEO.duration)
+  const [editFps, setEditFps] = useState(DEFAULT_LTX.fps)
+  const [editGenerateAudio, setEditGenerateAudio] = useState(DEFAULT_LTX.generateAudio)
   const [saving, setSaving] = useState(false)
 
   // Delete
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
   // Frame picker modal
-  const [framePicker, setFramePicker] = useState<{ sceneId: string; slot: 'start' | 'end' } | null>(null)
+  const [framePicker, setFramePicker] = useState<{
+    sceneId?: string
+    slot: 'start' | 'end'
+    mode: 'create' | 'edit'
+  } | null>(null)
   const [pickerTab, setPickerTab] = useState<'gallery' | 'upload'>('gallery')
   const [galleryImages, setGalleryImages] = useState<GeneratedImage[]>([])
   const [loadingGallery, setLoadingGallery] = useState(false)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  async function openFramePicker(sceneId: string, slot: 'start' | 'end') {
-    setFramePicker({ sceneId, slot })
+  async function openFramePicker(sceneId: string | null, slot: 'start' | 'end', mode: 'create' | 'edit') {
+    setFramePicker({ sceneId: sceneId || undefined, slot, mode })
     setPickerTab('gallery')
     setLoadingGallery(true)
     try {
@@ -96,11 +122,23 @@ export default function ScenesPage({
 
   async function selectGalleryImage(imageId: string) {
     if (!framePicker) return
+    if (framePicker.mode === 'create') {
+      if (framePicker.slot === 'start') {
+        setNewStartFrameId(imageId)
+      } else {
+        setNewEndFrameId(imageId)
+      }
+      setFramePicker(null)
+      return
+    }
+    if (!framePicker.sceneId) return
     const field = framePicker.slot === 'start' ? 'start_frame_image_id' : 'end_frame_image_id'
+    const payload: Record<string, unknown> = { [field]: imageId }
+    if (framePicker.slot === 'end') payload.paired = true
     const updated = await api(`/api/products/${id}/scenes/${framePicker.sceneId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ [field]: imageId }),
+      body: JSON.stringify(payload),
     })
     setScenes((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
     setFramePicker(null)
@@ -108,7 +146,7 @@ export default function ScenesPage({
 
   async function handleFrameUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
-    if (!file || !framePicker) return
+    if (!file || !framePicker || !framePicker.sceneId) return
     setUploading(true)
     try {
       const { signed_url, image } = await api(`/api/products/${id}/scenes/${framePicker.sceneId}/upload-frame`, {
@@ -139,6 +177,19 @@ export default function ScenesPage({
     }
   }
 
+  async function clearSceneFrame(sceneId: string, slot: 'start' | 'end') {
+    const field = slot === 'start' ? 'start_frame_image_id' : 'end_frame_image_id'
+    const scene = scenes.find((s) => s.id === sceneId)
+    const updates: Record<string, unknown> = { [field]: null }
+    if (slot === 'end' && !scene?.end_frame_prompt) updates.paired = false
+    const updated = await api(`/api/products/${id}/scenes/${sceneId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    })
+    setScenes((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
+  }
+
   // Signed URLs
   const [signedUrlsById, setSignedUrlsById] = useState<Record<string, SignedImageUrls>>({})
   const signedUrlsRef = useRef(signedUrlsById)
@@ -156,10 +207,17 @@ export default function ScenesPage({
     return data
   }, [])
 
-  function sceneThumbUrl(imageId: string | null): string {
-    if (!imageId) return ''
+  function sceneThumbUrl(imageId: string | null): string | null {
+    if (!imageId) return null
     void ensureSignedUrls(imageId)
-    return signedUrlsById[imageId]?.thumb_signed_url || signedUrlsById[imageId]?.signed_url || ''
+    return signedUrlsById[imageId]?.thumb_signed_url || signedUrlsById[imageId]?.signed_url || null
+  }
+
+  function renderThumb(imageId: string | null, alt: string) {
+    const url = sceneThumbUrl(imageId)
+    if (!url) return <ImageIcon className="h-6 w-6 text-zinc-600" />
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={url} alt={alt} className="h-full w-full object-cover" />
   }
 
   // Load all scenes for this product
@@ -183,27 +241,77 @@ export default function ScenesPage({
     } catch { /* ignore */ }
   }
 
+  function handleNewModelChange(value: string) {
+    setNewModel(value)
+    if (isLtxModel(value)) {
+      setNewResolution(DEFAULT_LTX.resolution)
+      setNewDuration(DEFAULT_LTX.duration)
+      setNewFps(DEFAULT_LTX.fps)
+      setNewGenerateAudio(DEFAULT_LTX.generateAudio)
+    } else {
+      setNewResolution(DEFAULT_VEO.resolution)
+      setNewAspectRatio(DEFAULT_VEO.aspectRatio)
+      setNewDuration(DEFAULT_VEO.duration)
+    }
+  }
+
+  function handleEditModelChange(value: string) {
+    setEditModel(value)
+    if (isLtxModel(value)) {
+      setEditResolution(DEFAULT_LTX.resolution)
+      setEditDuration(DEFAULT_LTX.duration)
+      setEditFps(DEFAULT_LTX.fps)
+      setEditGenerateAudio(DEFAULT_LTX.generateAudio)
+    } else {
+      setEditResolution(DEFAULT_VEO.resolution)
+      setEditAspectRatio(DEFAULT_VEO.aspectRatio)
+      setEditDuration(DEFAULT_VEO.duration)
+    }
+  }
+
   async function handleCreate() {
     if (!newTitle.trim()) return
     setCreating(true)
     try {
+      const allowEndFrame = supportsEndFrame(newModel)
+      const endPrompt = allowEndFrame ? newEndPrompt.trim() || null : null
+      const endFrameId = allowEndFrame ? newEndFrameId : null
+      const paired = allowEndFrame && (!!endFrameId || !!endPrompt)
+      const durationValue = Number.isFinite(newDuration) && newDuration > 0 ? newDuration : null
+      const fpsValue = isLtxModel(newModel) && Number.isFinite(newFps) && newFps > 0 ? newFps : null
+      const audioValue = isLtxModel(newModel) ? newGenerateAudio : null
       const scene = await api(`/api/products/${id}/scenes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: newTitle.trim(),
           prompt_text: newPrompt.trim() || null,
+          end_frame_prompt: endPrompt,
           motion_prompt: newMotionPrompt.trim() || null,
           generation_model: newModel,
-          paired: newPaired,
+          paired,
+          start_frame_image_id: newStartFrameId || null,
+          end_frame_image_id: endFrameId || null,
+          video_resolution: newResolution || null,
+          video_aspect_ratio: allowEndFrame ? newAspectRatio || null : null,
+          video_duration_seconds: durationValue,
+          video_fps: fpsValue,
+          video_generate_audio: audioValue,
         }),
       })
       setScenes((prev) => [scene, ...prev])
       setNewTitle('')
       setNewPrompt('')
+      setNewEndPrompt('')
       setNewMotionPrompt('')
       setNewModel('veo3')
-      setNewPaired(false)
+      setNewStartFrameId(null)
+      setNewEndFrameId(null)
+      setNewResolution(DEFAULT_VEO.resolution)
+      setNewAspectRatio(DEFAULT_VEO.aspectRatio)
+      setNewDuration(DEFAULT_VEO.duration)
+      setNewFps(DEFAULT_LTX.fps)
+      setNewGenerateAudio(DEFAULT_LTX.generateAudio)
       setShowCreate(false)
     } finally {
       setCreating(false)
@@ -211,29 +319,46 @@ export default function ScenesPage({
   }
 
   function startEdit(scene: StoryboardScene) {
+    const model = scene.generation_model || 'veo3'
     setEditingId(scene.id)
     setEditTitle(scene.title || '')
     setEditPrompt(scene.prompt_text || '')
     setEditEndPrompt(scene.end_frame_prompt || '')
     setEditMotionPrompt(scene.motion_prompt || '')
-    setEditModel(scene.generation_model || 'veo3')
-    setEditPaired(scene.paired)
+    setEditModel(model)
+    setEditResolution(scene.video_resolution || (isLtxModel(model) ? DEFAULT_LTX.resolution : DEFAULT_VEO.resolution))
+    setEditAspectRatio(scene.video_aspect_ratio || DEFAULT_VEO.aspectRatio)
+    setEditDuration(scene.video_duration_seconds || (isLtxModel(model) ? DEFAULT_LTX.duration : DEFAULT_VEO.duration))
+    setEditFps(scene.video_fps || DEFAULT_LTX.fps)
+    setEditGenerateAudio(scene.video_generate_audio ?? DEFAULT_LTX.generateAudio)
   }
 
   async function handleSave() {
     if (!editingId) return
     setSaving(true)
     try {
+      const currentScene = scenes.find((s) => s.id === editingId)
+      const endPrompt = editEndPrompt.trim() || null
+      const endFrameId = currentScene?.end_frame_image_id || null
+      const paired = !!endPrompt || !!endFrameId
+      const durationValue = Number.isFinite(editDuration) && editDuration > 0 ? editDuration : null
+      const fpsValue = isLtxModel(editModel) && Number.isFinite(editFps) && editFps > 0 ? editFps : null
+      const audioValue = isLtxModel(editModel) ? editGenerateAudio : null
       const updated = await api(`/api/products/${id}/scenes/${editingId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: editTitle.trim(),
           prompt_text: editPrompt.trim() || null,
-          end_frame_prompt: editEndPrompt.trim() || null,
+          end_frame_prompt: endPrompt,
           motion_prompt: editMotionPrompt.trim() || null,
           generation_model: editModel,
-          paired: editPaired,
+          paired,
+          video_resolution: editResolution || null,
+          video_aspect_ratio: editAspectRatio || null,
+          video_duration_seconds: durationValue,
+          video_fps: fpsValue,
+          video_generate_audio: audioValue,
         }),
       })
       setScenes((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
@@ -265,6 +390,8 @@ export default function ScenesPage({
     }
   }
 
+  const uploadDisabled = framePicker?.mode === 'create' || !framePicker?.sceneId
+
   return (
     <div className="min-h-screen bg-zinc-900 text-zinc-100">
       <div className="border-b border-zinc-800 px-6 py-4">
@@ -289,46 +416,175 @@ export default function ScenesPage({
       <div className="p-6 space-y-4">
         {/* Create form */}
         {showCreate && (
-          <div className="rounded-xl border border-zinc-700 bg-zinc-800/50 p-5 space-y-3">
-            <h2 className="text-sm font-semibold text-zinc-300">Create Scene</h2>
-            <input
-              type="text"
-              placeholder="Scene title"
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
-              autoFocus
-            />
-            <textarea
-              rows={3}
-              placeholder="Frame prompt (still image description)..."
-              value={newPrompt}
-              onChange={(e) => setNewPrompt(e.target.value)}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
-            />
-            <textarea
-              rows={2}
-              placeholder="Motion prompt (video/motion description)..."
-              value={newMotionPrompt}
-              onChange={(e) => setNewMotionPrompt(e.target.value)}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none resize-none"
-            />
-            <div className="flex items-center gap-3">
-              <select
-                value={newModel}
-                onChange={(e) => setNewModel(e.target.value)}
-                className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
-              >
-                <option value="veo3">Veo 3</option>
-                <option value="ltx">LTX Video</option>
-              </select>
-              <button
-                onClick={() => setNewPaired(!newPaired)}
-                className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700"
-              >
-                {newPaired ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
-                {newPaired ? 'Paired' : 'Single'}
-              </button>
+          <div className="rounded-xl border border-zinc-700 bg-zinc-800/50 p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-zinc-300">Create Scene</h2>
+              <span className="text-xs text-zinc-500">Key frames, prompts, and video settings</span>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
+              <div className="space-y-3">
+                <input
+                  type="text"
+                  placeholder="Scene title"
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+                  autoFocus
+                />
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Key frames</span>
+                    {!supportsEndFrame(newModel) && (
+                      <span className="text-[10px] text-zinc-500">LTX uses the start frame only</span>
+                    )}
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="flex flex-col items-center gap-1">
+                      <span className="text-[10px] uppercase tracking-wide text-zinc-500">Start</span>
+                      <button
+                        onClick={() => openFramePicker(null, 'start', 'create')}
+                        className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                        title="Select start frame"
+                      >
+                        {renderThumb(newStartFrameId, 'Start')}
+                      </button>
+                      {newStartFrameId && (
+                        <button
+                          onClick={() => setNewStartFrameId(null)}
+                          className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    {supportsEndFrame(newModel) ? (
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
+                        <button
+                          onClick={() => openFramePicker(null, 'end', 'create')}
+                          className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                          title="Select end frame"
+                        >
+                          {renderThumb(newEndFrameId, 'End')}
+                        </button>
+                        {newEndFrameId && (
+                          <button
+                            onClick={() => setNewEndFrameId(null)}
+                            className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center gap-1 opacity-50">
+                        <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
+                        <div className="h-20 w-20 rounded-lg border border-dashed border-zinc-700 bg-zinc-800 flex items-center justify-center">
+                          <ImageIcon className="h-6 w-6 text-zinc-600" />
+                        </div>
+                        <span className="text-[10px] text-zinc-600">Veo only</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <textarea
+                  rows={3}
+                  placeholder="Frame prompt (still image description)..."
+                  value={newPrompt}
+                  onChange={(e) => setNewPrompt(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
+                />
+                {supportsEndFrame(newModel) && (
+                  <textarea
+                    rows={2}
+                    placeholder="End frame prompt (optional)..."
+                    value={newEndPrompt}
+                    onChange={(e) => setNewEndPrompt(e.target.value)}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
+                  />
+                )}
+                <textarea
+                  rows={2}
+                  placeholder="Motion prompt (video/motion description)..."
+                  value={newMotionPrompt}
+                  onChange={(e) => setNewMotionPrompt(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none resize-none"
+                />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <span className="text-[11px] uppercase tracking-wide text-zinc-500">Model</span>
+                    <select
+                      value={newModel}
+                      onChange={(e) => handleNewModelChange(e.target.value)}
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                    >
+                      <option value="veo3">Veo 3</option>
+                      <option value="ltx">LTX-2</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[11px] uppercase tracking-wide text-zinc-500">Resolution</span>
+                    <select
+                      value={newResolution}
+                      onChange={(e) => setNewResolution(e.target.value)}
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                    >
+                      {(isLtxModel(newModel) ? LTX_RESOLUTIONS : VEO_RESOLUTIONS).map((res) => (
+                        <option key={res} value={res}>{res}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {supportsEndFrame(newModel) && (
+                    <div className="space-y-1">
+                      <span className="text-[11px] uppercase tracking-wide text-zinc-500">Aspect Ratio</span>
+                      <select
+                        value={newAspectRatio}
+                        onChange={(e) => setNewAspectRatio(e.target.value)}
+                        className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                      >
+                        {VEO_ASPECT_RATIOS.map((ratio) => (
+                          <option key={ratio} value={ratio}>{ratio}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div className="space-y-1">
+                    <span className="text-[11px] uppercase tracking-wide text-zinc-500">Duration (s)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={newDuration}
+                      onChange={(e) => setNewDuration(Number(e.target.value))}
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                    />
+                  </div>
+                  {isLtxModel(newModel) && (
+                    <div className="space-y-1">
+                      <span className="text-[11px] uppercase tracking-wide text-zinc-500">FPS</span>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={newFps}
+                        onChange={(e) => setNewFps(Number(e.target.value))}
+                        className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                      />
+                    </div>
+                  )}
+                  {isLtxModel(newModel) && (
+                    <button
+                      onClick={() => setNewGenerateAudio(!newGenerateAudio)}
+                      className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700"
+                    >
+                      {newGenerateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
+                      {newGenerateAudio ? 'Audio On' : 'Audio Off'}
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="flex gap-2">
               <button
@@ -373,52 +629,169 @@ export default function ScenesPage({
               <div key={scene.id} className="rounded-xl border border-zinc-800 bg-zinc-800/50 p-4">
                 {isEditing ? (
                   /* Edit mode */
-                  <div className="space-y-3">
-                    <input
-                      type="text"
-                      value={editTitle}
-                      onChange={(e) => setEditTitle(e.target.value)}
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
-                    />
-                    <textarea
-                      rows={3}
-                      value={editPrompt}
-                      onChange={(e) => setEditPrompt(e.target.value)}
-                      placeholder="Frame prompt..."
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
-                    />
-                    {editPaired && (
-                      <textarea
-                        rows={3}
-                        value={editEndPrompt}
-                        onChange={(e) => setEditEndPrompt(e.target.value)}
-                        placeholder="End frame prompt..."
-                        className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
-                      />
-                    )}
-                    <textarea
-                      rows={2}
-                      value={editMotionPrompt}
-                      onChange={(e) => setEditMotionPrompt(e.target.value)}
-                      placeholder="Motion prompt..."
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none resize-none"
-                    />
-                    <div className="flex items-center gap-3">
-                      <select
-                        value={editModel}
-                        onChange={(e) => setEditModel(e.target.value)}
-                        className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
-                      >
-                        <option value="veo3">Veo 3</option>
-                        <option value="ltx">LTX Video</option>
-                      </select>
-                      <button
-                        onClick={() => setEditPaired(!editPaired)}
-                        className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700"
-                      >
-                        {editPaired ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
-                        {editPaired ? 'Paired' : 'Single'}
-                      </button>
+                  <div className="space-y-4">
+                    <div className="grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
+                      <div className="space-y-3">
+                        <input
+                          type="text"
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
+                        />
+                        <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Key frames</span>
+                            {!supportsEndFrame(editModel) && (
+                              <span className="text-[10px] text-zinc-500">LTX uses the start frame only</span>
+                            )}
+                          </div>
+                          <div className="flex gap-3">
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="text-[10px] uppercase tracking-wide text-zinc-500">Start</span>
+                              <button
+                                onClick={() => openFramePicker(scene.id, 'start', 'edit')}
+                                className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                                title="Select start frame"
+                              >
+                                {renderThumb(scene.start_frame_image_id, 'Start')}
+                              </button>
+                              {scene.start_frame_image_id && (
+                                <button
+                                  onClick={() => clearSceneFrame(scene.id, 'start')}
+                                  className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </div>
+                            {supportsEndFrame(editModel) ? (
+                              <div className="flex flex-col items-center gap-1">
+                                <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
+                                <button
+                                  onClick={() => openFramePicker(scene.id, 'end', 'edit')}
+                                  className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                                  title="Select end frame"
+                                >
+                                  {renderThumb(scene.end_frame_image_id, 'End')}
+                                </button>
+                                {scene.end_frame_image_id && (
+                                  <button
+                                    onClick={() => clearSceneFrame(scene.id, 'end')}
+                                    className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                                  >
+                                    Clear
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="flex flex-col items-center gap-1 opacity-50">
+                                <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
+                                <div className="h-20 w-20 rounded-lg border border-dashed border-zinc-700 bg-zinc-800 flex items-center justify-center">
+                                  <ImageIcon className="h-6 w-6 text-zinc-600" />
+                                </div>
+                                <span className="text-[10px] text-zinc-600">Veo only</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                        <textarea
+                          rows={3}
+                          value={editPrompt}
+                          onChange={(e) => setEditPrompt(e.target.value)}
+                          placeholder="Frame prompt..."
+                          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
+                        />
+                        {supportsEndFrame(editModel) && (
+                          <textarea
+                            rows={2}
+                            value={editEndPrompt}
+                            onChange={(e) => setEditEndPrompt(e.target.value)}
+                            placeholder="End frame prompt (optional)..."
+                            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
+                          />
+                        )}
+                        <textarea
+                          rows={2}
+                          value={editMotionPrompt}
+                          onChange={(e) => setEditMotionPrompt(e.target.value)}
+                          placeholder="Motion prompt..."
+                          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none resize-none"
+                        />
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <span className="text-[11px] uppercase tracking-wide text-zinc-500">Model</span>
+                            <select
+                              value={editModel}
+                              onChange={(e) => handleEditModelChange(e.target.value)}
+                              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                            >
+                              <option value="veo3">Veo 3</option>
+                              <option value="ltx">LTX-2</option>
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <span className="text-[11px] uppercase tracking-wide text-zinc-500">Resolution</span>
+                            <select
+                              value={editResolution}
+                              onChange={(e) => setEditResolution(e.target.value)}
+                              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                            >
+                              {(isLtxModel(editModel) ? LTX_RESOLUTIONS : VEO_RESOLUTIONS).map((res) => (
+                                <option key={res} value={res}>{res}</option>
+                              ))}
+                            </select>
+                          </div>
+                          {supportsEndFrame(editModel) && (
+                            <div className="space-y-1">
+                              <span className="text-[11px] uppercase tracking-wide text-zinc-500">Aspect Ratio</span>
+                              <select
+                                value={editAspectRatio}
+                                onChange={(e) => setEditAspectRatio(e.target.value)}
+                                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                              >
+                                {VEO_ASPECT_RATIOS.map((ratio) => (
+                                  <option key={ratio} value={ratio}>{ratio}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                          <div className="space-y-1">
+                            <span className="text-[11px] uppercase tracking-wide text-zinc-500">Duration (s)</span>
+                            <input
+                              type="number"
+                              min={1}
+                              step={1}
+                              value={editDuration}
+                              onChange={(e) => setEditDuration(Number(e.target.value))}
+                              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                            />
+                          </div>
+                          {isLtxModel(editModel) && (
+                            <div className="space-y-1">
+                              <span className="text-[11px] uppercase tracking-wide text-zinc-500">FPS</span>
+                              <input
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={editFps}
+                                onChange={(e) => setEditFps(Number(e.target.value))}
+                                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                              />
+                            </div>
+                          )}
+                          {isLtxModel(editModel) && (
+                            <button
+                              onClick={() => setEditGenerateAudio(!editGenerateAudio)}
+                              className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700"
+                            >
+                              {editGenerateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
+                              {editGenerateAudio ? 'Audio On' : 'Audio Off'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </div>
                     <div className="flex gap-2">
                       <button
@@ -441,20 +814,41 @@ export default function ScenesPage({
                   /* View mode */
                   <>
                     {/* Header */}
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-3">
-                        <Clapperboard className="h-4 w-4 text-zinc-500" />
-                        <h3 className="text-sm font-semibold text-zinc-100">
-                          {scene.title || 'Untitled Scene'}
-                        </h3>
-                        {scene.paired && (
-                          <span className="rounded bg-blue-600/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-400">Paired</span>
-                        )}
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-3">
+                          <Clapperboard className="h-4 w-4 text-zinc-500" />
+                          <h3 className="text-sm font-semibold text-zinc-100">
+                            {scene.title || 'Untitled Scene'}
+                          </h3>
+                          {(scene.end_frame_image_id || scene.end_frame_prompt) && supportsEndFrame(scene.generation_model) && (
+                            <span className="rounded bg-blue-600/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-400">End frame</span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-[10px] text-zinc-400">
+                          <span className="rounded-full bg-zinc-700 px-2 py-0.5">
+                            {scene.generation_model || 'veo3'}
+                          </span>
+                          {scene.video_resolution && (
+                            <span className="rounded-full bg-zinc-800 px-2 py-0.5">{scene.video_resolution}</span>
+                          )}
+                          {supportsEndFrame(scene.generation_model) && scene.video_aspect_ratio && (
+                            <span className="rounded-full bg-zinc-800 px-2 py-0.5">{scene.video_aspect_ratio}</span>
+                          )}
+                          {scene.video_duration_seconds && (
+                            <span className="rounded-full bg-zinc-800 px-2 py-0.5">{scene.video_duration_seconds}s</span>
+                          )}
+                          {isLtxModel(scene.generation_model) && scene.video_fps && (
+                            <span className="rounded-full bg-zinc-800 px-2 py-0.5">{scene.video_fps} fps</span>
+                          )}
+                          {isLtxModel(scene.generation_model) && typeof scene.video_generate_audio === 'boolean' && (
+                            <span className="rounded-full bg-zinc-800 px-2 py-0.5">
+                              {scene.video_generate_audio ? 'Audio' : 'No audio'}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <div className="flex items-center gap-1">
-                        <span className="rounded-full bg-zinc-700 px-2 py-0.5 text-xs text-zinc-400 mr-2">
-                          {scene.generation_model || 'veo3'}
-                        </span>
                         <button
                           onClick={() => startEdit(scene)}
                           className="rounded p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700 transition-colors"
@@ -492,33 +886,31 @@ export default function ScenesPage({
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-[10px] uppercase tracking-wide text-zinc-500">Start</span>
                         <button
-                          onClick={() => openFramePicker(scene.id, 'start')}
+                          onClick={() => openFramePicker(scene.id, 'start', 'edit')}
                           className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
                           title="Click to select start frame"
                         >
-                          {scene.start_frame_image_id ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={sceneThumbUrl(scene.start_frame_image_id)} alt="Start" className="h-full w-full object-cover" />
-                          ) : (
-                            <ImageIcon className="h-6 w-6 text-zinc-600" />
-                          )}
+                          {renderThumb(scene.start_frame_image_id, 'Start')}
                         </button>
                       </div>
-                      {scene.paired && scene.generation_model !== 'ltx' && (
+                      {supportsEndFrame(scene.generation_model) ? (
                         <div className="flex flex-col items-center gap-1">
                           <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
                           <button
-                            onClick={() => openFramePicker(scene.id, 'end')}
+                            onClick={() => openFramePicker(scene.id, 'end', 'edit')}
                             className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
                             title="Click to select end frame"
                           >
-                            {scene.end_frame_image_id ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img src={sceneThumbUrl(scene.end_frame_image_id)} alt="End" className="h-full w-full object-cover" />
-                            ) : (
-                              <ImageIcon className="h-6 w-6 text-zinc-600" />
-                            )}
+                            {renderThumb(scene.end_frame_image_id, 'End')}
                           </button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center gap-1 opacity-50">
+                          <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
+                          <div className="h-20 w-20 rounded-lg border border-dashed border-zinc-700 bg-zinc-800 flex items-center justify-center">
+                            <ImageIcon className="h-6 w-6 text-zinc-600" />
+                          </div>
+                          <span className="text-[10px] text-zinc-600">Veo only</span>
                         </div>
                       )}
                     </div>
@@ -528,6 +920,12 @@ export default function ScenesPage({
                       <p className="mb-2 text-xs text-zinc-400 bg-zinc-800 rounded-lg px-3 py-2 border border-zinc-700">
                         <span className="font-medium text-zinc-300">Frame: </span>
                         {scene.prompt_text}
+                      </p>
+                    )}
+                    {supportsEndFrame(scene.generation_model) && scene.end_frame_prompt && (
+                      <p className="mb-2 text-xs text-zinc-400 bg-zinc-800 rounded-lg px-3 py-2 border border-blue-900/40">
+                        <span className="font-medium text-blue-300">End: </span>
+                        {scene.end_frame_prompt}
                       </p>
                     )}
                     {scene.motion_prompt && (
@@ -630,8 +1028,15 @@ export default function ScenesPage({
                 Gallery
               </button>
               <button
-                onClick={() => setPickerTab('upload')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${pickerTab === 'upload' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-zinc-400 hover:text-zinc-200'}`}
+                onClick={() => !uploadDisabled && setPickerTab('upload')}
+                disabled={uploadDisabled}
+                className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${
+                  pickerTab === 'upload'
+                    ? 'text-blue-400 border-b-2 border-blue-400'
+                    : uploadDisabled
+                      ? 'text-zinc-600 cursor-not-allowed'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                }`}
               >
                 Upload
               </button>
@@ -653,16 +1058,26 @@ export default function ScenesPage({
                         onClick={() => selectGalleryImage(img.id)}
                         className="h-24 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 hover:border-blue-500 transition-colors"
                       >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={img.thumb_public_url || img.public_url || ''}
-                          alt=""
-                          className="h-full w-full object-cover"
-                        />
+                        {(img.thumb_public_url || img.public_url) ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={(img.thumb_public_url || img.public_url)!}
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="h-full w-full flex items-center justify-center">
+                            <ImageIcon className="h-6 w-6 text-zinc-600" />
+                          </div>
+                        )}
                       </button>
                     ))}
                   </div>
                 )}
+              </div>
+            ) : uploadDisabled ? (
+              <div className="py-8 text-center text-sm text-zinc-500">
+                Upload is available after the scene is created.
               </div>
             ) : (
               <div className="py-8 flex flex-col items-center gap-3">
