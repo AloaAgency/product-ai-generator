@@ -29,7 +29,7 @@ type SignedImageUrls = {
 
 const VEO_RESOLUTIONS = ['720p', '1080p', '4k'] as const
 const VEO_ASPECT_RATIOS = ['16:9', '9:16'] as const
-const LTX_RESOLUTIONS = ['1920x1080', '1080x1920', '1280x720', '720x1280', '3840x2160'] as const
+const LTX_RESOLUTIONS = ['1920x1080', '2560x1440', '3840x2160'] as const
 const DEFAULT_VEO = { resolution: '1080p', aspectRatio: '16:9', duration: 8 }
 const DEFAULT_LTX = { resolution: '1920x1080', duration: 8, fps: 25, generateAudio: true }
 const isLtxModel = (model: string | null | undefined) => {

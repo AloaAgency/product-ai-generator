@@ -199,12 +199,13 @@ async function generateWithVeo3(
   if (!operationName) throw new Error('No operation name in Veo response')
 
   const pollIntervalMs = Number(process.env.VEO_POLL_INTERVAL_MS || 10000)
-  const timeoutMs = Number(process.env.VEO_POLL_TIMEOUT_MS || 240000)
+  const timeoutMs = Number(process.env.VEO_POLL_TIMEOUT_MS || 600000)
   const startedAt = Date.now()
 
   while (!operation?.done) {
     if (Date.now() - startedAt > timeoutMs) {
-      throw new Error('Veo generation timed out')
+      const timeoutSeconds = Math.round(timeoutMs / 1000)
+      throw new Error(`Veo generation timed out after ${timeoutSeconds}s`)
     }
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
     const statusResp = await fetch(`${baseUrl}/${operationName}`, {
