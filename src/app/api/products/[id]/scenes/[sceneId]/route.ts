@@ -21,6 +21,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     if (body.paired !== undefined) updates.paired = body.paired
     if (body.scene_order !== undefined) updates.scene_order = body.scene_order
     if (body.storyboard_id !== undefined) updates.storyboard_id = body.storyboard_id
+    if (body.start_frame_image_id !== undefined) updates.start_frame_image_id = body.start_frame_image_id
+    if (body.end_frame_image_id !== undefined) updates.end_frame_image_id = body.end_frame_image_id
 
     if (Object.keys(updates).length === 1) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })
