@@ -2,6 +2,7 @@
 
 import { use, useEffect, useState, useCallback, useRef } from 'react'
 import type { StoryboardScene } from '@/lib/types'
+import type { GeneratedImage } from '@/lib/types'
 import {
   Clapperboard,
   Loader2,
@@ -16,6 +17,7 @@ import {
   Check,
   ToggleLeft,
   ToggleRight,
+  Upload,
 } from 'lucide-react'
 
 type SignedImageUrls = {
@@ -69,6 +71,73 @@ export default function ScenesPage({
 
   // Delete
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+
+  // Frame picker modal
+  const [framePicker, setFramePicker] = useState<{ sceneId: string; slot: 'start' | 'end' } | null>(null)
+  const [pickerTab, setPickerTab] = useState<'gallery' | 'upload'>('gallery')
+  const [galleryImages, setGalleryImages] = useState<GeneratedImage[]>([])
+  const [loadingGallery, setLoadingGallery] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  async function openFramePicker(sceneId: string, slot: 'start' | 'end') {
+    setFramePicker({ sceneId, slot })
+    setPickerTab('gallery')
+    setLoadingGallery(true)
+    try {
+      const data = await api(`/api/products/${id}/gallery?media_type=image&approval_status=approved`)
+      setGalleryImages(data.images ?? data)
+    } catch {
+      setGalleryImages([])
+    } finally {
+      setLoadingGallery(false)
+    }
+  }
+
+  async function selectGalleryImage(imageId: string) {
+    if (!framePicker) return
+    const field = framePicker.slot === 'start' ? 'start_frame_image_id' : 'end_frame_image_id'
+    const updated = await api(`/api/products/${id}/scenes/${framePicker.sceneId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [field]: imageId }),
+    })
+    setScenes((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
+    setFramePicker(null)
+  }
+
+  async function handleFrameUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file || !framePicker) return
+    setUploading(true)
+    try {
+      const { signed_url, image } = await api(`/api/products/${id}/scenes/${framePicker.sceneId}/upload-frame`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          slot: framePicker.slot,
+          file_name: file.name,
+          mime_type: file.type,
+          file_size: file.size,
+        }),
+      })
+      // Upload to signed URL
+      await fetch(signed_url, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+      })
+      // The upload-frame endpoint already updated the scene, re-fetch to get latest
+      const field = framePicker.slot === 'start' ? 'start_frame_image_id' : 'end_frame_image_id'
+      setScenes((prev) => prev.map((s) =>
+        s.id === framePicker.sceneId ? { ...s, [field]: image.id } : s
+      ))
+      setFramePicker(null)
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
 
   // Signed URLs
   const [signedUrlsById, setSignedUrlsById] = useState<Record<string, SignedImageUrls>>({})
@@ -422,26 +491,34 @@ export default function ScenesPage({
                     <div className="flex gap-3 mb-3">
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-[10px] uppercase tracking-wide text-zinc-500">Start</span>
-                        <div className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center">
+                        <button
+                          onClick={() => openFramePicker(scene.id, 'start')}
+                          className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                          title="Click to select start frame"
+                        >
                           {scene.start_frame_image_id ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={sceneThumbUrl(scene.start_frame_image_id)} alt="Start" className="h-full w-full object-cover" />
                           ) : (
                             <ImageIcon className="h-6 w-6 text-zinc-600" />
                           )}
-                        </div>
+                        </button>
                       </div>
-                      {scene.paired && (
+                      {scene.paired && scene.generation_model !== 'ltx' && (
                         <div className="flex flex-col items-center gap-1">
                           <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
-                          <div className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center">
+                          <button
+                            onClick={() => openFramePicker(scene.id, 'end')}
+                            className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                            title="Click to select end frame"
+                          >
                             {scene.end_frame_image_id ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img src={sceneThumbUrl(scene.end_frame_image_id)} alt="End" className="h-full w-full object-cover" />
                             ) : (
                               <ImageIcon className="h-6 w-6 text-zinc-600" />
                             )}
-                          </div>
+                          </button>
                         </div>
                       )}
                     </div>
@@ -527,6 +604,95 @@ export default function ScenesPage({
           })
         )}
       </div>
+
+      {/* Frame picker modal */}
+      {framePicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
+          <div className="relative w-full max-w-2xl mx-4 rounded-xl border border-zinc-700 bg-zinc-900 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-zinc-200">
+                Select {framePicker.slot === 'start' ? 'Start' : 'End'} Frame
+              </h2>
+              <button
+                onClick={() => setFramePicker(null)}
+                className="rounded p-1 text-zinc-400 hover:text-zinc-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex gap-2 mb-4 border-b border-zinc-700 pb-2">
+              <button
+                onClick={() => setPickerTab('gallery')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${pickerTab === 'gallery' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-zinc-400 hover:text-zinc-200'}`}
+              >
+                Gallery
+              </button>
+              <button
+                onClick={() => setPickerTab('upload')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${pickerTab === 'upload' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-zinc-400 hover:text-zinc-200'}`}
+              >
+                Upload
+              </button>
+            </div>
+
+            {pickerTab === 'gallery' ? (
+              <div className="max-h-80 overflow-y-auto">
+                {loadingGallery ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
+                  </div>
+                ) : galleryImages.length === 0 ? (
+                  <p className="text-center text-sm text-zinc-500 py-8">No approved images in gallery.</p>
+                ) : (
+                  <div className="grid grid-cols-4 gap-2">
+                    {galleryImages.map((img) => (
+                      <button
+                        key={img.id}
+                        onClick={() => selectGalleryImage(img.id)}
+                        className="h-24 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 hover:border-blue-500 transition-colors"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={img.thumb_public_url || img.public_url || ''}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="py-8 flex flex-col items-center gap-3">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFrameUpload}
+                  className="hidden"
+                />
+                {uploading ? (
+                  <div className="flex items-center gap-2 text-sm text-zinc-400">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Uploading...
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-zinc-700 px-12 py-8 text-zinc-400 hover:border-blue-500 hover:text-blue-400 transition-colors"
+                  >
+                    <Upload className="h-8 w-8" />
+                    <span className="text-sm font-medium">Click to upload an image</span>
+                    <span className="text-xs text-zinc-500">PNG, JPG, WebP</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Video playback overlay */}
       {playingVideoUrl && (
