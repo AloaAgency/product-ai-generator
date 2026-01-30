@@ -62,9 +62,15 @@ export async function POST(request: NextRequest, { params }: Params) {
 
     // Update the scene's frame ID
     const frameColumn = slot === 'start' ? 'start_frame_image_id' : 'end_frame_image_id'
+    const sceneUpdates: Record<string, unknown> = {
+      [frameColumn]: image.id,
+      updated_at: new Date().toISOString(),
+    }
+    if (slot === 'end') sceneUpdates.paired = true
+
     await supabase
       .from(T.storyboard_scenes)
-      .update({ [frameColumn]: image.id, updated_at: new Date().toISOString() })
+      .update(sceneUpdates)
       .eq('id', sceneId)
 
     return NextResponse.json({

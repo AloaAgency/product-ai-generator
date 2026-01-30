@@ -48,6 +48,13 @@ export async function POST(
       generation_model: body.generation_model || 'veo3',
       paired: body.paired ?? false,
     }
+    if (body.start_frame_image_id !== undefined) insert.start_frame_image_id = body.start_frame_image_id
+    if (body.end_frame_image_id !== undefined) insert.end_frame_image_id = body.end_frame_image_id
+    if (body.video_resolution !== undefined) insert.video_resolution = body.video_resolution
+    if (body.video_aspect_ratio !== undefined) insert.video_aspect_ratio = body.video_aspect_ratio
+    if (body.video_duration_seconds !== undefined) insert.video_duration_seconds = body.video_duration_seconds
+    if (body.video_fps !== undefined) insert.video_fps = body.video_fps
+    if (body.video_generate_audio !== undefined) insert.video_generate_audio = body.video_generate_audio
 
     // Optionally attach to a storyboard
     if (body.storyboard_id) {

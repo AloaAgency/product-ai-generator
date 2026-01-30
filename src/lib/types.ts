@@ -120,6 +120,11 @@ export interface StoryboardScene {
   paired: boolean
   start_frame_image_id: string | null
   end_frame_image_id: string | null
+  video_resolution: string | null
+  video_aspect_ratio: string | null
+  video_duration_seconds: number | null
+  video_fps: number | null
+  video_generate_audio: boolean | null
   created_at: string
   updated_at: string
 }

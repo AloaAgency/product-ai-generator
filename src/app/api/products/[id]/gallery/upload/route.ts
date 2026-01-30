@@ -73,7 +73,6 @@ export async function POST(request: NextRequest, { params }: Params) {
           id: imageId,
           job_id: jobId,
           storage_path: storagePath,
-          file_name: file.file_name,
           mime_type: file.mime_type,
           file_size: file.file_size || null,
           media_type: 'image',

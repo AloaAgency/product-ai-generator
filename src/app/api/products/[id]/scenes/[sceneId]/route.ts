@@ -23,6 +23,11 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     if (body.storyboard_id !== undefined) updates.storyboard_id = body.storyboard_id
     if (body.start_frame_image_id !== undefined) updates.start_frame_image_id = body.start_frame_image_id
     if (body.end_frame_image_id !== undefined) updates.end_frame_image_id = body.end_frame_image_id
+    if (body.video_resolution !== undefined) updates.video_resolution = body.video_resolution
+    if (body.video_aspect_ratio !== undefined) updates.video_aspect_ratio = body.video_aspect_ratio
+    if (body.video_duration_seconds !== undefined) updates.video_duration_seconds = body.video_duration_seconds
+    if (body.video_fps !== undefined) updates.video_fps = body.video_fps
+    if (body.video_generate_audio !== undefined) updates.video_generate_audio = body.video_generate_audio
 
     if (Object.keys(updates).length === 1) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })
