@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { generateSceneVideo } from '@/lib/video-generation'
 
 export const runtime = 'nodejs'
-export const maxDuration = 300
+export const maxDuration = 600
 export const dynamic = 'force-dynamic'
 
 export async function POST(
