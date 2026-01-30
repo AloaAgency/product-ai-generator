@@ -207,10 +207,17 @@ export default function ScenesPage({
     return data
   }, [])
 
-  function sceneThumbUrl(imageId: string | null): string {
-    if (!imageId) return ''
+  function sceneThumbUrl(imageId: string | null): string | null {
+    if (!imageId) return null
     void ensureSignedUrls(imageId)
-    return signedUrlsById[imageId]?.thumb_signed_url || signedUrlsById[imageId]?.signed_url || ''
+    return signedUrlsById[imageId]?.thumb_signed_url || signedUrlsById[imageId]?.signed_url || null
+  }
+
+  function renderThumb(imageId: string | null, alt: string) {
+    const url = sceneThumbUrl(imageId)
+    if (!url) return <ImageIcon className="h-6 w-6 text-zinc-600" />
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={url} alt={alt} className="h-full w-full object-cover" />
   }
 
   // Load all scenes for this product
@@ -439,12 +446,7 @@ export default function ScenesPage({
                         className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
                         title="Select start frame"
                       >
-                        {newStartFrameId ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={sceneThumbUrl(newStartFrameId)} alt="Start" className="h-full w-full object-cover" />
-                        ) : (
-                          <ImageIcon className="h-6 w-6 text-zinc-600" />
-                        )}
+                        {renderThumb(newStartFrameId, 'Start')}
                       </button>
                       {newStartFrameId && (
                         <button
@@ -463,12 +465,7 @@ export default function ScenesPage({
                           className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
                           title="Select end frame"
                         >
-                          {newEndFrameId ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={sceneThumbUrl(newEndFrameId)} alt="End" className="h-full w-full object-cover" />
-                          ) : (
-                            <ImageIcon className="h-6 w-6 text-zinc-600" />
-                          )}
+                          {renderThumb(newEndFrameId, 'End')}
                         </button>
                         {newEndFrameId && (
                           <button
@@ -656,12 +653,7 @@ export default function ScenesPage({
                                 className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
                                 title="Select start frame"
                               >
-                                {scene.start_frame_image_id ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img src={sceneThumbUrl(scene.start_frame_image_id)} alt="Start" className="h-full w-full object-cover" />
-                                ) : (
-                                  <ImageIcon className="h-6 w-6 text-zinc-600" />
-                                )}
+                                {renderThumb(scene.start_frame_image_id, 'Start')}
                               </button>
                               {scene.start_frame_image_id && (
                                 <button
@@ -680,12 +672,7 @@ export default function ScenesPage({
                                   className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
                                   title="Select end frame"
                                 >
-                                  {scene.end_frame_image_id ? (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img src={sceneThumbUrl(scene.end_frame_image_id)} alt="End" className="h-full w-full object-cover" />
-                                  ) : (
-                                    <ImageIcon className="h-6 w-6 text-zinc-600" />
-                                  )}
+                                  {renderThumb(scene.end_frame_image_id, 'End')}
                                 </button>
                                 {scene.end_frame_image_id && (
                                   <button
@@ -903,12 +890,7 @@ export default function ScenesPage({
                           className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
                           title="Click to select start frame"
                         >
-                          {scene.start_frame_image_id ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={sceneThumbUrl(scene.start_frame_image_id)} alt="Start" className="h-full w-full object-cover" />
-                          ) : (
-                            <ImageIcon className="h-6 w-6 text-zinc-600" />
-                          )}
+                          {renderThumb(scene.start_frame_image_id, 'Start')}
                         </button>
                       </div>
                       {supportsEndFrame(scene.generation_model) ? (
@@ -919,12 +901,7 @@ export default function ScenesPage({
                             className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
                             title="Click to select end frame"
                           >
-                            {scene.end_frame_image_id ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img src={sceneThumbUrl(scene.end_frame_image_id)} alt="End" className="h-full w-full object-cover" />
-                            ) : (
-                              <ImageIcon className="h-6 w-6 text-zinc-600" />
-                            )}
+                            {renderThumb(scene.end_frame_image_id, 'End')}
                           </button>
                         </div>
                       ) : (
