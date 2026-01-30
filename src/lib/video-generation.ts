@@ -176,6 +176,8 @@ async function generateWithVeo3(
     ? settings.durationSeconds
     : Number(process.env.VEO_DURATION_SECONDS || 0) || null
   if (durationSeconds) parameters.durationSeconds = durationSeconds
+  const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
+  if (generateAudio !== null) parameters.generateAudio = generateAudio
 
   const payload: Record<string, unknown> = { instances }
   if (Object.keys(parameters).length) payload.parameters = parameters

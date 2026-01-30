@@ -30,7 +30,7 @@ type SignedImageUrls = {
 const VEO_RESOLUTIONS = ['720p', '1080p', '4k'] as const
 const VEO_ASPECT_RATIOS = ['16:9', '9:16'] as const
 const LTX_RESOLUTIONS = ['1920x1080', '2560x1440', '3840x2160'] as const
-const DEFAULT_VEO = { resolution: '1080p', aspectRatio: '16:9', duration: 8 }
+const DEFAULT_VEO = { resolution: '1080p', aspectRatio: '16:9', duration: 8, generateAudio: true }
 const DEFAULT_LTX = { resolution: '1920x1080', duration: 8, fps: 25, generateAudio: true }
 const isLtxModel = (model: string | null | undefined) => {
   if (!model) return false
@@ -74,7 +74,7 @@ export default function ScenesPage({
   const [newAspectRatio, setNewAspectRatio] = useState(DEFAULT_VEO.aspectRatio)
   const [newDuration, setNewDuration] = useState(DEFAULT_VEO.duration)
   const [newFps, setNewFps] = useState(DEFAULT_LTX.fps)
-  const [newGenerateAudio, setNewGenerateAudio] = useState(DEFAULT_LTX.generateAudio)
+  const [newGenerateAudio, setNewGenerateAudio] = useState(DEFAULT_VEO.generateAudio)
   const [creating, setCreating] = useState(false)
 
   // Edit state
@@ -88,7 +88,7 @@ export default function ScenesPage({
   const [editAspectRatio, setEditAspectRatio] = useState(DEFAULT_VEO.aspectRatio)
   const [editDuration, setEditDuration] = useState(DEFAULT_VEO.duration)
   const [editFps, setEditFps] = useState(DEFAULT_LTX.fps)
-  const [editGenerateAudio, setEditGenerateAudio] = useState(DEFAULT_LTX.generateAudio)
+  const [editGenerateAudio, setEditGenerateAudio] = useState(DEFAULT_VEO.generateAudio)
   const [saving, setSaving] = useState(false)
 
   // Delete
@@ -252,6 +252,7 @@ export default function ScenesPage({
       setNewResolution(DEFAULT_VEO.resolution)
       setNewAspectRatio(DEFAULT_VEO.aspectRatio)
       setNewDuration(DEFAULT_VEO.duration)
+      setNewGenerateAudio(DEFAULT_VEO.generateAudio)
     }
   }
 
@@ -266,6 +267,7 @@ export default function ScenesPage({
       setEditResolution(DEFAULT_VEO.resolution)
       setEditAspectRatio(DEFAULT_VEO.aspectRatio)
       setEditDuration(DEFAULT_VEO.duration)
+      setEditGenerateAudio(DEFAULT_VEO.generateAudio)
     }
   }
 
@@ -279,7 +281,7 @@ export default function ScenesPage({
       const paired = allowEndFrame && (!!endFrameId || !!endPrompt)
       const durationValue = Number.isFinite(newDuration) && newDuration > 0 ? newDuration : null
       const fpsValue = isLtxModel(newModel) && Number.isFinite(newFps) && newFps > 0 ? newFps : null
-      const audioValue = isLtxModel(newModel) ? newGenerateAudio : null
+      const audioValue = newGenerateAudio
       const scene = await api(`/api/products/${id}/scenes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -311,7 +313,7 @@ export default function ScenesPage({
       setNewAspectRatio(DEFAULT_VEO.aspectRatio)
       setNewDuration(DEFAULT_VEO.duration)
       setNewFps(DEFAULT_LTX.fps)
-      setNewGenerateAudio(DEFAULT_LTX.generateAudio)
+      setNewGenerateAudio(DEFAULT_VEO.generateAudio)
       setShowCreate(false)
     } finally {
       setCreating(false)
@@ -330,7 +332,10 @@ export default function ScenesPage({
     setEditAspectRatio(scene.video_aspect_ratio || DEFAULT_VEO.aspectRatio)
     setEditDuration(scene.video_duration_seconds || (isLtxModel(model) ? DEFAULT_LTX.duration : DEFAULT_VEO.duration))
     setEditFps(scene.video_fps || DEFAULT_LTX.fps)
-    setEditGenerateAudio(scene.video_generate_audio ?? DEFAULT_LTX.generateAudio)
+    setEditGenerateAudio(
+      scene.video_generate_audio
+      ?? (isLtxModel(model) ? DEFAULT_LTX.generateAudio : DEFAULT_VEO.generateAudio)
+    )
   }
 
   async function handleSave() {
@@ -343,7 +348,7 @@ export default function ScenesPage({
       const paired = !!endPrompt || !!endFrameId
       const durationValue = Number.isFinite(editDuration) && editDuration > 0 ? editDuration : null
       const fpsValue = isLtxModel(editModel) && Number.isFinite(editFps) && editFps > 0 ? editFps : null
-      const audioValue = isLtxModel(editModel) ? editGenerateAudio : null
+      const audioValue = editGenerateAudio
       const updated = await api(`/api/products/${id}/scenes/${editingId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -574,15 +579,13 @@ export default function ScenesPage({
                       />
                     </div>
                   )}
-                  {isLtxModel(newModel) && (
-                    <button
-                      onClick={() => setNewGenerateAudio(!newGenerateAudio)}
-                      className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700"
-                    >
-                      {newGenerateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
-                      {newGenerateAudio ? 'Audio On' : 'Audio Off'}
-                    </button>
-                  )}
+                  <button
+                    onClick={() => setNewGenerateAudio(!newGenerateAudio)}
+                    className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700"
+                  >
+                    {newGenerateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
+                    {newGenerateAudio ? 'Audio On' : 'Audio Off'}
+                  </button>
                 </div>
               </div>
             </div>
@@ -781,15 +784,13 @@ export default function ScenesPage({
                               />
                             </div>
                           )}
-                          {isLtxModel(editModel) && (
-                            <button
-                              onClick={() => setEditGenerateAudio(!editGenerateAudio)}
-                              className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700"
-                            >
-                              {editGenerateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
-                              {editGenerateAudio ? 'Audio On' : 'Audio Off'}
-                            </button>
-                          )}
+                          <button
+                            onClick={() => setEditGenerateAudio(!editGenerateAudio)}
+                            className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700"
+                          >
+                            {editGenerateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
+                            {editGenerateAudio ? 'Audio On' : 'Audio Off'}
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -841,7 +842,7 @@ export default function ScenesPage({
                           {isLtxModel(scene.generation_model) && scene.video_fps && (
                             <span className="rounded-full bg-zinc-800 px-2 py-0.5">{scene.video_fps} fps</span>
                           )}
-                          {isLtxModel(scene.generation_model) && typeof scene.video_generate_audio === 'boolean' && (
+                          {typeof scene.video_generate_audio === 'boolean' && (
                             <span className="rounded-full bg-zinc-800 px-2 py-0.5">
                               {scene.video_generate_audio ? 'Audio' : 'No audio'}
                             </span>
