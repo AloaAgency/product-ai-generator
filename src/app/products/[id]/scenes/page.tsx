@@ -1061,7 +1061,7 @@ export default function ScenesPage({
                         {(img.thumb_public_url || img.public_url) ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
-                            src={img.thumb_public_url || img.public_url}
+                            src={(img.thumb_public_url || img.public_url)!}
                             alt=""
                             className="h-full w-full object-cover"
                           />
