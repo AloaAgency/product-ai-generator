@@ -14,6 +14,7 @@ import {
   Video,
   Play,
   X,
+  Upload,
 } from 'lucide-react'
 import Link from 'next/link'
 
@@ -59,9 +60,52 @@ export default function GalleryPage({
   const [signedUrlsById, setSignedUrlsById] = useState<Record<string, SignedImageUrls>>({})
   const signedUrlsRef = useRef(signedUrlsById)
 
+  const [uploadingGallery, setUploadingGallery] = useState(false)
+  const galleryFileInputRef = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
     signedUrlsRef.current = signedUrlsById
   }, [signedUrlsById])
+
+  async function handleGalleryUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const fileList = e.target.files
+    if (!fileList || fileList.length === 0) return
+    setUploadingGallery(true)
+    try {
+      const files = Array.from(fileList).map((f) => ({
+        file_name: f.name,
+        mime_type: f.type,
+        file_size: f.size,
+      }))
+      const res = await fetch(`/api/products/${id}/gallery/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files }),
+      })
+      if (!res.ok) throw new Error('Upload request failed')
+      const results = await res.json()
+
+      // Upload each file to its signed URL
+      const fileArray = Array.from(fileList)
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i]
+        if (!result.signed_url) continue
+        const file = fileArray[i]
+        await fetch(result.signed_url, {
+          method: 'PUT',
+          headers: { 'Content-Type': file.type || 'application/octet-stream' },
+          body: file,
+        })
+      }
+      // Refresh gallery
+      await fetchGallery(id)
+    } catch (err) {
+      console.error('[GalleryUpload] Error:', err)
+    } finally {
+      setUploadingGallery(false)
+      if (galleryFileInputRef.current) galleryFileInputRef.current.value = ''
+    }
+  }
 
   useEffect(() => {
     fetchGallery(id)
@@ -288,14 +332,32 @@ export default function GalleryPage({
             </span>
           </div>
 
-          <button
-            onClick={handleDownloadApproved}
-            disabled={!galleryImages.some((img) => img.approval_status === 'approved')}
-            className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            <Download className="h-4 w-4" />
-            Download Approved
-          </button>
+          <div className="flex items-center gap-2">
+            <input
+              ref={galleryFileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handleGalleryUpload}
+              className="hidden"
+            />
+            <button
+              onClick={() => galleryFileInputRef.current?.click()}
+              disabled={uploadingGallery}
+              className="flex items-center gap-2 rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40 transition-colors"
+            >
+              {uploadingGallery ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              Upload Images
+            </button>
+            <button
+              onClick={handleDownloadApproved}
+              disabled={!galleryImages.some((img) => img.approval_status === 'approved')}
+              className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Download Approved
+            </button>
+          </div>
         </div>
       </div>
 
