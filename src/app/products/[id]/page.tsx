@@ -155,25 +155,31 @@ export default function ProductDashboard({
           </div>
         ) : (
           <div className="divide-y divide-zinc-800 rounded-xl border border-zinc-800 bg-zinc-900">
-            {generationJobs.slice(0, 5).map((job) => (
-              <div key={job.id} className="flex items-center justify-between px-5 py-3">
-                <div className="flex items-center gap-3">
-                  {statusIcon(job.status)}
-                  <div>
-                    <p className="line-clamp-1 text-sm text-zinc-200">
-                      {job.final_prompt.slice(0, 80)}
-                      {job.final_prompt.length > 80 ? '...' : ''}
-                    </p>
-                    <p className="text-xs text-zinc-600">
-                      {new Date(job.created_at).toLocaleString()} &middot; {job.variation_count} variations
-                    </p>
+            {generationJobs.slice(0, 5).map((job) => {
+              const unitLabel = job.job_type === 'video'
+                ? (job.variation_count === 1 ? 'video' : 'videos')
+                : (job.variation_count === 1 ? 'image' : 'images')
+
+              return (
+                <div key={job.id} className="flex items-center justify-between px-5 py-3">
+                  <div className="flex items-center gap-3">
+                    {statusIcon(job.status)}
+                    <div>
+                      <p className="line-clamp-1 text-sm text-zinc-200">
+                        {job.final_prompt.slice(0, 80)}
+                        {job.final_prompt.length > 80 ? '...' : ''}
+                      </p>
+                      <p className="text-xs text-zinc-600">
+                        {new Date(job.created_at).toLocaleString()} &middot; {job.variation_count} {unitLabel}
+                      </p>
+                    </div>
                   </div>
+                  <span className="shrink-0 rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs font-medium capitalize text-zinc-400">
+                    {job.status}
+                  </span>
                 </div>
-                <span className="shrink-0 rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs font-medium capitalize text-zinc-400">
-                  {job.status}
-                </span>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>

@@ -36,7 +36,7 @@ export interface ReferenceSet {
 
 export interface ReferenceImage {
   id: string
-  reference_set_id: string
+  reference_set_id: string | null
   storage_path: string
   public_url: string | null
   file_name: string
@@ -62,7 +62,7 @@ export interface GenerationJob {
   id: string
   product_id: string
   prompt_template_id: string | null
-  reference_set_id: string
+  reference_set_id: string | null
   final_prompt: string
   variation_count: number
   resolution: string
@@ -72,6 +72,8 @@ export interface GenerationJob {
   failed_count: number
   error_message: string | null
   generation_model: string
+  job_type: 'image' | 'video'
+  scene_id: string | null
   created_at: string
   started_at: string | null
   completed_at: string | null

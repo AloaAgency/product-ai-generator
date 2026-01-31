@@ -30,6 +30,9 @@ export async function GET(request: NextRequest) {
   const batchSize = Number(url.searchParams.get('batch') || process.env.GENERATION_BATCH_SIZE || 1)
   const parallelism = Number(url.searchParams.get('parallel') || process.env.GENERATION_PARALLELISM || 1)
   const jobBatchSize = Number(url.searchParams.get('jobs') || process.env.GENERATION_JOB_BATCH_SIZE || 1)
+  const defaultJobConcurrency = Number(process.env.GENERATION_JOB_CONCURRENCY || 1)
+  const imageJobConcurrency = Number(url.searchParams.get('imageJobs') || process.env.IMAGE_JOB_CONCURRENCY || defaultJobConcurrency || 1)
+  const videoJobConcurrency = Number(url.searchParams.get('videoJobs') || process.env.VIDEO_JOB_CONCURRENCY || defaultJobConcurrency || 1)
   const timeBudgetMs = Number(url.searchParams.get('budget') || process.env.GENERATION_TIME_BUDGET_MS || 50000)
 
   try {
@@ -38,6 +41,8 @@ export async function GET(request: NextRequest) {
       batchSize,
       parallelism,
       jobBatchSize,
+      imageJobConcurrency,
+      videoJobConcurrency,
       timeBudgetMs,
     })
     if (jobId) {
@@ -47,7 +52,7 @@ export async function GET(request: NextRequest) {
 
     const { data: jobs, error } = await supabase
       .from(T.generation_jobs)
-      .select('id,status,created_at')
+      .select('id,status,created_at,job_type')
       .in('status', ['pending', 'running'])
       .order('created_at', { ascending: true })
       .limit(Math.max(1, jobBatchSize))
@@ -60,11 +65,40 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ processed: 0, results: [] })
     }
 
-    const results = []
-    for (const job of jobs) {
-      const result = await processGenerationJob(job.id, { batchSize, parallelism, timeBudgetMs })
-      results.push(result)
+    const normalizedJobs = jobs.map((job) => ({
+      ...job,
+      job_type: job.job_type === 'video' ? 'video' : 'image',
+    }))
+
+    const runWithConcurrency = async (
+      queued: typeof normalizedJobs,
+      concurrency: number
+    ) => {
+      const limit = Number.isFinite(concurrency) && concurrency > 0 ? concurrency : 1
+      const results = []
+      let index = 0
+      const worker = async () => {
+        while (index < queued.length) {
+          const current = queued[index]
+          index += 1
+          const result = await processGenerationJob(current.id, { batchSize, parallelism, timeBudgetMs })
+          results.push(result)
+        }
+      }
+      const workers = Array.from({ length: Math.min(limit, queued.length) }, () => worker())
+      await Promise.all(workers)
+      return results
     }
+
+    const imageJobs = normalizedJobs.filter((job) => job.job_type !== 'video')
+    const videoJobs = normalizedJobs.filter((job) => job.job_type === 'video')
+
+    const [imageResults, videoResults] = await Promise.all([
+      runWithConcurrency(imageJobs, imageJobConcurrency),
+      runWithConcurrency(videoJobs, videoJobConcurrency),
+    ])
+
+    const results = [...imageResults, ...videoResults]
     console.log('[Worker] Completed', { processed: results.length })
     return NextResponse.json({ processed: results.length, results })
   } catch (err) {

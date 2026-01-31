@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { generateGeminiImage } from '@/lib/gemini'
+import { generateSceneVideo } from '@/lib/video-generation'
 import {
   buildImageStoragePath,
   buildPreviewPath,
@@ -24,6 +25,116 @@ type WorkerOptions = {
   batchSize?: number
   parallelism?: number
   timeBudgetMs?: number
+}
+
+type GenerationJobRecord = {
+  id: string
+  product_id: string
+  prompt_template_id: string | null
+  reference_set_id: string | null
+  final_prompt: string
+  variation_count: number
+  resolution: string
+  aspect_ratio: string
+  status: string
+  completed_count: number | null
+  failed_count: number | null
+  error_message: string | null
+  generation_model: string | null
+  job_type?: 'image' | 'video' | null
+  scene_id?: string | null
+}
+
+const normalizeJobType = (job: GenerationJobRecord) => (job.job_type === 'video' ? 'video' : 'image')
+
+async function processVideoJob(
+  job: GenerationJobRecord,
+  supabase: ReturnType<typeof createServiceClient>
+): Promise<WorkerResult> {
+  const completed = job.completed_count || 0
+  const failed = job.failed_count || 0
+  const totalProcessed = completed + failed
+
+  if (job.status === 'completed' || job.status === 'cancelled') {
+    return {
+      jobId: job.id,
+      processed: 0,
+      completed,
+      failed,
+      status: job.status,
+    }
+  }
+
+  if (job.status === 'pending') {
+    await supabase
+      .from(T.generation_jobs)
+      .update({ status: 'running', started_at: new Date().toISOString() })
+      .eq('id', job.id)
+      .in('status', ['pending', 'running'])
+  }
+
+  if (!job.scene_id) {
+    const message = 'Video job missing scene_id'
+    const nextFailed = failed + 1
+    await supabase
+      .from(T.generation_jobs)
+      .update({
+        status: 'failed',
+        failed_count: nextFailed,
+        error_message: message,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', job.id)
+      .in('status', ['pending', 'running'])
+    return {
+      jobId: job.id,
+      processed: 1,
+      completed,
+      failed: nextFailed,
+      status: 'failed',
+    }
+  }
+
+  try {
+    await generateSceneVideo(job.product_id, job.scene_id, job.generation_model || undefined, job.id)
+    const nextCompleted = completed + 1
+    await supabase
+      .from(T.generation_jobs)
+      .update({
+        completed_count: nextCompleted,
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', job.id)
+      .in('status', ['pending', 'running'])
+    return {
+      jobId: job.id,
+      processed: 1,
+      completed: nextCompleted,
+      failed,
+      status: 'completed',
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Video generation failed'
+    const nextFailed = failed + 1
+    await supabase
+      .from(T.generation_jobs)
+      .update({
+        failed_count: nextFailed,
+        status: 'failed',
+        error_message: message,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', job.id)
+      .in('status', ['pending', 'running'])
+    return {
+      jobId: job.id,
+      processed: 1,
+      completed,
+      failed: nextFailed,
+      status: 'failed',
+    }
+  }
 }
 
 export async function processGenerationJob(jobId: string, options: WorkerOptions = {}): Promise<WorkerResult> {
@@ -60,6 +171,11 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     throw new Error('Generation job not found')
   }
 
+  const jobType = normalizeJobType(job as GenerationJobRecord)
+  if (jobType === 'video') {
+    return processVideoJob(job as GenerationJobRecord, supabase)
+  }
+
   if (job.status === 'completed' || job.status === 'cancelled') {
     return {
       jobId,
@@ -76,6 +192,10 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
       .update({ status: 'running', started_at: new Date().toISOString() })
       .eq('id', job.id)
       .in('status', ['pending', 'running'])
+  }
+
+  if (!job.reference_set_id) {
+    throw new Error('Image generation job missing reference_set_id')
   }
 
   const { data: refImages } = await supabase

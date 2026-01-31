@@ -13,7 +13,12 @@ type SceneVideoSettings = {
   generateAudio?: boolean | null
 }
 
-export async function generateSceneVideo(productId: string, sceneId: string, model: string) {
+export async function generateSceneVideo(
+  productId: string,
+  sceneId: string,
+  model?: string,
+  jobId?: string | null
+) {
   const supabase = createServiceClient()
 
   // Fetch the scene
@@ -26,7 +31,8 @@ export async function generateSceneVideo(productId: string, sceneId: string, mod
   if (sceneErr || !scene) throw new Error('Scene not found')
   if (!scene.motion_prompt) throw new Error('Scene has no motion prompt')
 
-  const isLtx = model.toLowerCase().startsWith('ltx')
+  const resolvedModel = model || scene.generation_model || 'veo3'
+  const isLtx = resolvedModel.toLowerCase().startsWith('ltx')
 
   // Get signed URLs for start/end frame images
   const frameRefs: { start?: FrameRef; end?: FrameRef } = {}
@@ -77,7 +83,7 @@ export async function generateSceneVideo(productId: string, sceneId: string, mod
   let mimeType: string
   let extension: string
 
-  if (model === 'veo3') {
+  if (resolvedModel === 'veo3') {
     const result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings)
     videoBuffer = result.buffer
     mimeType = result.mimeType
@@ -88,7 +94,7 @@ export async function generateSceneVideo(productId: string, sceneId: string, mod
     mimeType = result.mimeType
     extension = result.extension
   } else {
-    throw new Error(`Unsupported model: ${model}`)
+    throw new Error(`Unsupported model: ${resolvedModel}`)
   }
 
   // Upload to storage
@@ -107,7 +113,7 @@ export async function generateSceneVideo(productId: string, sceneId: string, mod
   const { data: record, error: insertErr } = await supabase
     .from(T.generated_images)
     .insert({
-      job_id: null,
+      job_id: jobId || null,
       variation_number: 1,
       storage_path: storagePath,
       mime_type: mimeType,
