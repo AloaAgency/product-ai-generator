@@ -32,19 +32,40 @@ export async function GET(
       .eq('job_id', jobId)
       .order('variation_number', { ascending: true })
 
-    const allPaths = (images || []).flatMap((img) => [
+    const imageItems = (images || []).filter((img) => img.media_type !== 'video')
+    const videoItems = (images || []).filter((img) => img.media_type === 'video')
+
+    const imagePaths = imageItems.flatMap((img) => [
       img.storage_path,
       img.thumb_storage_path,
       img.preview_storage_path,
     ].filter(Boolean)) as string[]
 
-    let signedMap = new Map<string, string>()
-    if (allPaths.length > 0) {
+    const videoPaths = videoItems
+      .map((img) => img.storage_path)
+      .filter(Boolean) as string[]
+
+    let signedImagesMap = new Map<string, string>()
+    if (imagePaths.length > 0) {
       const { data: signed } = await supabase.storage
         .from('generated-images')
-        .createSignedUrls(allPaths, SIGNED_URL_TTL_SECONDS)
+        .createSignedUrls(imagePaths, SIGNED_URL_TTL_SECONDS)
       if (signed) {
-        signedMap = new Map(
+        signedImagesMap = new Map(
+          signed
+            .filter((item) => item?.signedUrl && item?.path)
+            .map((item) => [item.path!, item.signedUrl])
+        )
+      }
+    }
+
+    let signedVideosMap = new Map<string, string>()
+    if (videoPaths.length > 0) {
+      const { data: signed } = await supabase.storage
+        .from('generated-videos')
+        .createSignedUrls(videoPaths, SIGNED_URL_TTL_SECONDS)
+      if (signed) {
+        signedVideosMap = new Map(
           signed
             .filter((item) => item?.signedUrl && item?.path)
             .map((item) => [item.path!, item.signedUrl])
@@ -55,13 +76,15 @@ export async function GET(
     const signedImages = (images || []).map((img) => ({
       ...img,
       public_url: img.storage_path
-        ? (signedMap.get(img.storage_path) ?? null)
+        ? (img.media_type === 'video'
+          ? (signedVideosMap.get(img.storage_path) ?? null)
+          : (signedImagesMap.get(img.storage_path) ?? null))
         : null,
       preview_public_url: img.preview_storage_path
-        ? (signedMap.get(img.preview_storage_path) ?? null)
+        ? (signedImagesMap.get(img.preview_storage_path) ?? null)
         : null,
       thumb_public_url: img.thumb_storage_path
-        ? (signedMap.get(img.thumb_storage_path) ?? null)
+        ? (signedImagesMap.get(img.thumb_storage_path) ?? null)
         : null,
     }))
 

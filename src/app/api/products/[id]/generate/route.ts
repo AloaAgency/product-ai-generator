@@ -132,6 +132,7 @@ export async function POST(
         completed_count: 0,
         failed_count: 0,
         generation_model: process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview',
+        job_type: 'image',
       })
       .select()
       .single()

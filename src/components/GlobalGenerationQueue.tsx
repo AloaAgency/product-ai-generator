@@ -129,7 +129,7 @@ export default function GlobalGenerationQueue({
             </button>
           )}
           <span>
-            {totals.totalCompleted}/{totals.totalVariations} images
+            {totals.totalCompleted}/{totals.totalVariations} outputs
           </span>
           {expanded ? (
             <ChevronUp className="h-4 w-4" />
@@ -159,6 +159,10 @@ export default function GlobalGenerationQueue({
                   ? Math.round((job.completed_count / job.variation_count) * 100)
                   : 0
 
+                const unitLabel = job.job_type === 'video'
+                  ? (job.variation_count === 1 ? 'video' : 'videos')
+                  : (job.variation_count === 1 ? 'image' : 'images')
+
                 return (
                   <div
                     key={job.id}
@@ -174,7 +178,7 @@ export default function GlobalGenerationQueue({
                     </div>
                     <div className="mt-1 flex items-center justify-between text-xs text-zinc-500">
                       <span>
-                        {job.completed_count} / {job.variation_count} images
+                        {job.completed_count} / {job.variation_count} {unitLabel}
                       </span>
                       <span>{jobProgress}%</span>
                     </div>
