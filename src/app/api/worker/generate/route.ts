@@ -75,7 +75,7 @@ export async function GET(request: NextRequest) {
       concurrency: number
     ) => {
       const limit = Number.isFinite(concurrency) && concurrency > 0 ? concurrency : 1
-      const results = []
+      const results: Awaited<ReturnType<typeof processGenerationJob>>[] = []
       let index = 0
       const worker = async () => {
         while (index < queued.length) {
