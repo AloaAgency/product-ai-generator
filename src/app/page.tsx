@@ -3,10 +3,12 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useAppStore } from '@/lib/store'
-import { Plus, FolderOpen, X } from 'lucide-react'
+import { Plus, FolderOpen, X, Pencil, Trash2, Check } from 'lucide-react'
 
 export default function Home() {
-  const { projects, loadingProjects, fetchProjects, createProject } = useAppStore()
+  const { projects, loadingProjects, fetchProjects, createProject, updateProject, deleteProject } = useAppStore()
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -72,23 +74,86 @@ export default function Home() {
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {projects.map((project) => (
-              <Link
+              <div
                 key={project.id}
-                href={`/projects/${project.id}`}
                 className="group rounded-xl border border-zinc-800 bg-zinc-900 p-5 transition-colors hover:border-zinc-700 hover:bg-zinc-800/60"
               >
-                <h3 className="mb-1 font-medium text-zinc-100 group-hover:text-white">
-                  {project.name}
-                </h3>
-                {project.description && (
-                  <p className="mb-3 line-clamp-2 text-sm text-zinc-500">
-                    {project.description}
+                <Link href={`/projects/${project.id}`} className="block">
+                  {editingId === project.id ? (
+                    <div
+                      className="mb-1 flex items-center gap-2"
+                      onClick={(e) => e.preventDefault()}
+                    >
+                      <input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            if (editName.trim()) {
+                              await updateProject(project.id, { name: editName.trim() })
+                            }
+                            setEditingId(null)
+                          }
+                          if (e.key === 'Escape') setEditingId(null)
+                        }}
+                        className="w-full rounded bg-zinc-800 px-2 py-1 text-sm font-medium text-zinc-100 outline-none focus:ring-1 focus:ring-blue-500"
+                        autoFocus
+                      />
+                      <button
+                        onClick={async (e) => {
+                          e.preventDefault()
+                          if (editName.trim()) {
+                            await updateProject(project.id, { name: editName.trim() })
+                          }
+                          setEditingId(null)
+                        }}
+                        className="rounded p-1 text-zinc-400 hover:text-green-400"
+                      >
+                        <Check className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <h3 className="mb-1 font-medium text-zinc-100 group-hover:text-white">
+                      {project.name}
+                    </h3>
+                  )}
+                  {project.description && (
+                    <p className="mb-3 line-clamp-2 text-sm text-zinc-500">
+                      {project.description}
+                    </p>
+                  )}
+                  <p className="text-xs text-zinc-600">
+                    Created {new Date(project.created_at).toLocaleDateString()}
                   </p>
+                </Link>
+                {editingId !== project.id && (
+                  <div className="mt-3 flex items-center gap-2 border-t border-zinc-800 pt-3">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setEditName(project.name)
+                        setEditingId(project.id)
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
+                    >
+                      <Pencil className="h-3 w-3" />
+                      Rename
+                    </button>
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        if (!window.confirm(`Delete "${project.name}" and all its products?`)) return
+                        await deleteProject(project.id)
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      Delete
+                    </button>
+                  </div>
                 )}
-                <p className="text-xs text-zinc-600">
-                  Created {new Date(project.created_at).toLocaleDateString()}
-                </p>
-              </Link>
+              </div>
             ))}
           </div>
         )}
