@@ -2,6 +2,7 @@
 
 import { create } from 'zustand'
 import type {
+  Project,
   Product,
   ReferenceSet,
   ReferenceImage,
@@ -11,14 +12,24 @@ import type {
 } from './types'
 
 interface AppState {
+  // Projects
+  projects: Project[]
+  currentProject: Project | null
+  loadingProjects: boolean
+  fetchProjects: () => Promise<void>
+  fetchProject: (id: string) => Promise<void>
+  createProject: (data: { name: string; description?: string }) => Promise<Project>
+  updateProject: (id: string, data: Partial<Pick<Project, 'name' | 'description' | 'global_style_settings'>>) => Promise<void>
+  deleteProject: (id: string) => Promise<void>
+
   // Products
   products: Product[]
   currentProduct: Product | null
   loadingProducts: boolean
-  fetchProducts: () => Promise<void>
+  fetchProducts: (projectId?: string) => Promise<void>
   fetchProduct: (id: string) => Promise<void>
-  createProduct: (data: { name: string; description?: string }) => Promise<Product>
-  updateProduct: (id: string, data: Partial<Pick<Product, 'name' | 'description' | 'global_style_settings'>>) => Promise<void>
+  createProduct: (data: { name: string; description?: string; project_id: string }) => Promise<Product>
+  updateProduct: (id: string, data: Partial<Pick<Product, 'name' | 'description' | 'global_style_settings' | 'project_id'>>) => Promise<void>
   deleteProduct: (id: string) => Promise<void>
 
   // Reference Sets
@@ -97,14 +108,60 @@ export const useAppStore = create<AppState>((set, get) => ({
       window.localStorage.setItem('devParallelGeneration', String(enabled))
     }
   },
+  // Projects
+  projects: [],
+  currentProject: null,
+  loadingProjects: false,
+  fetchProjects: async () => {
+    set({ loadingProjects: true })
+    try {
+      const data = await api('/api/projects')
+      set({ projects: data })
+    } finally {
+      set({ loadingProjects: false })
+    }
+  },
+  fetchProject: async (id) => {
+    const data = await api(`/api/projects/${id}`)
+    set({ currentProject: data })
+  },
+  createProject: async (data) => {
+    const project = await api('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    set((s) => ({ projects: [project, ...s.projects] }))
+    return project
+  },
+  updateProject: async (id, data) => {
+    const project = await api(`/api/projects/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    set((s) => ({
+      currentProject: s.currentProject?.id === id ? project : s.currentProject,
+      projects: s.projects.map((p) => (p.id === id ? project : p)),
+    }))
+  },
+  deleteProject: async (id) => {
+    await api(`/api/projects/${id}`, { method: 'DELETE' })
+    set((s) => ({
+      projects: s.projects.filter((p) => p.id !== id),
+      currentProject: s.currentProject?.id === id ? null : s.currentProject,
+    }))
+  },
+
   // Products
   products: [],
   currentProduct: null,
   loadingProducts: false,
-  fetchProducts: async () => {
+  fetchProducts: async (projectId) => {
     set({ loadingProducts: true })
     try {
-      const data = await api('/api/products')
+      const qs = projectId ? `?project_id=${projectId}` : ''
+      const data = await api(`/api/products${qs}`)
       set({ products: data })
     } finally {
       set({ loadingProducts: false })

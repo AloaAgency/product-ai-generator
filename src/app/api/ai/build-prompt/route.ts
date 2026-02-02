@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
-import type { Product } from '@/lib/types'
+import type { Product, Project } from '@/lib/types'
 import { T } from '@/lib/db-tables'
+import { mergeStyles } from '@/lib/style-merge'
 
 export async function POST(request: NextRequest) {
   try {
@@ -29,7 +30,20 @@ export async function POST(request: NextRequest) {
     }
 
     const typedProduct = product as Product
-    const settings = typedProduct.global_style_settings
+
+    // Fetch parent project and merge styles
+    let projectStyles = {}
+    if (typedProduct.project_id) {
+      const { data: project } = await supabase
+        .from(T.projects)
+        .select('*')
+        .eq('id', typedProduct.project_id)
+        .single()
+      if (project) {
+        projectStyles = (project as Project).global_style_settings ?? {}
+      }
+    }
+    const settings = mergeStyles(projectStyles, typedProduct.global_style_settings)
 
     const styleBlock = Object.entries(settings)
       .filter(([, v]) => typeof v === 'string' && (v as string).trim())
