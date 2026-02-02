@@ -1,10 +1,42 @@
 'use client'
 
-import { use, useEffect, useState } from 'react'
+import { use, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
-import { Save, CheckCircle, Settings, Camera, Palette, Trash2, FolderOpen, Plus, Download } from 'lucide-react'
+import { Save, CheckCircle, Settings, Camera, Palette, Trash2, FolderOpen, Plus, Download, Upload } from 'lucide-react'
 import type { GlobalStyleSettings, SettingsTemplate } from '@/lib/types'
+
+function parseTemplateMarkdown(text: string): { name: string; settings: GlobalStyleSettings } | null {
+  // Try to extract JSON from a ```json code block
+  const jsonBlockMatch = text.match(/```json\s*([\s\S]*?)```/)
+  if (jsonBlockMatch) {
+    try {
+      const parsed = JSON.parse(jsonBlockMatch[1].trim())
+      if (parsed.settings && typeof parsed.settings === 'object') {
+        return { name: parsed.name || 'Imported Template', settings: parsed.settings }
+      }
+      // If the JSON itself is the settings object (no wrapper)
+      if (parsed.subject_rule || parsed.lens || parsed.style || parsed.lighting) {
+        return { name: 'Imported Template', settings: parsed }
+      }
+    } catch {
+      // fall through
+    }
+  }
+  // Try parsing the whole text as JSON
+  try {
+    const parsed = JSON.parse(text.trim())
+    if (parsed.settings && typeof parsed.settings === 'object') {
+      return { name: parsed.name || 'Imported Template', settings: parsed.settings }
+    }
+    if (parsed.subject_rule || parsed.lens || parsed.style || parsed.lighting) {
+      return { name: 'Imported Template', settings: parsed }
+    }
+  } catch {
+    // not JSON
+  }
+  return null
+}
 
 export default function ProductSettingsPage({
   params,
@@ -28,6 +60,8 @@ export default function ProductSettingsPage({
   const [deleting, setDeleting] = useState(false)
   const [templateName, setTemplateName] = useState('')
   const [showNewTemplate, setShowNewTemplate] = useState(false)
+  const [importError, setImportError] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetchProduct(id)
@@ -62,7 +96,6 @@ export default function ProductSettingsPage({
         updates.project_id = selectedProjectId
       }
       await updateProduct(id, updates)
-      // Also update active template if one exists
       if (activeTemplate) {
         await updateSettingsTemplate(id, activeTemplate.id, { settings })
       }
@@ -78,10 +111,9 @@ export default function ProductSettingsPage({
 
   const handleSaveAsTemplate = async () => {
     if (!templateName.trim()) return
-    const tmpl = await createSettingsTemplate(id, { name: templateName.trim(), settings })
+    await createSettingsTemplate(id, { name: templateName.trim(), settings })
     setTemplateName('')
     setShowNewTemplate(false)
-    // If it's the first template, it auto-activates
     if (settingsTemplates.length === 0) {
       await fetchSettingsTemplates(id)
     }
@@ -99,10 +131,30 @@ export default function ProductSettingsPage({
     await deleteSettingsTemplate(id, tmpl.id)
   }
 
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setImportError('')
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const result = parseTemplateMarkdown(text)
+      if (!result) {
+        setImportError('Could not find valid template JSON in the file. Use the sample format as a guide.')
+        return
+      }
+      await createSettingsTemplate(id, { name: result.name, settings: result.settings })
+      await fetchSettingsTemplates(id)
+    } catch {
+      setImportError('Failed to import template file.')
+    }
+    // Reset input so re-uploading the same file triggers onChange
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
   const handleDownloadSample = () => {
     const md = `# Settings Template Format
 
-Use this format to generate a settings template via LLM. Provide the JSON below in a POST request body.
+Use this format to generate a settings template via LLM. Save as \`.md\` or \`.json\` and import it on the Settings page.
 
 \`\`\`json
 {
@@ -160,89 +212,79 @@ Use this format to generate a settings template via LLM. Provide the JSON below 
     )
   }
 
+  const inputClasses = 'w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500'
+
   const textInput = (label: string, key: keyof GlobalStyleSettings) => (
     <div>
-      <label className="block text-sm font-medium text-zinc-300 mb-1">
-        {label}
-      </label>
+      <label className="block text-sm font-medium text-zinc-300 mb-1">{label}</label>
       <input
         type="text"
         value={settings[key] || ''}
         onChange={(e) => updateField(key, e.target.value)}
-        className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        className={inputClasses}
       />
     </div>
   )
 
   const textArea = (label: string, key: keyof GlobalStyleSettings) => (
     <div>
-      <label className="block text-sm font-medium text-zinc-300 mb-1">
-        {label}
-      </label>
+      <label className="block text-sm font-medium text-zinc-300 mb-1">{label}</label>
       <textarea
         rows={3}
         value={settings[key] || ''}
         onChange={(e) => updateField(key, e.target.value)}
-        className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y"
+        className={`${inputClasses} resize-y`}
       />
     </div>
   )
 
-  const dropdown = (
-    label: string,
-    key: keyof GlobalStyleSettings,
-    options: string[]
-  ) => (
+  const selectField = (label: string, key: keyof GlobalStyleSettings, options: string[]) => (
     <div>
-      <label className="block text-sm font-medium text-zinc-300 mb-1">
-        {label}
-      </label>
+      <label className="block text-sm font-medium text-zinc-300 mb-1">{label}</label>
       <select
         value={settings[key] || ''}
         onChange={(e) => updateField(key, e.target.value)}
-        className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        className={inputClasses}
       >
         <option value="">Not set</option>
         {options.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
-          </option>
+          <option key={opt} value={opt}>{opt}</option>
         ))}
       </select>
     </div>
   )
 
+  const iconBtn = (onClick: () => void, title: string, icon: React.ReactNode, variant: 'default' | 'danger' = 'default') => (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`flex items-center justify-center rounded-lg border px-2.5 py-2 transition-colors shrink-0 ${
+        variant === 'danger'
+          ? 'border-red-900/50 bg-red-950/20 text-red-400 hover:bg-red-900/30'
+          : 'border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
+      }`}
+    >
+      {icon}
+    </button>
+  )
+
   return (
-    <div className="min-h-screen bg-zinc-900 text-zinc-100 p-6 max-w-3xl mx-auto space-y-8">
+    <div className="min-h-screen bg-zinc-900 text-zinc-100 p-4 sm:p-6 max-w-3xl mx-auto space-y-6 sm:space-y-8">
       {/* Product Info */}
       <div className="space-y-4">
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Settings className="w-6 h-6 text-zinc-400" />
+        <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2">
+          <Settings className="w-5 h-5 sm:w-6 sm:h-6 text-zinc-400" />
           Product Settings
         </h1>
 
         <div>
-          <label className="block text-sm font-medium text-zinc-300 mb-1">
-            Product Name
-          </label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          />
+          <label className="block text-sm font-medium text-zinc-300 mb-1">Product Name</label>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={inputClasses} />
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-zinc-300 mb-1">
-            Description
-          </label>
-          <textarea
-            rows={2}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y"
-          />
+          <label className="block text-sm font-medium text-zinc-300 mb-1">Description</label>
+          <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} className={`${inputClasses} resize-y`} />
         </div>
 
         <div>
@@ -252,21 +294,13 @@ Use this format to generate a settings template via LLM. Provide the JSON below 
               Project
             </span>
           </label>
-          <select
-            value={selectedProjectId}
-            onChange={(e) => setSelectedProjectId(e.target.value)}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          >
+          <select value={selectedProjectId} onChange={(e) => setSelectedProjectId(e.target.value)} className={inputClasses}>
             {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
+              <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </select>
           {selectedProjectId !== projectId && (
-            <p className="mt-1 text-xs text-amber-400">
-              Saving will move this product to a different project.
-            </p>
+            <p className="mt-1 text-xs text-amber-400">Saving will move this product to a different project.</p>
           )}
         </div>
       </div>
@@ -274,61 +308,63 @@ Use this format to generate a settings template via LLM. Provide the JSON below 
       <hr className="border-zinc-800" />
 
       {/* Settings Templates */}
-      <div className="space-y-4">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
+      <div className="space-y-3">
+        <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
           <Palette className="w-5 h-5 text-zinc-400" />
           Settings Template
         </h2>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <select
             value={activeTemplate?.id ?? ''}
-            onChange={(e) => {
-              if (e.target.value) handleSelectTemplate(e.target.value)
-            }}
-            className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            onChange={(e) => { if (e.target.value) handleSelectTemplate(e.target.value) }}
+            className={`${inputClasses} flex-1 min-w-[180px]`}
           >
-            {settingsTemplates.length === 0 && (
-              <option value="">No templates yet</option>
-            )}
-            {!activeTemplate && settingsTemplates.length > 0 && (
-              <option value="">(unsaved)</option>
-            )}
+            {settingsTemplates.length === 0 && <option value="">No templates yet</option>}
+            {!activeTemplate && settingsTemplates.length > 0 && <option value="">(unsaved)</option>}
             {settingsTemplates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
+              <option key={t.id} value={t.id}>{t.name}</option>
             ))}
           </select>
 
           <button
             onClick={() => setShowNewTemplate(true)}
-            className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-700 transition-colors shrink-0"
           >
             <Plus className="w-4 h-4" />
-            Save As
+            <span className="hidden sm:inline">Save As</span>
           </button>
 
-          {activeTemplate && (
-            <button
-              onClick={() => handleDeleteTemplate(activeTemplate)}
-              className="flex items-center gap-1.5 rounded-lg border border-red-900/50 bg-red-950/20 px-3 py-2 text-sm text-red-400 hover:bg-red-900/30 transition-colors"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+          {activeTemplate && iconBtn(
+            () => handleDeleteTemplate(activeTemplate),
+            'Delete template',
+            <Trash2 className="w-4 h-4" />,
+            'danger'
           )}
 
-          <button
-            onClick={handleDownloadSample}
-            title="Download template format sample"
-            className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
-          >
-            <Download className="w-4 h-4" />
-          </button>
+          {iconBtn(handleDownloadSample, 'Download sample format', <Download className="w-4 h-4" />)}
+
+          {iconBtn(
+            () => fileInputRef.current?.click(),
+            'Import template from .md or .json',
+            <Upload className="w-4 h-4" />
+          )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".md,.json,.txt"
+            onChange={handleImportFile}
+            className="hidden"
+          />
         </div>
 
+        {importError && (
+          <p className="text-sm text-red-400">{importError}</p>
+        )}
+
         {showNewTemplate && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             <input
               type="text"
               placeholder="Template name..."
@@ -336,28 +372,30 @@ Use this format to generate a settings template via LLM. Provide the JSON below 
               onChange={(e) => setTemplateName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleSaveAsTemplate() }}
               autoFocus
-              className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className={`${inputClasses} flex-1`}
             />
-            <button
-              onClick={handleSaveAsTemplate}
-              disabled={!templateName.trim()}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
-            >
-              Save
-            </button>
-            <button
-              onClick={() => { setShowNewTemplate(false); setTemplateName('') }}
-              className="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
-            >
-              Cancel
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleSaveAsTemplate}
+                disabled={!templateName.trim()}
+                className="flex-1 sm:flex-none rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => { setShowNewTemplate(false); setTemplateName('') }}
+                className="flex-1 sm:flex-none rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         )}
       </div>
 
       {/* Style Settings */}
-      <div className="space-y-6">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
+      <div className="space-y-4 sm:space-y-6">
+        <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
           <Palette className="w-5 h-5 text-zinc-400" />
           Style Settings
         </h2>
@@ -374,23 +412,17 @@ Use this format to generate a settings template via LLM. Provide the JSON below 
           {textArea('Custom Suffix', 'custom_suffix')}
         </div>
 
-        <h2 className="text-xl font-semibold flex items-center gap-2 pt-2">
+        <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2 pt-2">
           <Camera className="w-5 h-5 text-zinc-400" />
           Default Output Settings
         </h2>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {dropdown('Default Resolution', 'default_resolution', ['2K', '4K'])}
-          {dropdown('Default Aspect Ratio', 'default_aspect_ratio', [
-            '16:9',
-            '1:1',
-            '9:16',
-          ])}
-          {textInput('Default Fidelity', 'default_fidelity')}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {selectField('Resolution', 'default_resolution', ['2K', '4K'])}
+          {selectField('Aspect Ratio', 'default_aspect_ratio', ['16:9', '1:1', '9:16'])}
+          {textInput('Fidelity', 'default_fidelity')}
           <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1">
-              Default Variations
-            </label>
+            <label className="block text-sm font-medium text-zinc-300 mb-1">Variations</label>
             <input
               type="number"
               min={1}
@@ -401,14 +433,14 @@ Use this format to generate a settings template via LLM. Provide the JSON below 
                 setSettings((prev) => ({ ...prev, default_variation_count: val }))
               }}
               placeholder="15"
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className={inputClasses}
             />
           </div>
         </div>
       </div>
 
       {/* Save */}
-      <div className="flex items-center gap-3 pt-4">
+      <div className="flex items-center gap-3 pt-2">
         <button
           onClick={handleSave}
           disabled={saving}
@@ -420,7 +452,7 @@ Use this format to generate a settings template via LLM. Provide the JSON below 
         {saved && (
           <span className="flex items-center gap-1 text-green-400 text-sm">
             <CheckCircle className="w-4 h-4" />
-            Settings saved successfully
+            Saved
           </span>
         )}
       </div>
@@ -429,13 +461,11 @@ Use this format to generate a settings template via LLM. Provide the JSON below 
 
       {/* Danger Zone */}
       <div className="space-y-4">
-        <h2 className="text-xl font-semibold text-red-400">Danger Zone</h2>
-        <div className="rounded-lg border border-red-900/50 bg-red-950/20 p-4 flex items-center justify-between">
+        <h2 className="text-lg sm:text-xl font-semibold text-red-400">Danger Zone</h2>
+        <div className="rounded-lg border border-red-900/50 bg-red-950/20 p-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
           <div>
             <p className="font-medium text-zinc-100">Delete this product</p>
-            <p className="text-sm text-zinc-400">
-              This action cannot be undone. All images and settings will be permanently deleted.
-            </p>
+            <p className="text-sm text-zinc-400">This action cannot be undone.</p>
           </div>
           <button
             onClick={async () => {
@@ -449,7 +479,7 @@ Use this format to generate a settings template via LLM. Provide the JSON below 
               }
             }}
             disabled={deleting}
-            className="flex items-center gap-2 rounded-lg border border-red-700 bg-red-900/30 px-4 py-2 font-medium text-red-400 hover:bg-red-900/60 disabled:opacity-50 transition-colors shrink-0 ml-4"
+            className="flex items-center justify-center gap-2 rounded-lg border border-red-700 bg-red-900/30 px-4 py-2 font-medium text-red-400 hover:bg-red-900/60 disabled:opacity-50 transition-colors shrink-0"
           >
             <Trash2 className="w-4 h-4" />
             {deleting ? 'Deleting...' : 'Delete Product'}
