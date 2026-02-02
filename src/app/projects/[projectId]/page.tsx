@@ -1,9 +1,10 @@
 'use client'
 
-import { use, useEffect, useState } from 'react'
+import { use, useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
-import { Plus, Package, X, ArrowLeft } from 'lucide-react'
+import { Plus, Package, X, ArrowLeft, Trash2 } from 'lucide-react'
 
 export default function ProjectDetailPage({
   params,
@@ -11,6 +12,7 @@ export default function ProjectDetailPage({
   params: Promise<{ projectId: string }>
 }) {
   const { projectId } = use(params)
+  const router = useRouter()
   const {
     currentProject,
     products,
@@ -18,11 +20,25 @@ export default function ProjectDetailPage({
     fetchProject,
     fetchProducts,
     createProduct,
+    updateProject,
+    deleteProject,
   } = useAppStore()
   const [showModal, setShowModal] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [creating, setCreating] = useState(false)
+  const [editingName, setEditingName] = useState(false)
+  const [nameValue, setNameValue] = useState('')
+  const [deleting, setDeleting] = useState(false)
+  const nameInputRef = useRef<HTMLInputElement>(null)
+
+  const handleNameSave = async () => {
+    const trimmed = nameValue.trim()
+    if (trimmed && trimmed !== currentProject?.name) {
+      await updateProject(projectId, { name: trimmed })
+    }
+    setEditingName(false)
+  }
 
   useEffect(() => {
     fetchProject(projectId)
@@ -60,9 +76,31 @@ export default function ProjectDetailPage({
               All Projects
             </Link>
             <div className="flex items-center gap-3">
-              <h1 className="text-xl font-semibold tracking-tight">
-                {currentProject?.name ?? 'Loading...'}
-              </h1>
+              {editingName ? (
+                <input
+                  ref={nameInputRef}
+                  value={nameValue}
+                  onChange={(e) => setNameValue(e.target.value)}
+                  onBlur={handleNameSave}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleNameSave()
+                    if (e.key === 'Escape') setEditingName(false)
+                  }}
+                  className="rounded bg-zinc-800 px-2 py-1 text-xl font-semibold tracking-tight text-zinc-100 outline-none focus:ring-1 focus:ring-blue-500"
+                  autoFocus
+                />
+              ) : (
+                <h1
+                  className="cursor-pointer text-xl font-semibold tracking-tight transition-colors hover:text-blue-400"
+                  onClick={() => {
+                    setNameValue(currentProject?.name ?? '')
+                    setEditingName(true)
+                  }}
+                  title="Click to edit"
+                >
+                  {currentProject?.name ?? 'Loading...'}
+                </h1>
+              )}
               <Link
                 href={`/projects/${projectId}/settings`}
                 className="rounded-lg px-2 py-1 text-xs text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
@@ -74,13 +112,33 @@ export default function ProjectDetailPage({
               <p className="mt-1 text-sm text-zinc-500">{currentProject.description}</p>
             )}
           </div>
-          <button
-            onClick={() => setShowModal(true)}
-            className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-200"
-          >
-            <Plus className="h-4 w-4" />
-            New Product
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={async () => {
+                if (!currentProject) return
+                if (!window.confirm(`Delete "${currentProject.name}" and all its products? This cannot be undone.`)) return
+                setDeleting(true)
+                try {
+                  await deleteProject(projectId)
+                  router.push('/')
+                } finally {
+                  setDeleting(false)
+                }
+              }}
+              disabled={deleting}
+              className="inline-flex items-center gap-2 rounded-lg border border-red-900/50 px-3 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/30 disabled:opacity-50"
+            >
+              <Trash2 className="h-4 w-4" />
+              {deleting ? 'Deleting...' : 'Delete'}
+            </button>
+            <button
+              onClick={() => setShowModal(true)}
+              className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-200"
+            >
+              <Plus className="h-4 w-4" />
+              New Product
+            </button>
+          </div>
         </div>
       </header>
 
