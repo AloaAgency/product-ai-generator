@@ -1,5 +1,6 @@
 /** Centralized table name constants — all tables use the prodai_ prefix */
 export const T = {
+  projects: 'prodai_projects',
   products: 'prodai_products',
   reference_sets: 'prodai_reference_sets',
   reference_images: 'prodai_reference_images',

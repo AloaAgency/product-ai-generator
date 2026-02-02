@@ -6,8 +6,9 @@ import {
   buildPromptSuggestionSystemPrompt,
   parsePromptSuggestions,
 } from '@/lib/prompt-builder'
-import type { Product } from '@/lib/types'
+import type { Product, Project } from '@/lib/types'
 import { T } from '@/lib/db-tables'
+import { mergeStyles } from '@/lib/style-merge'
 
 export async function POST(request: NextRequest) {
   try {
@@ -34,10 +35,24 @@ export async function POST(request: NextRequest) {
 
     const typedProduct = product as Product
 
+    // Fetch parent project and merge styles
+    let projectStyles = {}
+    if (typedProduct.project_id) {
+      const { data: project } = await supabase
+        .from(T.projects)
+        .select('*')
+        .eq('id', typedProduct.project_id)
+        .single()
+      if (project) {
+        projectStyles = (project as Project).global_style_settings ?? {}
+      }
+    }
+    const mergedSettings = mergeStyles(projectStyles, typedProduct.global_style_settings)
+
     const systemPrompt = buildPromptSuggestionSystemPrompt(
       typedProduct.name,
       typedProduct.description,
-      typedProduct.global_style_settings,
+      mergedSettings,
       count
     )
 

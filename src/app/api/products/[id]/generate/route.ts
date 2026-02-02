@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { buildFullPrompt } from '@/lib/prompt-builder'
-import type { Product, ReferenceSet, ReferenceImage } from '@/lib/types'
+import type { Product, Project, ReferenceSet, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
+import { mergeStyles } from '@/lib/style-merge'
 import { processGenerationJob } from '@/lib/generation-worker'
 
 export const runtime = 'nodejs'
@@ -110,10 +111,25 @@ export async function POST(
 
     const referenceImages: ReferenceImage[] = refImages || []
 
+    // Fetch parent project and merge styles
+    const typedProduct = product as Product
+    let projectStyles = {}
+    if (typedProduct.project_id) {
+      const { data: project } = await supabase
+        .from(T.projects)
+        .select('*')
+        .eq('id', typedProduct.project_id)
+        .single()
+      if (project) {
+        projectStyles = (project as Project).global_style_settings ?? {}
+      }
+    }
+    const mergedSettings = mergeStyles(projectStyles, typedProduct.global_style_settings)
+
     // Build final prompt
     const finalPrompt = buildFullPrompt(
       prompt_text,
-      (product as Product).global_style_settings,
+      mergedSettings,
       referenceImages.length
     )
 
