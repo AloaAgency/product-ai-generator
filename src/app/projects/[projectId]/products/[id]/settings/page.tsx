@@ -3,8 +3,8 @@
 import { use, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
-import { Save, CheckCircle, Settings, Camera, Palette, Trash2, FolderOpen } from 'lucide-react'
-import type { GlobalStyleSettings, Project } from '@/lib/types'
+import { Save, CheckCircle, Settings, Camera, Palette, Trash2, FolderOpen, Plus, Download } from 'lucide-react'
+import type { GlobalStyleSettings, SettingsTemplate } from '@/lib/types'
 
 export default function ProductSettingsPage({
   params,
@@ -13,7 +13,11 @@ export default function ProductSettingsPage({
 }) {
   const { projectId, id } = use(params)
   const router = useRouter()
-  const { currentProduct, projects, fetchProduct, fetchProjects, updateProduct, deleteProduct } = useAppStore()
+  const {
+    currentProduct, projects, fetchProduct, fetchProjects, updateProduct, deleteProduct,
+    settingsTemplates, fetchSettingsTemplates, createSettingsTemplate, updateSettingsTemplate,
+    deleteSettingsTemplate, activateSettingsTemplate,
+  } = useAppStore()
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -22,11 +26,14 @@ export default function ProductSettingsPage({
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [templateName, setTemplateName] = useState('')
+  const [showNewTemplate, setShowNewTemplate] = useState(false)
 
   useEffect(() => {
     fetchProduct(id)
     fetchProjects()
-  }, [id, fetchProduct, fetchProjects])
+    fetchSettingsTemplates(id)
+  }, [id, fetchProduct, fetchProjects, fetchSettingsTemplates])
 
   useEffect(() => {
     if (currentProduct) {
@@ -35,6 +42,8 @@ export default function ProductSettingsPage({
       setSettings(currentProduct.global_style_settings || {})
     }
   }, [currentProduct])
+
+  const activeTemplate = settingsTemplates.find((t) => t.is_active)
 
   const updateField = (key: keyof GlobalStyleSettings, value: string) => {
     setSettings((prev) => ({ ...prev, [key]: value || undefined }))
@@ -53,15 +62,94 @@ export default function ProductSettingsPage({
         updates.project_id = selectedProjectId
       }
       await updateProduct(id, updates)
+      // Also update active template if one exists
+      if (activeTemplate) {
+        await updateSettingsTemplate(id, activeTemplate.id, { settings })
+      }
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
-      // If project changed, redirect to the new URL
       if (selectedProjectId !== projectId) {
         router.push(`/projects/${selectedProjectId}/products/${id}/settings`)
       }
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleSaveAsTemplate = async () => {
+    if (!templateName.trim()) return
+    const tmpl = await createSettingsTemplate(id, { name: templateName.trim(), settings })
+    setTemplateName('')
+    setShowNewTemplate(false)
+    // If it's the first template, it auto-activates
+    if (settingsTemplates.length === 0) {
+      await fetchSettingsTemplates(id)
+    }
+  }
+
+  const handleSelectTemplate = async (templateId: string) => {
+    const tmpl = settingsTemplates.find((t) => t.id === templateId)
+    if (!tmpl) return
+    await activateSettingsTemplate(id, templateId)
+    setSettings(tmpl.settings)
+  }
+
+  const handleDeleteTemplate = async (tmpl: SettingsTemplate) => {
+    if (!window.confirm(`Delete template "${tmpl.name}"?`)) return
+    await deleteSettingsTemplate(id, tmpl.id)
+  }
+
+  const handleDownloadSample = () => {
+    const md = `# Settings Template Format
+
+Use this format to generate a settings template via LLM. Provide the JSON below in a POST request body.
+
+\`\`\`json
+{
+  "name": "My Template Name",
+  "settings": {
+    "subject_rule": "Always center the product with clean negative space",
+    "lens": "85mm f/1.4",
+    "camera_height": "Eye level",
+    "color_grading": "Warm tones, slight orange teal split",
+    "lighting": "Soft key light with rim accent",
+    "style": "Cinematic product photography",
+    "constraints": "No text overlays, no watermarks",
+    "reference_rule": "Match reference image framing closely",
+    "default_resolution": "4K",
+    "default_aspect_ratio": "16:9",
+    "default_fidelity": "high",
+    "custom_suffix": "",
+    "default_variation_count": 15
+  }
+}
+\`\`\`
+
+## Field Descriptions
+
+| Field | Description |
+|-------|-------------|
+| subject_rule | How the product subject should be framed/positioned |
+| lens | Camera lens specification |
+| camera_height | Camera angle/height |
+| color_grading | Color treatment and grading style |
+| lighting | Lighting setup description |
+| style | Overall visual style |
+| constraints | Things to avoid in generation |
+| reference_rule | How reference images should be used |
+| default_resolution | "2K" or "4K" |
+| default_aspect_ratio | "16:9", "1:1", or "9:16" |
+| default_fidelity | Fidelity level string |
+| custom_suffix | Text appended to every prompt |
+| default_variation_count | Number of variations per generation (1-50) |
+`
+    const blob = new Blob([md], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'settings-template-format.md'
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   if (!currentProduct) {
@@ -184,6 +272,88 @@ export default function ProductSettingsPage({
       </div>
 
       <hr className="border-zinc-800" />
+
+      {/* Settings Templates */}
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold flex items-center gap-2">
+          <Palette className="w-5 h-5 text-zinc-400" />
+          Settings Template
+        </h2>
+
+        <div className="flex items-center gap-3">
+          <select
+            value={activeTemplate?.id ?? ''}
+            onChange={(e) => {
+              if (e.target.value) handleSelectTemplate(e.target.value)
+            }}
+            className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          >
+            {settingsTemplates.length === 0 && (
+              <option value="">No templates yet</option>
+            )}
+            {!activeTemplate && settingsTemplates.length > 0 && (
+              <option value="">(unsaved)</option>
+            )}
+            {settingsTemplates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+
+          <button
+            onClick={() => setShowNewTemplate(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Save As
+          </button>
+
+          {activeTemplate && (
+            <button
+              onClick={() => handleDeleteTemplate(activeTemplate)}
+              className="flex items-center gap-1.5 rounded-lg border border-red-900/50 bg-red-950/20 px-3 py-2 text-sm text-red-400 hover:bg-red-900/30 transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+
+          <button
+            onClick={handleDownloadSample}
+            title="Download template format sample"
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
+          >
+            <Download className="w-4 h-4" />
+          </button>
+        </div>
+
+        {showNewTemplate && (
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              placeholder="Template name..."
+              value={templateName}
+              onChange={(e) => setTemplateName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSaveAsTemplate() }}
+              autoFocus
+              className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            <button
+              onClick={handleSaveAsTemplate}
+              disabled={!templateName.trim()}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+            >
+              Save
+            </button>
+            <button
+              onClick={() => { setShowNewTemplate(false); setTemplateName('') }}
+              className="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Style Settings */}
       <div className="space-y-6">

@@ -8,5 +8,6 @@ export const T = {
   generation_jobs: 'prodai_generation_jobs',
   generated_images: 'prodai_generated_images',
   storyboards: 'prodai_storyboards',
+  settings_templates: 'prodai_settings_templates',
   storyboard_scenes: 'prodai_storyboard_scenes',
 } as const

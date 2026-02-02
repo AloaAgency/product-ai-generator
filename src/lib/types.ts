@@ -110,6 +110,16 @@ export interface GeneratedImage {
   created_at: string
 }
 
+export interface SettingsTemplate {
+  id: string
+  product_id: string
+  name: string
+  settings: GlobalStyleSettings
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
 export interface Storyboard {
   id: string
   product_id: string

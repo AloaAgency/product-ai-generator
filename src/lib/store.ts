@@ -9,6 +9,8 @@ import type {
   PromptTemplate,
   GenerationJob,
   GeneratedImage,
+  SettingsTemplate,
+  GlobalStyleSettings,
 } from './types'
 
 interface AppState {
@@ -77,6 +79,15 @@ interface AppState {
   fetchGallery: (productId: string, filters?: { job_id?: string; approval_status?: string; media_type?: string; scene_id?: string }) => Promise<void>
   updateImageApproval: (imageId: string, approval_status: string | null, notes?: string) => Promise<void>
   deleteImage: (imageId: string) => Promise<void>
+
+  // Settings Templates
+  settingsTemplates: SettingsTemplate[]
+  loadingSettingsTemplates: boolean
+  fetchSettingsTemplates: (productId: string) => Promise<void>
+  createSettingsTemplate: (productId: string, data: { name: string; settings: GlobalStyleSettings }) => Promise<SettingsTemplate>
+  updateSettingsTemplate: (productId: string, templateId: string, data: Partial<Pick<SettingsTemplate, 'name' | 'settings' | 'is_active'>>) => Promise<void>
+  deleteSettingsTemplate: (productId: string, templateId: string) => Promise<void>
+  activateSettingsTemplate: (productId: string, templateId: string) => Promise<void>
 
   // AI
   aiLoading: boolean
@@ -494,6 +505,58 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       galleryImages: s.galleryImages.filter((i) => i.id !== imageId),
     }))
+  },
+
+  // Settings Templates
+  settingsTemplates: [],
+  loadingSettingsTemplates: false,
+  fetchSettingsTemplates: async (productId) => {
+    set({ loadingSettingsTemplates: true })
+    try {
+      const data = await api(`/api/products/${productId}/settings-templates`)
+      set({ settingsTemplates: data })
+    } finally {
+      set({ loadingSettingsTemplates: false })
+    }
+  },
+  createSettingsTemplate: async (productId, data) => {
+    const tmpl = await api(`/api/products/${productId}/settings-templates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    set((s) => ({ settingsTemplates: [...s.settingsTemplates, tmpl] }))
+    return tmpl
+  },
+  updateSettingsTemplate: async (productId, templateId, data) => {
+    const tmpl = await api(`/api/products/${productId}/settings-templates/${templateId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    set((s) => ({
+      settingsTemplates: s.settingsTemplates.map((t) =>
+        t.id === templateId ? tmpl : data.is_active ? { ...t, is_active: false } : t
+      ),
+    }))
+  },
+  deleteSettingsTemplate: async (productId, templateId) => {
+    await api(`/api/products/${productId}/settings-templates/${templateId}`, { method: 'DELETE' })
+    set((s) => ({ settingsTemplates: s.settingsTemplates.filter((t) => t.id !== templateId) }))
+  },
+  activateSettingsTemplate: async (productId, templateId) => {
+    const tmpl = await api(`/api/products/${productId}/settings-templates/${templateId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_active: true }),
+    })
+    set((s) => ({
+      settingsTemplates: s.settingsTemplates.map((t) =>
+        t.id === templateId ? tmpl : { ...t, is_active: false }
+      ),
+    }))
+    // Refresh product to get synced settings
+    await get().fetchProduct(productId)
   },
 
   // AI
