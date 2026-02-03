@@ -198,6 +198,15 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     throw new Error('Image generation job missing reference_set_id')
   }
 
+  const { data: product } = await supabase
+    .from(T.products)
+    .select('global_style_settings')
+    .eq('id', job.product_id)
+    .single()
+
+  const geminiApiKey =
+    (product?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+
   const { data: refImages } = await supabase
     .from(T.reference_images)
     .select('*')
@@ -254,6 +263,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
         resolution: job.resolution as '2K' | '4K',
         aspectRatio: job.aspect_ratio as '16:9' | '1:1' | '9:16',
         referenceImages: refImagesBase64,
+        apiKey: geminiApiKey,
         signal: controller.signal,
       })
 
