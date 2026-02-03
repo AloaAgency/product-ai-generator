@@ -33,12 +33,19 @@ export async function generateSceneVideo(
 
   const { data: product } = await supabase
     .from(T.products)
-    .select('global_style_settings')
+    .select('project_id')
     .eq('id', productId)
     .single()
 
-  const geminiApiKey =
-    (product?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+  let geminiApiKey: string | undefined
+  if (product?.project_id) {
+    const { data: project } = await supabase
+      .from(T.projects)
+      .select('global_style_settings')
+      .eq('id', product.project_id)
+      .single()
+    geminiApiKey = (project?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+  }
 
   const resolvedModel = model || scene.generation_model || 'veo3'
   const isLtx = resolvedModel.toLowerCase().startsWith('ltx')

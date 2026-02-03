@@ -200,12 +200,19 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
 
   const { data: product } = await supabase
     .from(T.products)
-    .select('global_style_settings')
+    .select('project_id')
     .eq('id', job.product_id)
     .single()
 
-  const geminiApiKey =
-    (product?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+  let geminiApiKey: string | undefined
+  if (product?.project_id) {
+    const { data: project } = await supabase
+      .from(T.projects)
+      .select('global_style_settings')
+      .eq('id', product.project_id)
+      .single()
+    geminiApiKey = (project?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+  }
 
   const { data: refImages } = await supabase
     .from(T.reference_images)
