@@ -4,7 +4,7 @@ import { use, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAppStore } from '@/lib/store'
-import { Save, CheckCircle, Settings, Camera, Palette, Trash2, ArrowLeft } from 'lucide-react'
+import { Save, CheckCircle, Settings, Camera, Palette, Trash2, ArrowLeft, Key } from 'lucide-react'
 import type { GlobalStyleSettings } from '@/lib/types'
 
 export default function ProjectSettingsPage({
@@ -187,6 +187,29 @@ export default function ProjectSettingsPage({
               className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
+        </div>
+      </div>
+
+      <hr className="border-zinc-800" />
+
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold flex items-center gap-2">
+          <Key className="w-5 h-5 text-zinc-400" />
+          API Keys
+        </h2>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-300 mb-1">Gemini API Key</label>
+          <input
+            type="password"
+            value={(settings.gemini_api_key as string) || ''}
+            onChange={(e) => updateField('gemini_api_key', e.target.value)}
+            autoComplete="off"
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+          <p className="mt-1 text-xs text-zinc-500">
+            Used for Gemini image generation and Veo video generation across all products in this project.
+          </p>
         </div>
       </div>
 

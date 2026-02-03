@@ -23,6 +23,7 @@ async function generateAndStoreImage(
   extraReferenceBase64?: { mimeType: string; base64: string },
   sceneId?: string,
   sceneName?: string | null,
+  geminiApiKey?: string,
 ) {
   // Download reference images
   const refImagesBase64: { mimeType: string; base64: string }[] = []
@@ -49,7 +50,7 @@ async function generateAndStoreImage(
     resolution: settings.default_resolution as '2K' | '4K' | undefined,
     aspectRatio: settings.default_aspect_ratio as '16:9' | '1:1' | '9:16' | undefined,
     referenceImages: refImagesBase64,
-    apiKey: settings.gemini_api_key,
+    apiKey: geminiApiKey,
   })
 
   const imageBuffer = Buffer.from(result.base64Data, 'base64')
@@ -130,6 +131,17 @@ export async function POST(
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
 
+    // Fetch project API key
+    let geminiApiKey: string | undefined
+    if (product.project_id) {
+      const { data: project } = await supabase
+        .from(T.projects)
+        .select('global_style_settings')
+        .eq('id', product.project_id)
+        .single()
+      geminiApiKey = (project?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+    }
+
     // Find reference set
     let refSetId = referenceSetId
     if (!refSetId) {
@@ -170,7 +182,8 @@ export async function POST(
         referenceImages,
         undefined,
         scene.id,
-        scene.title
+        scene.title,
+        geminiApiKey
       )
       result.start_frame_image_id = imageId
       await supabase
@@ -219,7 +232,8 @@ export async function POST(
         referenceImages,
         extraRef,
         scene.id,
-        scene.title
+        scene.title,
+        geminiApiKey
       )
       result.end_frame_image_id = imageId
       await supabase
