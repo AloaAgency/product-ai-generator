@@ -1,6 +1,6 @@
 'use client'
 
-import { use, useEffect } from 'react'
+import { use, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useAppStore } from '@/lib/store'
 import {
@@ -33,7 +33,9 @@ export default function ProductDashboard({
     fetchPromptTemplates,
     fetchGenerationJobs,
     fetchGallery,
+    retryGenerationJob,
   } = useAppStore()
+  const [retryingJobId, setRetryingJobId] = useState<string | null>(null)
 
   useEffect(() => {
     fetchReferenceSets(id)
@@ -144,6 +146,9 @@ export default function ProductDashboard({
                 ? (job.variation_count === 1 ? 'video' : 'videos')
                 : (job.variation_count === 1 ? 'image' : 'images')
 
+              const canRetry = job.status === 'failed'
+                || ((job.completed_count ?? 0) === 0 && (job.failed_count ?? 0) > 0)
+
               return (
                 <div key={job.id} className="flex items-center justify-between px-5 py-3">
                   <div className="flex items-center gap-3">
@@ -156,11 +161,35 @@ export default function ProductDashboard({
                       <p className="text-xs text-zinc-600">
                         {new Date(job.created_at).toLocaleString()} &middot; {job.variation_count} {unitLabel}
                       </p>
+                      {job.error_message && (
+                        <p className="mt-1 text-xs text-red-400 line-clamp-1">
+                          {job.error_message}
+                        </p>
+                      )}
                     </div>
                   </div>
-                  <span className="shrink-0 rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs font-medium capitalize text-zinc-400">
-                    {job.status}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {canRetry && (
+                      <button
+                        onClick={async () => {
+                          if (retryingJobId) return
+                          setRetryingJobId(job.id)
+                          try {
+                            await retryGenerationJob(id, job.id)
+                          } finally {
+                            setRetryingJobId(null)
+                          }
+                        }}
+                        disabled={retryingJobId === job.id}
+                        className="rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {retryingJobId === job.id ? 'Retrying...' : 'Retry'}
+                      </button>
+                    )}
+                    <span className="shrink-0 rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs font-medium capitalize text-zinc-400">
+                      {job.status}
+                    </span>
+                  </div>
                 </div>
               )
             })}

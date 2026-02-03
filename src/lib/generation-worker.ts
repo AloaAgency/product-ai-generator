@@ -394,9 +394,17 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
 
   const finalCompleted = completedCount + failedCount >= job.variation_count
   if (finalCompleted) {
+    const allFailed = completedCount === 0 && failedCount > 0
+    const finalStatus = allFailed ? 'failed' : 'completed'
+    const failureMessage = lastError || 'All variations failed'
+    const updates: Record<string, unknown> = {
+      status: finalStatus,
+      completed_at: new Date().toISOString(),
+    }
+    if (allFailed) updates.error_message = failureMessage
     await supabase
       .from(T.generation_jobs)
-      .update({ status: 'completed', completed_at: new Date().toISOString() })
+      .update(updates)
       .eq('id', job.id)
       .in('status', ['pending', 'running'])
     return {
@@ -404,7 +412,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
       processed,
       completed: completedCount,
       failed: failedCount,
-      status: 'completed',
+      status: finalStatus,
     }
   }
 
