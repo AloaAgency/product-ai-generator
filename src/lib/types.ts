@@ -33,6 +33,7 @@ export interface GlobalStyleSettings {
   default_fidelity?: string
   custom_suffix?: string
   default_variation_count?: number
+  gemini_api_key?: string
 }
 
 export interface ReferenceSet {

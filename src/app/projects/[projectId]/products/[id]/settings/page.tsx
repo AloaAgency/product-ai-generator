@@ -83,6 +83,11 @@ export default function ProductSettingsPage({
     setSettings((prev) => ({ ...prev, [key]: value || undefined }))
   }
 
+  const stripSettingsSecrets = (value: GlobalStyleSettings) => {
+    const { gemini_api_key: _geminiApiKey, ...rest } = value
+    return rest
+  }
+
   const handleSave = async () => {
     setSaving(true)
     setSaved(false)
@@ -97,7 +102,7 @@ export default function ProductSettingsPage({
       }
       await updateProduct(id, updates)
       if (activeTemplate) {
-        await updateSettingsTemplate(id, activeTemplate.id, { settings })
+        await updateSettingsTemplate(id, activeTemplate.id, { settings: stripSettingsSecrets(settings) })
       }
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
@@ -111,7 +116,7 @@ export default function ProductSettingsPage({
 
   const handleSaveAsTemplate = async () => {
     if (!templateName.trim()) return
-    await createSettingsTemplate(id, { name: templateName.trim(), settings })
+    await createSettingsTemplate(id, { name: templateName.trim(), settings: stripSettingsSecrets(settings) })
     setTemplateName('')
     setShowNewTemplate(false)
     if (settingsTemplates.length === 0) {
@@ -123,7 +128,7 @@ export default function ProductSettingsPage({
     const tmpl = settingsTemplates.find((t) => t.id === templateId)
     if (!tmpl) return
     await activateSettingsTemplate(id, templateId)
-    setSettings(tmpl.settings)
+    setSettings((prev) => ({ ...tmpl.settings, gemini_api_key: prev.gemini_api_key }))
   }
 
   const handleDeleteTemplate = async (tmpl: SettingsTemplate) => {
@@ -142,7 +147,7 @@ export default function ProductSettingsPage({
         setImportError('Could not find valid template JSON in the file. Use the sample format as a guide.')
         return
       }
-      await createSettingsTemplate(id, { name: result.name, settings: result.settings })
+      await createSettingsTemplate(id, { name: result.name, settings: stripSettingsSecrets(result.settings) })
       await fetchSettingsTemplates(id)
     } catch {
       setImportError('Failed to import template file.')
@@ -251,6 +256,22 @@ Use this format to generate a settings template via LLM. Save as \`.md\` or \`.j
           <option key={opt} value={opt}>{opt}</option>
         ))}
       </select>
+    </div>
+  )
+
+  const secretInput = (label: string, key: keyof GlobalStyleSettings) => (
+    <div>
+      <label className="block text-sm font-medium text-zinc-300 mb-1">{label}</label>
+      <input
+        type="password"
+        value={settings[key] || ''}
+        onChange={(e) => updateField(key, e.target.value)}
+        autoComplete="off"
+        className={inputClasses}
+      />
+      <p className="mt-1 text-xs text-zinc-500">
+        Stored per product and used for Gemini image generation and Veo video generation.
+      </p>
     </div>
   )
 
@@ -437,6 +458,16 @@ Use this format to generate a settings template via LLM. Save as \`.md\` or \`.j
             />
           </div>
         </div>
+      </div>
+
+      <hr className="border-zinc-800" />
+
+      <div className="space-y-3 sm:space-y-4">
+        <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
+          <Camera className="w-5 h-5 text-zinc-400" />
+          API Keys
+        </h2>
+        {secretInput('Gemini API Key', 'gemini_api_key')}
       </div>
 
       {/* Save */}

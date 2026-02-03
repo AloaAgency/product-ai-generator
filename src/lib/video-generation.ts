@@ -31,6 +31,15 @@ export async function generateSceneVideo(
   if (sceneErr || !scene) throw new Error('Scene not found')
   if (!scene.motion_prompt) throw new Error('Scene has no motion prompt')
 
+  const { data: product } = await supabase
+    .from(T.products)
+    .select('global_style_settings')
+    .eq('id', productId)
+    .single()
+
+  const geminiApiKey =
+    (product?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+
   const resolvedModel = model || scene.generation_model || 'veo3'
   const isLtx = resolvedModel.toLowerCase().startsWith('ltx')
 
@@ -84,7 +93,7 @@ export async function generateSceneVideo(
   let extension: string
 
   if (resolvedModel === 'veo3') {
-    const result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings)
+    const result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings, geminiApiKey)
     videoBuffer = result.buffer
     mimeType = result.mimeType
     extension = result.extension
@@ -137,10 +146,11 @@ export async function generateSceneVideo(
 async function generateWithVeo3(
   prompt: string,
   frameRefs: { start?: FrameRef; end?: FrameRef },
-  settings: SceneVideoSettings
+  settings: SceneVideoSettings,
+  apiKeyOverride?: string | null
 ): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
-  const apiKey = process.env.GOOGLE_AI_API_KEY
-  if (!apiKey) throw new Error('GOOGLE_AI_API_KEY not configured')
+  const apiKey = apiKeyOverride || process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY
+  if (!apiKey) throw new Error('Google AI API key not configured')
 
   const model = process.env.VEO_MODEL || 'veo-3.1-generate-preview'
   const baseUrl = 'https://generativelanguage.googleapis.com/v1beta'

@@ -9,6 +9,7 @@ export interface GeminiImageRequest {
   model?: string
   requestId?: string
   signal?: AbortSignal
+  apiKey?: string
   /** Base64-encoded reference images to include in the request */
   referenceImages?: { mimeType: string; base64: string }[]
 }
@@ -54,9 +55,9 @@ const MAX_RETRIES = 3
 const RETRY_DELAYS = [2000, 5000, 10000]
 
 export async function generateGeminiImage(request: GeminiImageRequest): Promise<GeminiImageResult> {
-  const apiKey = process.env.GEMINI_API_KEY
+  const apiKey = request.apiKey || process.env.GEMINI_API_KEY
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not configured')
+    throw new Error('Gemini API key is not configured')
   }
 
   const model = request.model || DEFAULT_MODEL

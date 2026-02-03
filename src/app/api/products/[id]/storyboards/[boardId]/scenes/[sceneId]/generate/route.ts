@@ -49,6 +49,7 @@ async function generateAndStoreImage(
     resolution: settings.default_resolution as '2K' | '4K' | undefined,
     aspectRatio: settings.default_aspect_ratio as '16:9' | '1:1' | '9:16' | undefined,
     referenceImages: refImagesBase64,
+    apiKey: settings.gemini_api_key,
   })
 
   const imageBuffer = Buffer.from(result.base64Data, 'base64')
