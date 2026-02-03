@@ -33,6 +33,7 @@ export default function GeneratePage({
     fetchReferenceSets,
     startGeneration,
     fetchJobStatus,
+    retryGenerationJob,
     buildPrompt,
     suggestPrompts,
   } = useAppStore()
@@ -51,6 +52,7 @@ export default function GeneratePage({
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
   const [templateName, setTemplateName] = useState('')
   const [savingTemplate, setSavingTemplate] = useState(false)
+  const [retrying, setRetrying] = useState(false)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [signedUrlsById, setSignedUrlsById] = useState<Record<string, { signed_url?: string | null; thumb_signed_url?: string | null; preview_signed_url?: string | null; expires_at?: number }>>({})
@@ -158,6 +160,19 @@ export default function GeneratePage({
     }
   }
 
+  const handleRetry = async () => {
+    if (!currentJob) return
+    setRetrying(true)
+    try {
+      const job = await retryGenerationJob(id, currentJob.id)
+      setGenerating(true)
+      setActiveJobId(null)
+      setTimeout(() => setActiveJobId(job.id), 0)
+    } finally {
+      setRetrying(false)
+    }
+  }
+
   const { updateImageApproval, deleteImage } = useAppStore()
 
   const lightboxImages: LightboxImage[] = useMemo(() => {
@@ -191,6 +206,14 @@ export default function GeneratePage({
           ((currentJob.completed_count ?? 0) / currentJob.variation_count) * 100
         )
       : 0
+
+  const failedCount = currentJob?.failed_count ?? 0
+  const hasFailures = failedCount > 0
+  const errorMessage = currentJob?.error_message
+  const canRetry = !!currentJob && (currentJob.status === 'failed' || ((currentJob.completed_count ?? 0) === 0 && failedCount > 0))
+  const displayStatus = currentJob
+    ? (canRetry && currentJob.status !== 'failed' ? 'failed' : currentJob.status)
+    : null
 
   return (
     <div className="min-h-screen bg-zinc-900 text-zinc-100 p-6 space-y-8 max-w-4xl mx-auto">
@@ -448,18 +471,35 @@ export default function GeneratePage({
         <section className="space-y-4 rounded-lg border border-zinc-800 bg-zinc-800/30 p-6">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Job Progress</h2>
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-medium ${
-                currentJob.status === 'completed'
-                  ? 'bg-green-900/50 text-green-400'
-                  : currentJob.status === 'failed'
-                    ? 'bg-red-900/50 text-red-400'
-                    : 'bg-blue-900/50 text-blue-400'
-              }`}
-            >
-              {currentJob.status}
-            </span>
+            <div className="flex items-center gap-2">
+              {canRetry && (
+                <button
+                  onClick={handleRetry}
+                  disabled={retrying || generating}
+                  className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {retrying ? 'Retrying...' : 'Retry'}
+                </button>
+              )}
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-medium ${
+                  displayStatus === 'completed'
+                    ? 'bg-green-900/50 text-green-400'
+                    : displayStatus === 'failed'
+                      ? 'bg-red-900/50 text-red-400'
+                      : 'bg-blue-900/50 text-blue-400'
+                }`}
+              >
+                {displayStatus}
+              </span>
+            </div>
           </div>
+
+          {errorMessage && (
+            <div className="rounded-lg border border-red-900/50 bg-red-950/30 px-4 py-2 text-sm text-red-300">
+              <span className="font-medium">Error:</span> {errorMessage}
+            </div>
+          )}
 
           {/* Progress bar */}
           <div className="space-y-1">
@@ -467,6 +507,7 @@ export default function GeneratePage({
               <span>
                 {currentJob.completed_count ?? 0} /{' '}
                 {currentJob.variation_count} images
+                {hasFailures ? ` · ${failedCount} failed` : ''}
               </span>
               <span>{progress}%</span>
             </div>

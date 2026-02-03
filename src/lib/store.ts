@@ -69,6 +69,7 @@ interface AppState {
     reference_set_id?: string
   }) => Promise<GenerationJob>
   fetchJobStatus: (productId: string, jobId: string) => Promise<void>
+  retryGenerationJob: (productId: string, jobId: string) => Promise<GenerationJob>
   clearGenerationQueue: (productId: string) => Promise<void>
   devParallelGeneration: boolean
   setDevParallelGeneration: (enabled: boolean) => void
@@ -462,6 +463,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchJobStatus: async (productId, jobId) => {
     const data = await api(`/api/products/${productId}/generate/${jobId}`)
     set({ currentJob: { ...data.job, images: data.images } })
+  },
+  retryGenerationJob: async (productId, jobId) => {
+    const data = await api(`/api/products/${productId}/generate/${jobId}/retry`, {
+      method: 'POST',
+    })
+    const job = data.job ?? data
+    set((s) => ({
+      generationJobs: [job, ...s.generationJobs.filter((j) => j.id !== job.id)],
+      currentJob: s.currentJob?.id === job.id ? { ...job, images: s.currentJob?.images } : s.currentJob,
+    }))
+    return job
   },
   clearGenerationQueue: async (productId) => {
     await api(`/api/products/${productId}/generate`, { method: 'DELETE' })

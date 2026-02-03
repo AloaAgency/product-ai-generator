@@ -179,9 +179,15 @@ export default function GlobalGenerationQueue({
                     <div className="mt-1 flex items-center justify-between text-xs text-zinc-500">
                       <span>
                         {job.completed_count} / {job.variation_count} {unitLabel}
+                        {job.failed_count ? ` · ${job.failed_count} failed` : ''}
                       </span>
                       <span>{jobProgress}%</span>
                     </div>
+                    {job.error_message && (
+                      <p className="mt-1 text-[11px] text-red-400 line-clamp-1">
+                        {job.error_message}
+                      </p>
+                    )}
                     <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
                       <div
                         className="h-full rounded-full bg-blue-500/80 transition-all duration-500"
