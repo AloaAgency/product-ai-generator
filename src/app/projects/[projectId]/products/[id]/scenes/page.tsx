@@ -262,6 +262,16 @@ export default function ScenesPage({
     void load()
   }, [id])
 
+  // Load video counts for all scenes after scenes load
+  useEffect(() => {
+    if (scenes.length === 0) return
+    scenes.forEach((scene) => {
+      if (!sceneVideos[scene.id]) {
+        loadSceneVideos(scene.id)
+      }
+    })
+  }, [scenes])
+
   async function loadSceneVideos(sceneId: string) {
     try {
       const data = await api(`/api/products/${id}/scenes/${sceneId}/videos`)
