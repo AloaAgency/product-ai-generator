@@ -18,7 +18,7 @@ export async function GET(
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json(data)
-  } catch (err) {
+  } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -31,21 +31,27 @@ export async function POST(
     const { id: product_id } = await params
     const supabase = createServiceClient()
     const body = await request.json()
-    const { name, description } = body
+    const { name, description, type = 'product' } = body
 
     if (!name) {
       return NextResponse.json({ error: 'name is required' }, { status: 400 })
     }
 
-    // Check if this is the first set for the product
+    if (type !== 'product' && type !== 'texture') {
+      return NextResponse.json({ error: 'type must be "product" or "texture"' }, { status: 400 })
+    }
+
+    // Check if this is the first set of this type for the product
     const { count, error: countError } = await supabase
       .from(T.reference_sets)
       .select('*', { count: 'exact', head: true })
       .eq('product_id', product_id)
+      .eq('type', type)
 
     if (countError) return NextResponse.json({ error: countError.message }, { status: 500 })
 
-    const isFirst = (count ?? 0) === 0
+    // Only auto-activate for product sets (not texture sets)
+    const isFirst = (count ?? 0) === 0 && type === 'product'
 
     const { data, error } = await supabase
       .from(T.reference_sets)
@@ -53,6 +59,7 @@ export async function POST(
         product_id,
         name,
         description: description ?? null,
+        type,
         is_active: isFirst,
         display_order: (count ?? 0),
       })
@@ -61,7 +68,7 @@ export async function POST(
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json(data, { status: 201 })
-  } catch (err) {
+  } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

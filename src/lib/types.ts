@@ -43,6 +43,7 @@ export interface ReferenceSet {
   description: string | null
   is_active: boolean
   display_order: number
+  type: 'product' | 'texture'
   created_at: string
 }
 
@@ -75,6 +76,9 @@ export interface GenerationJob {
   product_id: string
   prompt_template_id: string | null
   reference_set_id: string | null
+  texture_set_id: string | null
+  product_image_count: number | null
+  texture_image_count: number | null
   final_prompt: string
   variation_count: number
   resolution: string

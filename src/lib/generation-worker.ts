@@ -32,6 +32,9 @@ type GenerationJobRecord = {
   product_id: string
   prompt_template_id: string | null
   reference_set_id: string | null
+  texture_set_id: string | null
+  product_image_count: number | null
+  texture_image_count: number | null
   final_prompt: string
   variation_count: number
   resolution: string
@@ -200,20 +203,24 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
 
   const { data: product } = await supabase
     .from(T.products)
-    .select('project_id')
+    .select('project_id, global_style_settings')
     .eq('id', job.product_id)
     .single()
 
-  let geminiApiKey: string | undefined
-  if (product?.project_id) {
+  let geminiApiKey =
+    (product?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+
+  if (!geminiApiKey && product?.project_id) {
     const { data: project } = await supabase
       .from(T.projects)
       .select('global_style_settings')
       .eq('id', product.project_id)
       .single()
-    geminiApiKey = (project?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+    geminiApiKey =
+      (project?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
   }
 
+  // Fetch product reference images
   const { data: refImages } = await supabase
     .from(T.reference_images)
     .select('*')
@@ -221,9 +228,27 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     .order('display_order', { ascending: true })
 
   const referenceImages: ReferenceImage[] = refImages || []
+  const productImageLimit = job.product_image_count ?? referenceImages.length
+  const limitedProductImages = referenceImages.slice(0, productImageLimit)
+
+  // Fetch texture reference images if texture_set_id is present
+  let textureImages: ReferenceImage[] = []
+  if (job.texture_set_id) {
+    const { data: texImages } = await supabase
+      .from(T.reference_images)
+      .select('*')
+      .eq('reference_set_id', job.texture_set_id)
+      .order('display_order', { ascending: true })
+    textureImages = texImages || []
+    const textureImageLimit = job.texture_image_count ?? textureImages.length
+    textureImages = textureImages.slice(0, textureImageLimit)
+  }
+
+  // Combine product images first, then texture images
+  const allReferenceImages = [...limitedProductImages, ...textureImages]
   const refImagesBase64: { mimeType: string; base64: string }[] = []
 
-  for (const refImg of referenceImages) {
+  for (const refImg of allReferenceImages) {
     const { data: fileData } = await supabase.storage
       .from('reference-images')
       .download(refImg.storage_path)

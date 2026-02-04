@@ -10,7 +10,7 @@ type Params = { params: Promise<{ id: string; sceneId: string }> }
 
 export async function POST(request: NextRequest, { params }: Params) {
   try {
-    const { id: productId, sceneId } = await params
+    const { sceneId } = await params
     const supabase = createServiceClient()
     const body = await request.json()
 
