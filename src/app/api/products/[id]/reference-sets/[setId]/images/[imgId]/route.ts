@@ -38,7 +38,7 @@ export async function DELETE(
 
     if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
     return NextResponse.json({ success: true })
-  } catch (err) {
+  } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

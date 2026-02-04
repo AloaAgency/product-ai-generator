@@ -40,13 +40,20 @@ export default function ReferencesPage({
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
+  const [newType, setNewType] = useState<'product' | 'texture'>('product')
   const [creating, setCreating] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [editingSetId, setEditingSetId] = useState<string | null>(null)
   const [editingSetName, setEditingSetName] = useState('')
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+  const [activeTab, setActiveTab] = useState<'product' | 'texture'>('product')
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Filter sets by type
+  const productSets = referenceSets.filter((s) => s.type === 'product' || !s.type)
+  const textureSets = referenceSets.filter((s) => s.type === 'texture')
+  const displayedSets = activeTab === 'product' ? productSets : textureSets
 
   const handleSetNameSave = async (setId: string) => {
     const trimmed = editingSetName.trim()
@@ -74,9 +81,11 @@ export default function ReferencesPage({
       const set = await createReferenceSet(id, {
         name: newName.trim(),
         description: newDescription.trim() || undefined,
+        type: newType,
       })
       setNewName('')
       setNewDescription('')
+      setNewType(activeTab)
       setShowCreateForm(false)
       setSelectedSetId(set.id)
     } finally {
@@ -129,7 +138,10 @@ export default function ReferencesPage({
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Reference Sets</h1>
         <button
-          onClick={() => setShowCreateForm(true)}
+          onClick={() => {
+            setNewType(activeTab)
+            setShowCreateForm(true)
+          }}
           className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
         >
           <Plus className="h-4 w-4" />
@@ -137,8 +149,56 @@ export default function ReferencesPage({
         </button>
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-1 rounded-lg bg-zinc-800/50 p-1">
+        <button
+          onClick={() => setActiveTab('product')}
+          className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+            activeTab === 'product'
+              ? 'bg-zinc-700 text-white'
+              : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          Product References ({productSets.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('texture')}
+          className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+            activeTab === 'texture'
+              ? 'bg-zinc-700 text-white'
+              : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          Texture References ({textureSets.length})
+        </button>
+      </div>
+
       {showCreateForm && (
         <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4 space-y-3">
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setNewType('product')}
+              className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                newType === 'product'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              Product Reference
+            </button>
+            <button
+              type="button"
+              onClick={() => setNewType('texture')}
+              className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                newType === 'texture'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              Texture Reference
+            </button>
+          </div>
           <input
             type="text"
             placeholder="Set name"
@@ -168,6 +228,7 @@ export default function ReferencesPage({
                 setShowCreateForm(false)
                 setNewName('')
                 setNewDescription('')
+                setNewType(activeTab)
               }}
               className="rounded-md px-3 py-1.5 text-sm text-zinc-400 hover:text-white transition-colors"
             >
@@ -181,17 +242,18 @@ export default function ReferencesPage({
         <div className="flex justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
         </div>
-      ) : referenceSets.length === 0 ? (
+      ) : displayedSets.length === 0 ? (
         <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-12 text-center">
           <ImageIcon className="mx-auto h-10 w-10 text-zinc-600" />
           <p className="mt-3 text-sm text-zinc-500">
-            No reference sets yet. Create one to get started.
+            No {activeTab} reference sets yet. Create one to get started.
           </p>
         </div>
       ) : (
         <div className="space-y-2">
-          {referenceSets.map((set) => {
+          {displayedSets.map((set) => {
             const isSelected = selectedSetId === set.id
+            const isProductSet = set.type === 'product' || !set.type
             return (
               <div
                 key={set.id}
@@ -239,7 +301,7 @@ export default function ReferencesPage({
                           <Pencil className="h-3 w-3 shrink-0 opacity-0 group-hover/name:opacity-100 transition-opacity text-zinc-500" />
                         </span>
                       )}
-                      {set.is_active && (
+                      {isProductSet && set.is_active && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-green-900/50 px-2 py-0.5 text-xs font-medium text-green-400 border border-green-800">
                           <CheckCircle className="h-3 w-3" />
                           Active
@@ -253,7 +315,7 @@ export default function ReferencesPage({
                     )}
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {!set.is_active && (
+                    {isProductSet && !set.is_active && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation()

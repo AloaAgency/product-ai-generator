@@ -23,7 +23,8 @@ export interface GlobalStyleSettings {
 export function buildFullPrompt(
   userPrompt: string,
   settings: GlobalStyleSettings,
-  referenceImageCount: number
+  referenceImageCount: number,
+  textureImageCount: number = 0
 ): string {
   const parts: string[] = []
 
@@ -41,8 +42,15 @@ export function buildFullPrompt(
     parts.push(`MANDATORY STYLE REQUIREMENTS (you must follow these):\n${styleLines.map(l => `• ${l}`).join('\n')}`)
   }
 
-  // Reference rule
-  const refRule = settings.reference_rule || `The attached ${referenceImageCount} images define the product. The image generator must match them exactly.`
+  // Reference rule - handle both product and texture images
+  let refRule: string
+  if (settings.reference_rule) {
+    refRule = settings.reference_rule
+  } else if (textureImageCount > 0) {
+    refRule = `The attached images include ${referenceImageCount} product reference images followed by ${textureImageCount} texture reference images. The product images define the product appearance and must be matched exactly. The texture images show material/finish samples to use for realistic surface rendering.`
+  } else {
+    refRule = `The attached ${referenceImageCount} images define the product. The image generator must match them exactly.`
+  }
   parts.push(`REFERENCE RULE: ${refRule}`)
 
   // User prompt

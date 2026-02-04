@@ -38,7 +38,7 @@ interface AppState {
   referenceSets: ReferenceSet[]
   loadingRefSets: boolean
   fetchReferenceSets: (productId: string) => Promise<void>
-  createReferenceSet: (productId: string, data: { name: string; description?: string }) => Promise<ReferenceSet>
+  createReferenceSet: (productId: string, data: { name: string; description?: string; type?: 'product' | 'texture' }) => Promise<ReferenceSet>
   updateReferenceSet: (productId: string, setId: string, data: Partial<Pick<ReferenceSet, 'name' | 'description' | 'is_active'>>) => Promise<void>
   deleteReferenceSet: (productId: string, setId: string) => Promise<void>
 
@@ -67,6 +67,9 @@ interface AppState {
     resolution?: string
     aspect_ratio?: string
     reference_set_id?: string
+    texture_set_id?: string
+    product_image_count?: number
+    texture_image_count?: number
   }) => Promise<GenerationJob>
   fetchJobStatus: (productId: string, jobId: string) => Promise<void>
   retryGenerationJob: (productId: string, jobId: string) => Promise<GenerationJob>

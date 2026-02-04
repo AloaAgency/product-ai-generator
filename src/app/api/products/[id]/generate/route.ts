@@ -48,6 +48,9 @@ export async function POST(
       resolution = '4K',
       aspect_ratio = '16:9',
       reference_set_id = null,
+      texture_set_id = null,
+      product_image_count = null,
+      texture_image_count = null,
       parallelism_override,
       batch_override,
       time_budget_ms_override,
@@ -102,6 +105,13 @@ export async function POST(
       refSet = data as ReferenceSet
     }
 
+    if (refSet.type && refSet.type !== 'product') {
+      return NextResponse.json(
+        { error: 'reference_set_id must be a product reference set' },
+        { status: 400 }
+      )
+    }
+
     // Fetch reference images
     const { data: refImages } = await supabase
       .from(T.reference_images)
@@ -110,6 +120,58 @@ export async function POST(
       .order('display_order', { ascending: true })
 
     const referenceImages: ReferenceImage[] = refImages || []
+
+    // Fetch texture set and images if provided
+    let textureSet: ReferenceSet | null = null
+    let textureImages: ReferenceImage[] = []
+    if (texture_set_id) {
+      const { data: texSet, error: texSetError } = await supabase
+        .from(T.reference_sets)
+        .select('*')
+        .eq('id', texture_set_id)
+        .eq('product_id', productId)
+        .single()
+      if (texSetError || !texSet) {
+        return NextResponse.json(
+          { error: 'Texture set not found' },
+          { status: 400 }
+        )
+      }
+      textureSet = texSet as ReferenceSet
+      if (textureSet.type && textureSet.type !== 'texture') {
+        return NextResponse.json(
+          { error: 'texture_set_id must be a texture reference set' },
+          { status: 400 }
+        )
+      }
+
+      const { data: texImages } = await supabase
+        .from(T.reference_images)
+        .select('*')
+        .eq('reference_set_id', textureSet.id)
+        .order('display_order', { ascending: true })
+      textureImages = texImages || []
+    }
+
+    // Calculate actual image counts to use
+    const maxTotalImages = 14
+    const availableProductImages = referenceImages.length
+    const availableTextureImages = textureImages.length
+
+    let finalProductCount = product_image_count ?? availableProductImages
+    let finalTextureCount = texture_set_id ? (texture_image_count ?? availableTextureImages) : 0
+
+    // Cap to available images
+    finalProductCount = Math.min(finalProductCount, availableProductImages)
+    finalTextureCount = Math.min(finalTextureCount, availableTextureImages)
+
+    // Validate total doesn't exceed limit
+    if (finalProductCount + finalTextureCount > maxTotalImages) {
+      return NextResponse.json(
+        { error: `Total image count (${finalProductCount + finalTextureCount}) exceeds maximum of ${maxTotalImages}` },
+        { status: 400 }
+      )
+    }
 
     // Fetch parent project and merge styles
     const typedProduct = product as Product
@@ -130,7 +192,8 @@ export async function POST(
     const finalPrompt = buildFullPrompt(
       prompt_text,
       mergedSettings,
-      referenceImages.length
+      finalProductCount,
+      finalTextureCount
     )
 
     // Insert job record
@@ -140,6 +203,9 @@ export async function POST(
         product_id: productId,
         prompt_template_id,
         reference_set_id: refSet.id,
+        texture_set_id: textureSet?.id ?? null,
+        product_image_count: finalProductCount,
+        texture_image_count: finalTextureCount > 0 ? finalTextureCount : null,
         final_prompt: finalPrompt,
         variation_count,
         resolution,
