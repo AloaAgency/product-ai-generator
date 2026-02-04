@@ -412,7 +412,10 @@ export default function GeneratePage({
               min={1}
               max={100}
               value={variationCount}
-              onChange={(e) => setVariationCount(Number(e.target.value))}
+              onChange={(e) => {
+                const val = e.target.valueAsNumber
+                if (!isNaN(val)) setVariationCount(val)
+              }}
               className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
             />
           </div>
