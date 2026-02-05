@@ -2,6 +2,7 @@
 
 import { use, useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useAppStore } from '@/lib/store'
+import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import type { Storyboard as StoryboardRecord, StoryboardScene } from '@/lib/types'
 import {
   Film,
@@ -364,6 +365,11 @@ export default function StoryboardPage({
     return () => window.removeEventListener('keydown', handler)
   }, [presenting, presentSlides.length])
 
+  useModalShortcuts({
+    isOpen: !!editing,
+    onClose: () => setEditing(null),
+  })
+
   // Helper: get best thumbnail URL for an image
   function thumbUrl(imgId: string): string {
     const img = galleryImageItems.find((g) => g.id === imgId)
@@ -532,8 +538,8 @@ export default function StoryboardPage({
 
       {/* Legacy editor modal */}
       {editing && (
-        <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/70 pt-16 pb-8">
-          <div className="w-full max-w-3xl rounded-xl bg-zinc-900 border border-zinc-700 p-6 shadow-2xl">
+        <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/70 pt-16 pb-8" onClick={() => setEditing(null)}>
+          <div className="w-full max-w-3xl rounded-xl bg-zinc-900 border border-zinc-700 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold">
                 {editing.id ? 'Edit Storyboard' : 'New Storyboard'}

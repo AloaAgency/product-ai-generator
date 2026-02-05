@@ -2,6 +2,7 @@
 
 import { use, useEffect, useState, useCallback, useRef } from 'react'
 import { useAppStore } from '@/lib/store'
+import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import type { StoryboardScene } from '@/lib/types'
 import type { GeneratedImage } from '@/lib/types'
 import {
@@ -19,6 +20,7 @@ import {
   ToggleLeft,
   ToggleRight,
   Upload,
+  Download,
 } from 'lucide-react'
 
 type SignedImageUrls = {
@@ -41,10 +43,17 @@ const isLtxModel = (model: string | null | undefined) => {
 const supportsEndFrame = (model: string | null | undefined) => !isLtxModel(model)
 const supportsAudioToggle = (model: string | null | undefined) => isLtxModel(model)
 
-const normalizeDurationValue = (model: string, value: unknown) => {
+const veoRequires8s = (resolution: string | null | undefined, hasStartFrame: boolean, hasEndFrame: boolean) => {
+  if (hasStartFrame || hasEndFrame) return true
+  const res = (resolution || '').toLowerCase()
+  return res === '1080p' || res === '4k'
+}
+
+const normalizeDurationValue = (model: string, value: unknown, resolution?: string | null, hasStartFrame?: boolean, hasEndFrame?: boolean) => {
   const parsed = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(parsed) || parsed <= 0) return null
   if (isLtxModel(model)) return parsed
+  if (veoRequires8s(resolution, !!hasStartFrame, !!hasEndFrame)) return 8
   if (VEO_DURATIONS.includes(parsed as (typeof VEO_DURATIONS)[number])) return parsed
   return VEO_DURATIONS.reduce((closest, current) => {
     const currentDiff = Math.abs(current - parsed)
@@ -53,6 +62,12 @@ const normalizeDurationValue = (model: string, value: unknown) => {
     if (currentDiff === closestDiff && current > closest) return current
     return closest
   }, VEO_DURATIONS[0])
+}
+
+const parsePositiveNumber = (value: unknown) => {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return parsed
 }
 
 const api = async (url: string, options?: RequestInit) => {
@@ -91,8 +106,8 @@ export default function ScenesPage({
   const [newEndFrameId, setNewEndFrameId] = useState<string | null>(null)
   const [newResolution, setNewResolution] = useState(DEFAULT_VEO.resolution)
   const [newAspectRatio, setNewAspectRatio] = useState(DEFAULT_VEO.aspectRatio)
-  const [newDuration, setNewDuration] = useState(DEFAULT_VEO.duration)
-  const [newFps, setNewFps] = useState(DEFAULT_LTX.fps)
+  const [newDurationInput, setNewDurationInput] = useState(String(DEFAULT_VEO.duration))
+  const [newFpsInput, setNewFpsInput] = useState(String(DEFAULT_LTX.fps))
   const [newGenerateAudio, setNewGenerateAudio] = useState(DEFAULT_VEO.generateAudio)
   const [creating, setCreating] = useState(false)
 
@@ -105,8 +120,8 @@ export default function ScenesPage({
   const [editModel, setEditModel] = useState('veo3')
   const [editResolution, setEditResolution] = useState(DEFAULT_VEO.resolution)
   const [editAspectRatio, setEditAspectRatio] = useState(DEFAULT_VEO.aspectRatio)
-  const [editDuration, setEditDuration] = useState(DEFAULT_VEO.duration)
-  const [editFps, setEditFps] = useState(DEFAULT_LTX.fps)
+  const [editDurationInput, setEditDurationInput] = useState(String(DEFAULT_VEO.duration))
+  const [editFpsInput, setEditFpsInput] = useState(String(DEFAULT_LTX.fps))
   const [editGenerateAudio, setEditGenerateAudio] = useState(DEFAULT_VEO.generateAudio)
   const [saving, setSaving] = useState(false)
 
@@ -302,13 +317,13 @@ export default function ScenesPage({
     setNewModel(value)
     if (isLtxModel(value)) {
       setNewResolution(DEFAULT_LTX.resolution)
-      setNewDuration(DEFAULT_LTX.duration)
-      setNewFps(DEFAULT_LTX.fps)
+      setNewDurationInput(String(DEFAULT_LTX.duration))
+      setNewFpsInput(String(DEFAULT_LTX.fps))
       setNewGenerateAudio(DEFAULT_LTX.generateAudio)
     } else {
       setNewResolution(DEFAULT_VEO.resolution)
       setNewAspectRatio(DEFAULT_VEO.aspectRatio)
-      setNewDuration(DEFAULT_VEO.duration)
+      setNewDurationInput(String(DEFAULT_VEO.duration))
       setNewGenerateAudio(DEFAULT_VEO.generateAudio)
     }
   }
@@ -317,19 +332,16 @@ export default function ScenesPage({
     setEditModel(value)
     if (isLtxModel(value)) {
       setEditResolution(DEFAULT_LTX.resolution)
-      setEditDuration(DEFAULT_LTX.duration)
-      setEditFps(DEFAULT_LTX.fps)
+      setEditDurationInput(String(DEFAULT_LTX.duration))
+      setEditFpsInput(String(DEFAULT_LTX.fps))
       setEditGenerateAudio(DEFAULT_LTX.generateAudio)
     } else {
       setEditResolution(DEFAULT_VEO.resolution)
       setEditAspectRatio(DEFAULT_VEO.aspectRatio)
-      setEditDuration(DEFAULT_VEO.duration)
+      setEditDurationInput(String(DEFAULT_VEO.duration))
       setEditGenerateAudio(DEFAULT_VEO.generateAudio)
     }
   }
-
-  const normalizeDuration = (model: string, duration: number) =>
-    normalizeDurationValue(model, duration)
 
   async function handleCreate() {
     if (!newTitle.trim()) return
@@ -339,8 +351,10 @@ export default function ScenesPage({
       const endPrompt = allowEndFrame ? newEndPrompt.trim() || null : null
       const endFrameId = allowEndFrame ? newEndFrameId : null
       const paired = allowEndFrame && (!!endFrameId || !!endPrompt)
-      const durationValue = normalizeDuration(newModel, newDuration)
-      const fpsValue = isLtxModel(newModel) && Number.isFinite(newFps) && newFps > 0 ? newFps : null
+      const newDuration = parsePositiveNumber(newDurationInput)
+      const newFps = parsePositiveNumber(newFpsInput)
+      const durationValue = normalizeDurationValue(newModel, newDuration, newResolution, !!newStartFrameId, !!endFrameId)
+      const fpsValue = isLtxModel(newModel) && newFps ? newFps : null
       const audioValue = newGenerateAudio
       const scene = await api(`/api/products/${id}/scenes`, {
         method: 'POST',
@@ -371,8 +385,8 @@ export default function ScenesPage({
       setNewEndFrameId(null)
       setNewResolution(DEFAULT_VEO.resolution)
       setNewAspectRatio(DEFAULT_VEO.aspectRatio)
-      setNewDuration(DEFAULT_VEO.duration)
-      setNewFps(DEFAULT_LTX.fps)
+      setNewDurationInput(String(DEFAULT_VEO.duration))
+      setNewFpsInput(String(DEFAULT_LTX.fps))
       setNewGenerateAudio(DEFAULT_VEO.generateAudio)
       setShowCreate(false)
     } finally {
@@ -391,8 +405,9 @@ export default function ScenesPage({
     setEditResolution(scene.video_resolution || (isLtxModel(model) ? DEFAULT_LTX.resolution : DEFAULT_VEO.resolution))
     setEditAspectRatio(scene.video_aspect_ratio || DEFAULT_VEO.aspectRatio)
     const rawDuration = scene.video_duration_seconds ?? (isLtxModel(model) ? DEFAULT_LTX.duration : DEFAULT_VEO.duration)
-    setEditDuration(normalizeDurationValue(model, rawDuration) ?? (isLtxModel(model) ? DEFAULT_LTX.duration : DEFAULT_VEO.duration))
-    setEditFps(scene.video_fps || DEFAULT_LTX.fps)
+    const editRes = scene.video_resolution || (isLtxModel(model) ? DEFAULT_LTX.resolution : DEFAULT_VEO.resolution)
+    setEditDurationInput(String(normalizeDurationValue(model, rawDuration, editRes, !!scene.start_frame_image_id, !!scene.end_frame_image_id) ?? (isLtxModel(model) ? DEFAULT_LTX.duration : DEFAULT_VEO.duration)))
+    setEditFpsInput(String(scene.video_fps || DEFAULT_LTX.fps))
     setEditGenerateAudio(
       scene.video_generate_audio
       ?? (isLtxModel(model) ? DEFAULT_LTX.generateAudio : DEFAULT_VEO.generateAudio)
@@ -407,8 +422,10 @@ export default function ScenesPage({
       const endPrompt = editEndPrompt.trim() || null
       const endFrameId = currentScene?.end_frame_image_id || null
       const paired = !!endPrompt || !!endFrameId
-      const durationValue = normalizeDuration(editModel, editDuration)
-      const fpsValue = isLtxModel(editModel) && Number.isFinite(editFps) && editFps > 0 ? editFps : null
+      const editDuration = parsePositiveNumber(editDurationInput)
+      const editFps = parsePositiveNumber(editFpsInput)
+      const durationValue = normalizeDurationValue(editModel, editDuration, editResolution, !!currentScene?.start_frame_image_id, !!currentScene?.end_frame_image_id)
+      const fpsValue = isLtxModel(editModel) && editFps ? editFps : null
       const audioValue = editGenerateAudio
       const updated = await api(`/api/products/${id}/scenes/${editingId}`, {
         method: 'PATCH',
@@ -472,6 +489,33 @@ export default function ScenesPage({
   }
 
   const uploadDisabled = !framePicker || (framePicker.mode !== 'create' && !framePicker.sceneId)
+
+  useModalShortcuts({
+    isOpen: !!framePicker,
+    onClose: () => setFramePicker(null),
+  })
+
+  useModalShortcuts({
+    isOpen: !!playingVideoUrl,
+    onClose: () => setPlayingVideoUrl(null),
+  })
+
+  const handleDownloadVideo = useCallback(async (url: string, sceneTitle?: string) => {
+    try {
+      const resp = await fetch(url)
+      const blob = await resp.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = blobUrl
+      link.download = sceneTitle ? `${sceneTitle.replace(/[^a-z0-9]/gi, '-')}.mp4` : 'video.mp4'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(blobUrl)
+    } catch (err) {
+      console.error('[DownloadVideo] Failed', err)
+    }
+  }, [])
 
   return (
     <div className="min-h-screen bg-zinc-900 text-zinc-100">
@@ -638,14 +682,29 @@ export default function ScenesPage({
                         type="number"
                         min={1}
                         step={1}
-                        value={newDuration}
-                        onChange={(e) => setNewDuration(Number(e.target.value))}
+                        value={newDurationInput}
+                        onChange={(e) => setNewDurationInput(e.target.value)}
+                        onBlur={() => {
+                          const parsed = parsePositiveNumber(newDurationInput)
+                          setNewDurationInput(String(parsed ?? 1))
+                        }}
                         className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
                       />
+                    ) : veoRequires8s(newResolution, !!newStartFrameId, !!newEndFrameId) ? (
+                      <>
+                        <select
+                          value={8}
+                          disabled
+                          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none opacity-60 cursor-not-allowed"
+                        >
+                          <option value={8}>8</option>
+                        </select>
+                        <p className="text-[10px] text-zinc-500 mt-1">Must be 8s with reference images or 1080p/4k.</p>
+                      </>
                     ) : (
                       <select
-                        value={normalizeDurationValue(newModel, newDuration) ?? DEFAULT_VEO.duration}
-                        onChange={(e) => setNewDuration(Number(e.target.value))}
+                        value={normalizeDurationValue(newModel, newDurationInput, newResolution, !!newStartFrameId, !!newEndFrameId) ?? DEFAULT_VEO.duration}
+                        onChange={(e) => setNewDurationInput(e.target.value)}
                         className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
                       >
                         {VEO_DURATIONS.map((duration) => (
@@ -661,8 +720,12 @@ export default function ScenesPage({
                         type="number"
                         min={1}
                         step={1}
-                        value={newFps}
-                        onChange={(e) => setNewFps(Number(e.target.value))}
+                        value={newFpsInput}
+                        onChange={(e) => setNewFpsInput(e.target.value)}
+                        onBlur={() => {
+                          const parsed = parsePositiveNumber(newFpsInput)
+                          setNewFpsInput(String(parsed ?? 1))
+                        }}
                         className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
                       />
                     </div>
@@ -863,21 +926,40 @@ export default function ScenesPage({
                                 type="number"
                                 min={1}
                                 step={1}
-                                value={editDuration}
-                                onChange={(e) => setEditDuration(Number(e.target.value))}
+                                value={editDurationInput}
+                                onChange={(e) => setEditDurationInput(e.target.value)}
+                                onBlur={() => {
+                                  const parsed = parsePositiveNumber(editDurationInput)
+                                  setEditDurationInput(String(parsed ?? 1))
+                                }}
                                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
                               />
-                            ) : (
-                              <select
-                                value={normalizeDurationValue(editModel, editDuration) ?? DEFAULT_VEO.duration}
-                                onChange={(e) => setEditDuration(Number(e.target.value))}
-                                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
-                              >
-                                {VEO_DURATIONS.map((duration) => (
-                                  <option key={duration} value={duration}>{duration}</option>
-                                ))}
-                              </select>
-                            )}
+                            ) : (() => {
+                              const scene = scenes.find((s) => s.id === editingId)
+                              const locked = veoRequires8s(editResolution, !!scene?.start_frame_image_id, !!scene?.end_frame_image_id)
+                              return locked ? (
+                                <>
+                                  <select
+                                    value={8}
+                                    disabled
+                                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none opacity-60 cursor-not-allowed"
+                                  >
+                                    <option value={8}>8</option>
+                                  </select>
+                                  <p className="text-[10px] text-zinc-500 mt-1">Must be 8s with reference images or 1080p/4k.</p>
+                                </>
+                              ) : (
+                                <select
+                                  value={normalizeDurationValue(editModel, editDurationInput, editResolution, !!scene?.start_frame_image_id, !!scene?.end_frame_image_id) ?? DEFAULT_VEO.duration}
+                                  onChange={(e) => setEditDurationInput(e.target.value)}
+                                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                                >
+                                  {VEO_DURATIONS.map((duration) => (
+                                    <option key={duration} value={duration}>{duration}</option>
+                                  ))}
+                                </select>
+                              )
+                            })()}
                           </div>
                           {isLtxModel(editModel) && (
                             <div className="space-y-1">
@@ -886,8 +968,12 @@ export default function ScenesPage({
                                 type="number"
                                 min={1}
                                 step={1}
-                                value={editFps}
-                                onChange={(e) => setEditFps(Number(e.target.value))}
+                                value={editFpsInput}
+                                onChange={(e) => setEditFpsInput(e.target.value)}
+                                onBlur={() => {
+                                  const parsed = parsePositiveNumber(editFpsInput)
+                                  setEditFpsInput(String(parsed ?? 1))
+                                }}
                                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
                               />
                             </div>
@@ -1108,18 +1194,28 @@ export default function ScenesPage({
                         ) : (
                           <div className="flex gap-2 overflow-x-auto">
                             {videos.map((v) => (
-                              <button
-                                key={v.id}
-                                onClick={() => setPlayingVideoUrl(v.public_url)}
-                                className="relative flex-shrink-0 h-20 w-32 overflow-hidden rounded-lg border border-zinc-600 bg-zinc-700 hover:border-zinc-400 transition-colors"
-                              >
-                                <div className="flex h-full w-full items-center justify-center">
-                                  <Play className="h-6 w-6 text-zinc-300" />
-                                </div>
-                                <span className="absolute bottom-0.5 right-1 text-[9px] text-zinc-400">
-                                  {new Date(v.created_at).toLocaleDateString()}
-                                </span>
-                              </button>
+                              <div key={v.id} className="relative flex-shrink-0">
+                                <button
+                                  onClick={() => setPlayingVideoUrl(v.public_url)}
+                                  className="relative h-20 w-32 overflow-hidden rounded-lg border border-zinc-600 bg-zinc-700 hover:border-zinc-400 transition-colors"
+                                >
+                                  <div className="flex h-full w-full items-center justify-center">
+                                    <Play className="h-6 w-6 text-zinc-300" />
+                                  </div>
+                                  <span className="absolute bottom-0.5 right-1 text-[9px] text-zinc-400">
+                                    {new Date(v.created_at).toLocaleDateString()}
+                                  </span>
+                                </button>
+                                {v.public_url && (
+                                  <button
+                                    onClick={() => handleDownloadVideo(v.public_url!, scene.title || undefined)}
+                                    className="absolute top-1 right-1 rounded bg-zinc-800/80 p-1 text-zinc-400 hover:text-zinc-100 transition-colors"
+                                    title="Download video"
+                                  >
+                                    <Download className="h-3 w-3" />
+                                  </button>
+                                )}
+                              </div>
                             ))}
                           </div>
                         )}
@@ -1135,8 +1231,8 @@ export default function ScenesPage({
 
       {/* Frame picker modal */}
       {framePicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
-          <div className="relative w-full max-w-2xl mx-4 rounded-xl border border-zinc-700 bg-zinc-900 p-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={() => setFramePicker(null)}>
+          <div className="relative w-full max-w-2xl mx-4 rounded-xl border border-zinc-700 bg-zinc-900 p-5" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold text-zinc-200">
                 Select {framePicker.slot === 'start' ? 'Start' : 'End'} Frame
@@ -1241,14 +1337,23 @@ export default function ScenesPage({
 
       {/* Video playback overlay */}
       {playingVideoUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
-          <div className="relative w-full max-w-4xl mx-4">
-            <button
-              onClick={() => setPlayingVideoUrl(null)}
-              className="absolute -top-10 right-0 rounded p-1 text-zinc-400 hover:text-zinc-100"
-            >
-              <X className="h-6 w-6" />
-            </button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={() => setPlayingVideoUrl(null)}>
+          <div className="relative w-full max-w-4xl mx-4" onClick={(e) => e.stopPropagation()}>
+            <div className="absolute -top-10 right-0 flex items-center gap-2">
+              <button
+                onClick={() => handleDownloadVideo(playingVideoUrl)}
+                className="rounded p-1 text-zinc-400 hover:text-zinc-100"
+                title="Download video"
+              >
+                <Download className="h-6 w-6" />
+              </button>
+              <button
+                onClick={() => setPlayingVideoUrl(null)}
+                className="rounded p-1 text-zinc-400 hover:text-zinc-100"
+              >
+                <X className="h-6 w-6" />
+              </button>
+            </div>
             <video
               src={playingVideoUrl}
               controls

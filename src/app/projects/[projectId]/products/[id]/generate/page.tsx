@@ -48,8 +48,8 @@ export default function GeneratePage({
   >([])
   const [selectedRefSetId, setSelectedRefSetId] = useState<string>('')
   const [selectedTextureSetId, setSelectedTextureSetId] = useState<string>('')
-  const [productImageCount, setProductImageCount] = useState<number>(10)
-  const [textureImageCount, setTextureImageCount] = useState<number>(4)
+  const [productImageCountInput, setProductImageCountInput] = useState('10')
+  const [textureImageCountInput, setTextureImageCountInput] = useState('4')
   const [generating, setGenerating] = useState(false)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
@@ -154,6 +154,7 @@ export default function GeneratePage({
     if (!prompt.trim() || aiLoading) return
     const variationCountValue = parseVariationCount(variationCountInput)
     if (!variationCountValue) return
+    if (selectedTextureSetId && (!productImageCountValue || !textureImageCountValue)) return
     setGenerating(true)
     try {
       const job = await startGeneration(id, {
@@ -163,8 +164,8 @@ export default function GeneratePage({
         aspect_ratio: aspectRatio,
         reference_set_id: selectedRefSetId || undefined,
         texture_set_id: selectedTextureSetId || undefined,
-        product_image_count: selectedTextureSetId ? productImageCount : undefined,
-        texture_image_count: selectedTextureSetId ? textureImageCount : undefined,
+        product_image_count: selectedTextureSetId ? productImageCountValue ?? undefined : undefined,
+        texture_image_count: selectedTextureSetId ? textureImageCountValue ?? undefined : undefined,
       })
       setActiveJobId(job.id)
     } catch {
@@ -227,6 +228,16 @@ export default function GeneratePage({
     return Math.min(100, parsed)
   }
   const variationCountValue = parseVariationCount(variationCountInput)
+  const parseImageCount = (value: string) => {
+    if (!value.trim()) return null
+    const parsed = parseInt(value, 10)
+    if (!Number.isFinite(parsed)) return null
+    if (parsed < 1) return null
+    return Math.min(14, parsed)
+  }
+  const productImageCountValue = parseImageCount(productImageCountInput)
+  const textureImageCountValue = parseImageCount(textureImageCountInput)
+  const totalImageCount = (productImageCountValue ?? 0) + (textureImageCountValue ?? 0)
 
   const failedCount = currentJob?.failed_count ?? 0
   const hasFailures = failedCount > 0
@@ -298,8 +309,8 @@ export default function GeneratePage({
           <div className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-4 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-zinc-300">Image Allocation</span>
-              <span className={`text-xs ${productImageCount + textureImageCount > 14 ? 'text-red-400' : 'text-zinc-500'}`}>
-                Total: {productImageCount + textureImageCount} / 14 max
+              <span className={`text-xs ${totalImageCount > 14 ? 'text-red-400' : 'text-zinc-500'}`}>
+                Total: {totalImageCount} / 14 max
               </span>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -309,10 +320,11 @@ export default function GeneratePage({
                   type="number"
                   min={1}
                   max={14}
-                  value={productImageCount}
-                  onChange={(e) => {
-                    const val = e.target.valueAsNumber
-                    if (!isNaN(val)) setProductImageCount(Math.max(1, Math.min(14, val)))
+                  value={productImageCountInput}
+                  onChange={(e) => setProductImageCountInput(e.target.value)}
+                  onBlur={() => {
+                    const parsed = parseImageCount(productImageCountInput)
+                    setProductImageCountInput(String(parsed ?? 1))
                   }}
                   className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
                 />
@@ -323,16 +335,17 @@ export default function GeneratePage({
                   type="number"
                   min={1}
                   max={14}
-                  value={textureImageCount}
-                  onChange={(e) => {
-                    const val = e.target.valueAsNumber
-                    if (!isNaN(val)) setTextureImageCount(Math.max(1, Math.min(14, val)))
+                  value={textureImageCountInput}
+                  onChange={(e) => setTextureImageCountInput(e.target.value)}
+                  onBlur={() => {
+                    const parsed = parseImageCount(textureImageCountInput)
+                    setTextureImageCountInput(String(parsed ?? 1))
                   }}
                   className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
                 />
               </div>
             </div>
-            {productImageCount + textureImageCount > 14 && (
+            {totalImageCount > 14 && (
               <div className="flex items-center gap-2 rounded-md border border-red-900/60 bg-red-950/50 px-3 py-2 text-xs text-red-300">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                 <span>Total image count exceeds the maximum of 14. Please reduce the counts.</span>
@@ -562,7 +575,10 @@ export default function GeneratePage({
           aiLoading ||
           generating ||
           !variationCountValue ||
-          (!!selectedTextureSetId && productImageCount + textureImageCount > 14)
+          (!!selectedTextureSetId &&
+            ((productImageCountValue ?? 0) < 1 ||
+              (textureImageCountValue ?? 0) < 1 ||
+              totalImageCount > 14))
         }
         className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-6 py-3 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
       >

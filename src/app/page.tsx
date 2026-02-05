@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { useAppStore } from '@/lib/store'
+import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { Plus, FolderOpen, X, Pencil, Trash2, Check } from 'lucide-react'
 
 export default function Home() {
@@ -17,6 +18,19 @@ export default function Home() {
   useEffect(() => {
     fetchProjects()
   }, [fetchProjects])
+
+  const handleSubmitModal = useCallback(() => {
+    if (name.trim() && !creating) {
+      const fakeEvent = { preventDefault: () => {} } as React.FormEvent
+      handleCreate(fakeEvent)
+    }
+  }, [name, creating])
+
+  useModalShortcuts({
+    isOpen: showModal,
+    onClose: () => setShowModal(false),
+    onSubmit: handleSubmitModal,
+  })
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -161,8 +175,8 @@ export default function Home() {
 
       {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowModal(false)}>
+          <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="mb-5 flex items-center justify-between">
               <h2 className="text-lg font-semibold">New Project</h2>
               <button
