@@ -312,6 +312,12 @@ export default function ScenesPage({
     }
   }
 
+  const normalizeDuration = (model: string, duration: number) => {
+    if (!Number.isFinite(duration) || duration <= 0) return null
+    if (isLtxModel(model)) return duration
+    return Math.min(8, Math.max(4, duration))
+  }
+
   async function handleCreate() {
     if (!newTitle.trim()) return
     setCreating(true)
@@ -320,7 +326,7 @@ export default function ScenesPage({
       const endPrompt = allowEndFrame ? newEndPrompt.trim() || null : null
       const endFrameId = allowEndFrame ? newEndFrameId : null
       const paired = allowEndFrame && (!!endFrameId || !!endPrompt)
-      const durationValue = Number.isFinite(newDuration) && newDuration > 0 ? newDuration : null
+      const durationValue = normalizeDuration(newModel, newDuration)
       const fpsValue = isLtxModel(newModel) && Number.isFinite(newFps) && newFps > 0 ? newFps : null
       const audioValue = newGenerateAudio
       const scene = await api(`/api/products/${id}/scenes`, {
@@ -387,7 +393,7 @@ export default function ScenesPage({
       const endPrompt = editEndPrompt.trim() || null
       const endFrameId = currentScene?.end_frame_image_id || null
       const paired = !!endPrompt || !!endFrameId
-      const durationValue = Number.isFinite(editDuration) && editDuration > 0 ? editDuration : null
+      const durationValue = normalizeDuration(editModel, editDuration)
       const fpsValue = isLtxModel(editModel) && Number.isFinite(editFps) && editFps > 0 ? editFps : null
       const audioValue = editGenerateAudio
       const updated = await api(`/api/products/${id}/scenes/${editingId}`, {
@@ -615,7 +621,8 @@ export default function ScenesPage({
                     <span className="text-[11px] uppercase tracking-wide text-zinc-500">Duration (s)</span>
                     <input
                       type="number"
-                      min={1}
+                      min={isLtxModel(newModel) ? 1 : 4}
+                      max={isLtxModel(newModel) ? undefined : 8}
                       step={1}
                       value={newDuration}
                       onChange={(e) => setNewDuration(Number(e.target.value))}
@@ -819,14 +826,15 @@ export default function ScenesPage({
                           )}
                           <div className="space-y-1">
                             <span className="text-[11px] uppercase tracking-wide text-zinc-500">Duration (s)</span>
-                            <input
-                              type="number"
-                              min={1}
-                              step={1}
-                              value={editDuration}
-                              onChange={(e) => setEditDuration(Number(e.target.value))}
-                              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
-                            />
+                    <input
+                      type="number"
+                      min={isLtxModel(editModel) ? 1 : 4}
+                      max={isLtxModel(editModel) ? undefined : 8}
+                      step={1}
+                      value={editDuration}
+                      onChange={(e) => setEditDuration(Number(e.target.value))}
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                    />
                           </div>
                           {isLtxModel(editModel) && (
                             <div className="space-y-1">
