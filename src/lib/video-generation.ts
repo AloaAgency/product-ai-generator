@@ -64,15 +64,26 @@ export async function generateSceneVideo(
     generateAudio: scene.video_generate_audio,
   }
 
+  const hasReferenceImages = !!scene.start_frame_image_id || !!scene.end_frame_image_id
+  const resLower = (videoSettings.resolution || '').toLowerCase()
+  const isHighRes = resLower === '1080p' || resLower === '4k'
+  const mustBe8 = isVeo && (hasReferenceImages || isHighRes)
+
   if (isVeo && typeof videoSettings.durationSeconds === 'number') {
-    const allowed = [4, 6, 8]
-    videoSettings.durationSeconds = allowed.reduce((closest, current) => {
-      const currentDiff = Math.abs(current - videoSettings.durationSeconds!)
-      const closestDiff = Math.abs(closest - videoSettings.durationSeconds!)
-      if (currentDiff < closestDiff) return current
-      if (currentDiff === closestDiff && current > closest) return current
-      return closest
-    }, allowed[0])
+    if (mustBe8) {
+      videoSettings.durationSeconds = 8
+    } else {
+      const allowed = [4, 6, 8]
+      videoSettings.durationSeconds = allowed.reduce((closest, current) => {
+        const currentDiff = Math.abs(current - videoSettings.durationSeconds!)
+        const closestDiff = Math.abs(closest - videoSettings.durationSeconds!)
+        if (currentDiff < closestDiff) return current
+        if (currentDiff === closestDiff && current > closest) return current
+        return closest
+      }, allowed[0])
+    }
+  } else if (mustBe8) {
+    videoSettings.durationSeconds = 8
   }
 
   if (scene.start_frame_image_id) {
@@ -212,20 +223,25 @@ async function generateWithVeo3(
   if (aspectRatio) parameters.aspectRatio = aspectRatio
   const resolution = settings.resolution || process.env.VEO_RESOLUTION
   if (resolution) parameters.resolution = resolution
+  const hasFrames = !!frameRefs.start || !!frameRefs.end
+  const resLower = (resolution || '').toLowerCase()
+  const needsDuration8 = hasFrames || resLower === '1080p' || resLower === '4k'
   const durationSource = settings.durationSeconds ?? process.env.VEO_DURATION_SECONDS ?? null
   const parsedDuration = Number(durationSource)
   const rawDurationSeconds = Number.isFinite(parsedDuration) && parsedDuration > 0
     ? parsedDuration
     : null
-  const durationSeconds = rawDurationSeconds
-    ? [4, 6, 8].reduce((closest, current) => {
-      const currentDiff = Math.abs(current - rawDurationSeconds)
-      const closestDiff = Math.abs(closest - rawDurationSeconds)
-      if (currentDiff < closestDiff) return current
-      if (currentDiff === closestDiff && current > closest) return current
-      return closest
-    }, 4)
-    : null
+  const durationSeconds = needsDuration8
+    ? 8
+    : rawDurationSeconds
+      ? [4, 6, 8].reduce((closest, current) => {
+        const currentDiff = Math.abs(current - rawDurationSeconds)
+        const closestDiff = Math.abs(closest - rawDurationSeconds)
+        if (currentDiff < closestDiff) return current
+        if (currentDiff === closestDiff && current > closest) return current
+        return closest
+      }, 4)
+      : null
   const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
   const veoSupportsAudio = process.env.VEO_SUPPORTS_AUDIO === 'true'
   if (veoSupportsAudio && generateAudio !== null) parameters.generateAudio = generateAudio
@@ -235,6 +251,7 @@ async function generateWithVeo3(
     console.log('[Veo] parameters', {
       model,
       durationSeconds,
+      needsDuration8,
       resolution: parameters.resolution,
       aspectRatio: parameters.aspectRatio,
       generateAudio: parameters.generateAudio,

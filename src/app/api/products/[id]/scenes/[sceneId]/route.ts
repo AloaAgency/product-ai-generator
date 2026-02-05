@@ -10,10 +10,12 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const supabase = createServiceClient()
     const body = await request.json()
 
-    const normalizeDuration = (model: string, value: unknown) => {
+    const normalizeDuration = (model: string, value: unknown, resolution?: string | null, hasStartFrame?: boolean, hasEndFrame?: boolean) => {
       const parsed = typeof value === 'number' ? value : Number(value)
       if (!Number.isFinite(parsed) || parsed <= 0) return null
       if (model.toLowerCase().startsWith('ltx')) return parsed
+      const resLower = (resolution || '').toLowerCase()
+      if (hasStartFrame || hasEndFrame || resLower === '1080p' || resLower === '4k') return 8
       const allowed = [4, 6, 8]
       if (allowed.includes(parsed)) return parsed
       return allowed.reduce((closest, current) => {
@@ -25,18 +27,24 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       }, allowed[0])
     }
 
-    let modelForDuration = typeof body.generation_model === 'string'
-      ? body.generation_model
-      : null
-
-    if (body.video_duration_seconds !== undefined && !modelForDuration) {
+    // Fetch existing scene to resolve model, resolution, and frame info for duration normalization
+    let existingScene: { generation_model?: string; video_resolution?: string; start_frame_image_id?: string; end_frame_image_id?: string } | null = null
+    const needsExistingScene = body.video_duration_seconds !== undefined || body.video_resolution !== undefined || body.start_frame_image_id !== undefined || body.end_frame_image_id !== undefined
+    if (needsExistingScene) {
       const { data: scene } = await supabase
         .from(T.storyboard_scenes)
-        .select('generation_model')
+        .select('generation_model, video_resolution, start_frame_image_id, end_frame_image_id')
         .eq('id', sceneId)
         .single()
-      modelForDuration = scene?.generation_model || 'veo3'
+      existingScene = scene
     }
+
+    const modelForDuration = typeof body.generation_model === 'string'
+      ? body.generation_model
+      : existingScene?.generation_model || 'veo3'
+    const resolutionForDuration = body.video_resolution !== undefined ? body.video_resolution : existingScene?.video_resolution
+    const hasStartFrame = body.start_frame_image_id !== undefined ? !!body.start_frame_image_id : !!existingScene?.start_frame_image_id
+    const hasEndFrame = body.end_frame_image_id !== undefined ? !!body.end_frame_image_id : !!existingScene?.end_frame_image_id
 
     const updates: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
@@ -53,8 +61,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     if (body.end_frame_image_id !== undefined) updates.end_frame_image_id = body.end_frame_image_id
     if (body.video_resolution !== undefined) updates.video_resolution = body.video_resolution
     if (body.video_aspect_ratio !== undefined) updates.video_aspect_ratio = body.video_aspect_ratio
-    if (body.video_duration_seconds !== undefined && modelForDuration) {
-      updates.video_duration_seconds = normalizeDuration(modelForDuration, body.video_duration_seconds)
+    if (body.video_duration_seconds !== undefined) {
+      updates.video_duration_seconds = normalizeDuration(modelForDuration, body.video_duration_seconds, resolutionForDuration, hasStartFrame, hasEndFrame)
     }
     if (body.video_fps !== undefined) updates.video_fps = body.video_fps
     if (body.video_generate_audio !== undefined) updates.video_generate_audio = body.video_generate_audio

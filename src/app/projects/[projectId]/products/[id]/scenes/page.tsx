@@ -41,10 +41,17 @@ const isLtxModel = (model: string | null | undefined) => {
 const supportsEndFrame = (model: string | null | undefined) => !isLtxModel(model)
 const supportsAudioToggle = (model: string | null | undefined) => isLtxModel(model)
 
-const normalizeDurationValue = (model: string, value: unknown) => {
+const veoRequires8s = (resolution: string | null | undefined, hasStartFrame: boolean, hasEndFrame: boolean) => {
+  if (hasStartFrame || hasEndFrame) return true
+  const res = (resolution || '').toLowerCase()
+  return res === '1080p' || res === '4k'
+}
+
+const normalizeDurationValue = (model: string, value: unknown, resolution?: string | null, hasStartFrame?: boolean, hasEndFrame?: boolean) => {
   const parsed = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(parsed) || parsed <= 0) return null
   if (isLtxModel(model)) return parsed
+  if (veoRequires8s(resolution, !!hasStartFrame, !!hasEndFrame)) return 8
   if (VEO_DURATIONS.includes(parsed as (typeof VEO_DURATIONS)[number])) return parsed
   return VEO_DURATIONS.reduce((closest, current) => {
     const currentDiff = Math.abs(current - parsed)
@@ -328,9 +335,6 @@ export default function ScenesPage({
     }
   }
 
-  const normalizeDuration = (model: string, duration: number) =>
-    normalizeDurationValue(model, duration)
-
   async function handleCreate() {
     if (!newTitle.trim()) return
     setCreating(true)
@@ -339,7 +343,7 @@ export default function ScenesPage({
       const endPrompt = allowEndFrame ? newEndPrompt.trim() || null : null
       const endFrameId = allowEndFrame ? newEndFrameId : null
       const paired = allowEndFrame && (!!endFrameId || !!endPrompt)
-      const durationValue = normalizeDuration(newModel, newDuration)
+      const durationValue = normalizeDurationValue(newModel, newDuration, newResolution, !!newStartFrameId, !!endFrameId)
       const fpsValue = isLtxModel(newModel) && Number.isFinite(newFps) && newFps > 0 ? newFps : null
       const audioValue = newGenerateAudio
       const scene = await api(`/api/products/${id}/scenes`, {
@@ -391,7 +395,8 @@ export default function ScenesPage({
     setEditResolution(scene.video_resolution || (isLtxModel(model) ? DEFAULT_LTX.resolution : DEFAULT_VEO.resolution))
     setEditAspectRatio(scene.video_aspect_ratio || DEFAULT_VEO.aspectRatio)
     const rawDuration = scene.video_duration_seconds ?? (isLtxModel(model) ? DEFAULT_LTX.duration : DEFAULT_VEO.duration)
-    setEditDuration(normalizeDurationValue(model, rawDuration) ?? (isLtxModel(model) ? DEFAULT_LTX.duration : DEFAULT_VEO.duration))
+    const editRes = scene.video_resolution || (isLtxModel(model) ? DEFAULT_LTX.resolution : DEFAULT_VEO.resolution)
+    setEditDuration(normalizeDurationValue(model, rawDuration, editRes, !!scene.start_frame_image_id, !!scene.end_frame_image_id) ?? (isLtxModel(model) ? DEFAULT_LTX.duration : DEFAULT_VEO.duration))
     setEditFps(scene.video_fps || DEFAULT_LTX.fps)
     setEditGenerateAudio(
       scene.video_generate_audio
@@ -407,7 +412,7 @@ export default function ScenesPage({
       const endPrompt = editEndPrompt.trim() || null
       const endFrameId = currentScene?.end_frame_image_id || null
       const paired = !!endPrompt || !!endFrameId
-      const durationValue = normalizeDuration(editModel, editDuration)
+      const durationValue = normalizeDurationValue(editModel, editDuration, editResolution, !!currentScene?.start_frame_image_id, !!currentScene?.end_frame_image_id)
       const fpsValue = isLtxModel(editModel) && Number.isFinite(editFps) && editFps > 0 ? editFps : null
       const audioValue = editGenerateAudio
       const updated = await api(`/api/products/${id}/scenes/${editingId}`, {
@@ -642,9 +647,20 @@ export default function ScenesPage({
                         onChange={(e) => setNewDuration(Number(e.target.value))}
                         className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
                       />
+                    ) : veoRequires8s(newResolution, !!newStartFrameId, !!newEndFrameId) ? (
+                      <>
+                        <select
+                          value={8}
+                          disabled
+                          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none opacity-60 cursor-not-allowed"
+                        >
+                          <option value={8}>8</option>
+                        </select>
+                        <p className="text-[10px] text-zinc-500 mt-1">Must be 8s with reference images or 1080p/4k.</p>
+                      </>
                     ) : (
                       <select
-                        value={normalizeDurationValue(newModel, newDuration) ?? DEFAULT_VEO.duration}
+                        value={normalizeDurationValue(newModel, newDuration, newResolution, !!newStartFrameId, !!newEndFrameId) ?? DEFAULT_VEO.duration}
                         onChange={(e) => setNewDuration(Number(e.target.value))}
                         className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
                       >
@@ -867,17 +883,32 @@ export default function ScenesPage({
                                 onChange={(e) => setEditDuration(Number(e.target.value))}
                                 className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
                               />
-                            ) : (
-                              <select
-                                value={normalizeDurationValue(editModel, editDuration) ?? DEFAULT_VEO.duration}
-                                onChange={(e) => setEditDuration(Number(e.target.value))}
-                                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
-                              >
-                                {VEO_DURATIONS.map((duration) => (
-                                  <option key={duration} value={duration}>{duration}</option>
-                                ))}
-                              </select>
-                            )}
+                            ) : (() => {
+                              const scene = scenes.find((s) => s.id === editingId)
+                              const locked = veoRequires8s(editResolution, !!scene?.start_frame_image_id, !!scene?.end_frame_image_id)
+                              return locked ? (
+                                <>
+                                  <select
+                                    value={8}
+                                    disabled
+                                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none opacity-60 cursor-not-allowed"
+                                  >
+                                    <option value={8}>8</option>
+                                  </select>
+                                  <p className="text-[10px] text-zinc-500 mt-1">Must be 8s with reference images or 1080p/4k.</p>
+                                </>
+                              ) : (
+                                <select
+                                  value={normalizeDurationValue(editModel, editDuration, editResolution, !!scene?.start_frame_image_id, !!scene?.end_frame_image_id) ?? DEFAULT_VEO.duration}
+                                  onChange={(e) => setEditDuration(Number(e.target.value))}
+                                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                                >
+                                  {VEO_DURATIONS.map((duration) => (
+                                    <option key={duration} value={duration}>{duration}</option>
+                                  ))}
+                                </select>
+                              )
+                            })()}
                           </div>
                           {isLtxModel(editModel) && (
                             <div className="space-y-1">
