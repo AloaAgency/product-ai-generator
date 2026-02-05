@@ -1199,8 +1199,20 @@ export default function ScenesPage({
                                   onClick={() => setPlayingVideoUrl(v.public_url)}
                                   className="relative h-20 w-32 overflow-hidden rounded-lg border border-zinc-600 bg-zinc-700 hover:border-zinc-400 transition-colors"
                                 >
-                                  <div className="flex h-full w-full items-center justify-center">
-                                    <Play className="h-6 w-6 text-zinc-300" />
+                                  {v.public_url ? (
+                                    <video
+                                      src={v.public_url}
+                                      preload="metadata"
+                                      muted
+                                      className="h-full w-full object-cover pointer-events-none"
+                                    />
+                                  ) : (
+                                    <div className="flex h-full w-full items-center justify-center">
+                                      <Play className="h-6 w-6 text-zinc-300" />
+                                    </div>
+                                  )}
+                                  <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                    <Play className="h-5 w-5 text-white/80" />
                                   </div>
                                   <span className="absolute bottom-0.5 right-1 text-[9px] text-zinc-400">
                                     {new Date(v.created_at).toLocaleDateString()}
