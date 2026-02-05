@@ -33,12 +33,14 @@ export async function generateSceneVideo(
 
   const { data: product } = await supabase
     .from(T.products)
-    .select('project_id')
+    .select('project_id, global_style_settings')
     .eq('id', productId)
     .single()
 
-  let geminiApiKey: string | undefined
-  if (product?.project_id) {
+  let geminiApiKey =
+    (product?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+
+  if (!geminiApiKey && product?.project_id) {
     const { data: project } = await supabase
       .from(T.projects)
       .select('global_style_settings')
@@ -48,7 +50,9 @@ export async function generateSceneVideo(
   }
 
   const resolvedModel = model || scene.generation_model || 'veo3'
-  const isLtx = resolvedModel.toLowerCase().startsWith('ltx')
+  const normalizedModel = resolvedModel.toLowerCase()
+  const isLtx = normalizedModel.startsWith('ltx')
+  const isVeo = normalizedModel.startsWith('veo')
 
   // Get signed URLs for start/end frame images
   const frameRefs: { start?: FrameRef; end?: FrameRef } = {}
@@ -99,7 +103,7 @@ export async function generateSceneVideo(
   let mimeType: string
   let extension: string
 
-  if (resolvedModel === 'veo3') {
+  if (isVeo) {
     const result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings, geminiApiKey)
     videoBuffer = result.buffer
     mimeType = result.mimeType

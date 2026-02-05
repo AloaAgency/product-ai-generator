@@ -37,6 +37,10 @@ export default function GlobalGenerationQueue({
     () => generationJobs.filter((job) => isActiveStatus(job.status)),
     [generationJobs]
   )
+  const failedJobs = useMemo(
+    () => generationJobs.filter((job) => job.status === 'failed'),
+    [generationJobs]
+  )
 
   const pendingCount = useMemo(
     () => activeJobs.filter((job) => job.status === 'pending').length,
@@ -47,6 +51,9 @@ export default function GlobalGenerationQueue({
     () => activeJobs.filter((job) => job.status === 'running').length,
     [activeJobs]
   )
+
+  const failedCount = failedJobs.length
+  const recentFailedJobs = failedJobs.slice(0, 3)
 
   const totals = useMemo(() => {
     const totalVariations = activeJobs.reduce(
@@ -89,8 +96,10 @@ export default function GlobalGenerationQueue({
               {loadingJobs && generationJobs.length === 0
                 ? 'Checking queue...'
                 : hasActiveJobs
-                  ? `${pendingCount} pending · ${runningCount} running`
-                  : 'No active generations'}
+                  ? `${pendingCount} pending · ${runningCount} running${failedCount ? ` · ${failedCount} failed` : ''}`
+                  : failedCount
+                    ? `No active generations · ${failedCount} failed recently`
+                    : 'No active generations'}
             </p>
           </div>
         </button>
@@ -129,7 +138,11 @@ export default function GlobalGenerationQueue({
             </button>
           )}
           <span>
-            {totals.totalCompleted}/{totals.totalVariations} outputs
+            {hasActiveJobs
+              ? `${totals.totalCompleted}/${totals.totalVariations} outputs`
+              : failedCount
+                ? `${failedCount} failed`
+                : '0 outputs'}
           </span>
           {expanded ? (
             <ChevronUp className="h-4 w-4" />
@@ -200,6 +213,23 @@ export default function GlobalGenerationQueue({
             ) : (
               <div className="rounded-lg border border-dashed border-zinc-800 bg-zinc-900/40 px-3 py-4 text-xs text-zinc-500">
                 Queue is idle. New generations will appear here automatically.
+              </div>
+            )}
+            {recentFailedJobs.length > 0 && (
+              <div className="rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-3">
+                <p className="text-xs font-medium text-red-300">Recent failures</p>
+                <div className="mt-2 space-y-2">
+                  {recentFailedJobs.map((job) => (
+                    <div key={job.id} className="text-xs text-red-200">
+                      <p className="line-clamp-1">{job.final_prompt}</p>
+                      {job.error_message && (
+                        <p className="text-[11px] text-red-300/80 line-clamp-2">
+                          {job.error_message}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
