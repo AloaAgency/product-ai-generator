@@ -11,3 +11,4 @@
 - **Cmd/Ctrl+Enter** submits any modal form. Pass `onSubmit` to the hook.
 - **Click outside** a modal closes it. Add `onClick={onClose}` to the backdrop div and `onClick={(e) => e.stopPropagation()}` to the modal content div.
 - Veo video duration must be `8` when using reference images or 1080p/4k resolution (only 720p without reference images allows 4 or 6).
+- **Number inputs** should be string-backed and allow clearing while typing; clamp/validate on blur or submit instead of forcing values on every keystroke.

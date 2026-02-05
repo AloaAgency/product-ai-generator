@@ -10,6 +10,7 @@ Next.js application for AI-powered product image and video generation. Uses Supa
 - **Cmd/Ctrl+Enter** submits any modal form. Pass `onSubmit` to the hook.
 - **Click outside** a modal closes it. Add `onClick={onClose}` to the backdrop div and `onClick={(e) => e.stopPropagation()}` to the modal content div.
 - All three behaviors (Escape, Cmd+Enter, click-outside) must be present on every modal.
+- **Number inputs** should be string-backed and allow clearing while typing; clamp/validate on blur or submit instead of forcing values on every keystroke.
 
 ## Veo Video Constraints
 

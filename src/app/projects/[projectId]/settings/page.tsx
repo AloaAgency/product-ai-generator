@@ -19,6 +19,7 @@ export default function ProjectSettingsPage({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [settings, setSettings] = useState<GlobalStyleSettings>({})
+  const [defaultVariationInput, setDefaultVariationInput] = useState('')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -37,6 +38,12 @@ export default function ProjectSettingsPage({
       setName(currentProject.name)
       setDescription(currentProject.description || '')
       setSettings(currentProject.global_style_settings || {})
+      const defaults = currentProject.global_style_settings || {}
+      setDefaultVariationInput(
+        typeof defaults.default_variation_count === 'number'
+          ? String(defaults.default_variation_count)
+          : ''
+      )
     }
   }, [currentProject])
 
@@ -46,6 +53,13 @@ export default function ProjectSettingsPage({
 
   const updateField = (key: keyof GlobalStyleSettings, value: string) => {
     setSettings((prev) => ({ ...prev, [key]: value || undefined }))
+  }
+
+  const parseVariationValue = (value: string) => {
+    if (!value.trim()) return null
+    const parsed = parseInt(value, 10)
+    if (!Number.isFinite(parsed)) return null
+    return Math.min(50, Math.max(1, parsed))
   }
 
   const handleSave = async () => {
@@ -246,10 +260,23 @@ export default function ProjectSettingsPage({
                 type="number"
                 min={1}
                 max={50}
-                value={settings.default_variation_count ?? ''}
+                value={defaultVariationInput}
                 onChange={(e) => {
-                  const val = e.target.value ? parseInt(e.target.value, 10) : undefined
-                  setSettings((prev) => ({ ...prev, default_variation_count: val }))
+                  const next = e.target.value
+                  setDefaultVariationInput(next)
+                  const parsed = parseVariationValue(next)
+                  setSettings((prev) => ({
+                    ...prev,
+                    default_variation_count: parsed ?? undefined,
+                  }))
+                }}
+                onBlur={() => {
+                  const parsed = parseVariationValue(defaultVariationInput)
+                  setDefaultVariationInput(parsed ? String(parsed) : '')
+                  setSettings((prev) => ({
+                    ...prev,
+                    default_variation_count: parsed ?? undefined,
+                  }))
                 }}
                 placeholder="15"
                 className={inputClasses}
