@@ -39,7 +39,7 @@ export default function GeneratePage({
   } = useAppStore()
 
   const [prompt, setPrompt] = useState('')
-  const [variationCount, setVariationCount] = useState(15)
+  const [variationCountInput, setVariationCountInput] = useState('15')
   const [resolution, setResolution] = useState('2K')
   const [aspectRatio, setAspectRatio] = useState('16:9')
   const [didInitDefaults, setDidInitDefaults] = useState(false)
@@ -93,7 +93,7 @@ export default function GeneratePage({
       setAspectRatio(defaults.default_aspect_ratio)
     }
     if (defaults.default_variation_count) {
-      setVariationCount(defaults.default_variation_count)
+      setVariationCountInput(String(defaults.default_variation_count))
     }
     setDidInitDefaults(true)
   }, [currentProduct, id, didInitDefaults])
@@ -152,11 +152,13 @@ export default function GeneratePage({
 
   const handleGenerate = async () => {
     if (!prompt.trim() || aiLoading) return
+    const variationCountValue = parseVariationCount(variationCountInput)
+    if (!variationCountValue) return
     setGenerating(true)
     try {
       const job = await startGeneration(id, {
         prompt_text: prompt,
-        variation_count: variationCount,
+        variation_count: variationCountValue,
         resolution,
         aspect_ratio: aspectRatio,
         reference_set_id: selectedRefSetId || undefined,
@@ -216,6 +218,15 @@ export default function GeneratePage({
           ((currentJob.completed_count ?? 0) / currentJob.variation_count) * 100
         )
       : 0
+
+  const parseVariationCount = (value: string) => {
+    if (!value.trim()) return null
+    const parsed = parseInt(value, 10)
+    if (!Number.isFinite(parsed)) return null
+    if (parsed < 1) return null
+    return Math.min(100, parsed)
+  }
+  const variationCountValue = parseVariationCount(variationCountInput)
 
   const failedCount = currentJob?.failed_count ?? 0
   const hasFailures = failedCount > 0
@@ -497,10 +508,11 @@ export default function GeneratePage({
               type="number"
               min={1}
               max={100}
-              value={variationCount}
-              onChange={(e) => {
-                const val = e.target.valueAsNumber
-                if (!isNaN(val)) setVariationCount(val)
+              value={variationCountInput}
+              onChange={(e) => setVariationCountInput(e.target.value)}
+              onBlur={() => {
+                const parsed = parseVariationCount(variationCountInput)
+                setVariationCountInput(String(parsed ?? 1))
               }}
               className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
             />
@@ -549,6 +561,7 @@ export default function GeneratePage({
           !selectedRefSetId ||
           aiLoading ||
           generating ||
+          !variationCountValue ||
           (!!selectedTextureSetId && productImageCount + textureImageCount > 14)
         }
         className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-6 py-3 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"

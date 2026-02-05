@@ -513,12 +513,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       galleryImages: s.galleryImages.map((i) =>
         i.id === imageId ? { ...i, ...updated } : i
       ),
+      currentJob: s.currentJob?.images
+        ? {
+            ...s.currentJob,
+            images: s.currentJob.images.map((img) =>
+              img.id === imageId ? { ...img, ...updated } : img
+            ),
+          }
+        : s.currentJob,
     }))
   },
   deleteImage: async (imageId) => {
     await api(`/api/images/${imageId}`, { method: 'DELETE' })
     set((s) => ({
       galleryImages: s.galleryImages.filter((i) => i.id !== imageId),
+      currentJob: s.currentJob?.images
+        ? {
+            ...s.currentJob,
+            images: s.currentJob.images.filter((img) => img.id !== imageId),
+          }
+        : s.currentJob,
     }))
   },
 
