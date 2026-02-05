@@ -65,7 +65,14 @@ export async function generateSceneVideo(
   }
 
   if (isVeo && typeof videoSettings.durationSeconds === 'number') {
-    videoSettings.durationSeconds = Math.min(8, Math.max(4, videoSettings.durationSeconds))
+    const allowed = [4, 6, 8]
+    videoSettings.durationSeconds = allowed.reduce((closest, current) => {
+      const currentDiff = Math.abs(current - videoSettings.durationSeconds!)
+      const closestDiff = Math.abs(closest - videoSettings.durationSeconds!)
+      if (currentDiff < closestDiff) return current
+      if (currentDiff === closestDiff && current > closest) return current
+      return closest
+    }, allowed[0])
   }
 
   if (scene.start_frame_image_id) {
@@ -167,7 +174,9 @@ async function generateWithVeo3(
   const apiKey = apiKeyOverride || process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY
   if (!apiKey) throw new Error('Google AI API key not configured')
 
-  const model = process.env.VEO_MODEL || 'veo-3.1-generate-preview'
+  const defaultModel = 'veo-3.1-generate-preview'
+  const configuredModel = process.env.VEO_MODEL?.trim()
+  const model = configuredModel || defaultModel
   const baseUrl = 'https://generativelanguage.googleapis.com/v1beta'
   const instance: Record<string, unknown> = { prompt }
   const instances: Array<Record<string, unknown>> = [instance]
@@ -203,15 +212,34 @@ async function generateWithVeo3(
   if (aspectRatio) parameters.aspectRatio = aspectRatio
   const resolution = settings.resolution || process.env.VEO_RESOLUTION
   if (resolution) parameters.resolution = resolution
-  const rawDurationSeconds = typeof settings.durationSeconds === 'number' && settings.durationSeconds > 0
-    ? settings.durationSeconds
-    : Number(process.env.VEO_DURATION_SECONDS || 0) || null
-  const durationSeconds = rawDurationSeconds
-    ? Math.min(8, Math.max(4, rawDurationSeconds))
+  const durationSource = settings.durationSeconds ?? process.env.VEO_DURATION_SECONDS ?? null
+  const parsedDuration = Number(durationSource)
+  const rawDurationSeconds = Number.isFinite(parsedDuration) && parsedDuration > 0
+    ? parsedDuration
     : null
-  if (durationSeconds) parameters.durationSeconds = durationSeconds
+  const durationSeconds = rawDurationSeconds
+    ? [4, 6, 8].reduce((closest, current) => {
+      const currentDiff = Math.abs(current - rawDurationSeconds)
+      const closestDiff = Math.abs(closest - rawDurationSeconds)
+      if (currentDiff < closestDiff) return current
+      if (currentDiff === closestDiff && current > closest) return current
+      return closest
+    }, 4)
+    : null
   const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
-  if (generateAudio !== null) parameters.generateAudio = generateAudio
+  const veoSupportsAudio = process.env.VEO_SUPPORTS_AUDIO === 'true'
+  if (veoSupportsAudio && generateAudio !== null) parameters.generateAudio = generateAudio
+  if (durationSeconds) parameters.durationSeconds = durationSeconds
+  const shouldLog = process.env.VEO_DEBUG === 'true' || process.env.NODE_ENV !== 'production'
+  if (shouldLog) {
+    console.log('[Veo] parameters', {
+      model,
+      durationSeconds,
+      resolution: parameters.resolution,
+      aspectRatio: parameters.aspectRatio,
+      generateAudio: parameters.generateAudio,
+    })
+  }
 
   const payload: Record<string, unknown> = { instances }
   if (Object.keys(parameters).length) payload.parameters = parameters

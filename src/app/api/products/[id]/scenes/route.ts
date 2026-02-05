@@ -39,20 +39,39 @@ export async function POST(
     const supabase = createServiceClient()
     const body = await request.json()
 
+    const normalizeDuration = (model: string, value: unknown) => {
+      const parsed = typeof value === 'number' ? value : Number(value)
+      if (!Number.isFinite(parsed) || parsed <= 0) return null
+      if (model.toLowerCase().startsWith('ltx')) return parsed
+      const allowed = [4, 6, 8]
+      if (allowed.includes(parsed)) return parsed
+      return allowed.reduce((closest, current) => {
+        const currentDiff = Math.abs(current - parsed)
+        const closestDiff = Math.abs(closest - parsed)
+        if (currentDiff < closestDiff) return current
+        if (currentDiff === closestDiff && current > closest) return current
+        return closest
+      }, allowed[0])
+    }
+
+    const model = body.generation_model || 'veo3'
+
     const insert: Record<string, unknown> = {
       product_id: productId,
       title: body.title || null,
       prompt_text: body.prompt_text || null,
       end_frame_prompt: body.end_frame_prompt || null,
       motion_prompt: body.motion_prompt || null,
-      generation_model: body.generation_model || 'veo3',
+      generation_model: model,
       paired: body.paired ?? false,
     }
     if (body.start_frame_image_id !== undefined) insert.start_frame_image_id = body.start_frame_image_id
     if (body.end_frame_image_id !== undefined) insert.end_frame_image_id = body.end_frame_image_id
     if (body.video_resolution !== undefined) insert.video_resolution = body.video_resolution
     if (body.video_aspect_ratio !== undefined) insert.video_aspect_ratio = body.video_aspect_ratio
-    if (body.video_duration_seconds !== undefined) insert.video_duration_seconds = body.video_duration_seconds
+    if (body.video_duration_seconds !== undefined) {
+      insert.video_duration_seconds = normalizeDuration(model, body.video_duration_seconds)
+    }
     if (body.video_fps !== undefined) insert.video_fps = body.video_fps
     if (body.video_generate_audio !== undefined) insert.video_generate_audio = body.video_generate_audio
 

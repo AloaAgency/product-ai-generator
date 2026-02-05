@@ -30,6 +30,7 @@ type SignedImageUrls = {
 
 const VEO_RESOLUTIONS = ['720p', '1080p', '4k'] as const
 const VEO_ASPECT_RATIOS = ['16:9', '9:16'] as const
+const VEO_DURATIONS = [4, 6, 8] as const
 const LTX_RESOLUTIONS = ['1920x1080', '2560x1440', '3840x2160'] as const
 const DEFAULT_VEO = { resolution: '1080p', aspectRatio: '16:9', duration: 8, generateAudio: true }
 const DEFAULT_LTX = { resolution: '1920x1080', duration: 8, fps: 25, generateAudio: true }
@@ -38,6 +39,21 @@ const isLtxModel = (model: string | null | undefined) => {
   return model.toLowerCase().startsWith('ltx')
 }
 const supportsEndFrame = (model: string | null | undefined) => !isLtxModel(model)
+const supportsAudioToggle = (model: string | null | undefined) => isLtxModel(model)
+
+const normalizeDurationValue = (model: string, value: unknown) => {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  if (isLtxModel(model)) return parsed
+  if (VEO_DURATIONS.includes(parsed as (typeof VEO_DURATIONS)[number])) return parsed
+  return VEO_DURATIONS.reduce((closest, current) => {
+    const currentDiff = Math.abs(current - parsed)
+    const closestDiff = Math.abs(closest - parsed)
+    if (currentDiff < closestDiff) return current
+    if (currentDiff === closestDiff && current > closest) return current
+    return closest
+  }, VEO_DURATIONS[0])
+}
 
 const api = async (url: string, options?: RequestInit) => {
   const res = await fetch(url, options)
@@ -312,11 +328,8 @@ export default function ScenesPage({
     }
   }
 
-  const normalizeDuration = (model: string, duration: number) => {
-    if (!Number.isFinite(duration) || duration <= 0) return null
-    if (isLtxModel(model)) return duration
-    return Math.min(8, Math.max(4, duration))
-  }
+  const normalizeDuration = (model: string, duration: number) =>
+    normalizeDurationValue(model, duration)
 
   async function handleCreate() {
     if (!newTitle.trim()) return
@@ -377,7 +390,8 @@ export default function ScenesPage({
     setEditModel(model)
     setEditResolution(scene.video_resolution || (isLtxModel(model) ? DEFAULT_LTX.resolution : DEFAULT_VEO.resolution))
     setEditAspectRatio(scene.video_aspect_ratio || DEFAULT_VEO.aspectRatio)
-    setEditDuration(scene.video_duration_seconds || (isLtxModel(model) ? DEFAULT_LTX.duration : DEFAULT_VEO.duration))
+    const rawDuration = scene.video_duration_seconds ?? (isLtxModel(model) ? DEFAULT_LTX.duration : DEFAULT_VEO.duration)
+    setEditDuration(normalizeDurationValue(model, rawDuration) ?? (isLtxModel(model) ? DEFAULT_LTX.duration : DEFAULT_VEO.duration))
     setEditFps(scene.video_fps || DEFAULT_LTX.fps)
     setEditGenerateAudio(
       scene.video_generate_audio
@@ -619,15 +633,26 @@ export default function ScenesPage({
                   )}
                   <div className="space-y-1">
                     <span className="text-[11px] uppercase tracking-wide text-zinc-500">Duration (s)</span>
-                    <input
-                      type="number"
-                      min={isLtxModel(newModel) ? 1 : 4}
-                      max={isLtxModel(newModel) ? undefined : 8}
-                      step={1}
-                      value={newDuration}
-                      onChange={(e) => setNewDuration(Number(e.target.value))}
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
-                    />
+                    {isLtxModel(newModel) ? (
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={newDuration}
+                        onChange={(e) => setNewDuration(Number(e.target.value))}
+                        className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                      />
+                    ) : (
+                      <select
+                        value={normalizeDurationValue(newModel, newDuration) ?? DEFAULT_VEO.duration}
+                        onChange={(e) => setNewDuration(Number(e.target.value))}
+                        className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                      >
+                        {VEO_DURATIONS.map((duration) => (
+                          <option key={duration} value={duration}>{duration}</option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                   {isLtxModel(newModel) && (
                     <div className="space-y-1">
@@ -642,13 +667,20 @@ export default function ScenesPage({
                       />
                     </div>
                   )}
-                  <button
-                    onClick={() => setNewGenerateAudio(!newGenerateAudio)}
-                    className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700"
-                  >
-                    {newGenerateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
-                    {newGenerateAudio ? 'Audio On' : 'Audio Off'}
-                  </button>
+                  <div className="flex flex-col items-start">
+                    <button
+                      onClick={() => setNewGenerateAudio(!newGenerateAudio)}
+                      disabled={!supportsAudioToggle(newModel)}
+                      className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      title={!supportsAudioToggle(newModel) ? 'Audio toggle is supported for LTX only' : undefined}
+                    >
+                      {newGenerateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
+                      {newGenerateAudio ? 'Audio On' : 'Audio Off'}
+                    </button>
+                    {!supportsAudioToggle(newModel) && (
+                      <span className="mt-1 text-[10px] text-zinc-500">Audio toggle is LTX-only.</span>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -826,15 +858,26 @@ export default function ScenesPage({
                           )}
                           <div className="space-y-1">
                             <span className="text-[11px] uppercase tracking-wide text-zinc-500">Duration (s)</span>
-                    <input
-                      type="number"
-                      min={isLtxModel(editModel) ? 1 : 4}
-                      max={isLtxModel(editModel) ? undefined : 8}
-                      step={1}
-                      value={editDuration}
-                      onChange={(e) => setEditDuration(Number(e.target.value))}
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
-                    />
+                            {isLtxModel(editModel) ? (
+                              <input
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={editDuration}
+                                onChange={(e) => setEditDuration(Number(e.target.value))}
+                                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                              />
+                            ) : (
+                              <select
+                                value={normalizeDurationValue(editModel, editDuration) ?? DEFAULT_VEO.duration}
+                                onChange={(e) => setEditDuration(Number(e.target.value))}
+                                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                              >
+                                {VEO_DURATIONS.map((duration) => (
+                                  <option key={duration} value={duration}>{duration}</option>
+                                ))}
+                              </select>
+                            )}
                           </div>
                           {isLtxModel(editModel) && (
                             <div className="space-y-1">
@@ -849,13 +892,20 @@ export default function ScenesPage({
                               />
                             </div>
                           )}
-                          <button
-                            onClick={() => setEditGenerateAudio(!editGenerateAudio)}
-                            className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700"
-                          >
-                            {editGenerateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
-                            {editGenerateAudio ? 'Audio On' : 'Audio Off'}
-                          </button>
+                          <div className="flex flex-col items-start">
+                            <button
+                              onClick={() => setEditGenerateAudio(!editGenerateAudio)}
+                              disabled={!supportsAudioToggle(editModel)}
+                              className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+                              title={!supportsAudioToggle(editModel) ? 'Audio toggle is supported for LTX only' : undefined}
+                            >
+                              {editGenerateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
+                              {editGenerateAudio ? 'Audio On' : 'Audio Off'}
+                            </button>
+                            {!supportsAudioToggle(editModel) && (
+                              <span className="mt-1 text-[10px] text-zinc-500">Audio toggle is LTX-only.</span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
