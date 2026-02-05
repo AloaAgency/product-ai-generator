@@ -1,6 +1,7 @@
 'use client'
 
 import { use, useEffect, useState, useCallback, useRef } from 'react'
+import { useAppStore } from '@/lib/store'
 import type { StoryboardScene } from '@/lib/types'
 import type { GeneratedImage } from '@/lib/types'
 import {
@@ -53,6 +54,7 @@ export default function ScenesPage({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { id } = use(params)
+  const { fetchGenerationJobs } = useAppStore()
 
   const [scenes, setScenes] = useState<StoryboardScene[]>([])
   const [loading, setLoading] = useState(true)
@@ -60,6 +62,7 @@ export default function ScenesPage({
   const [sceneVideos, setSceneVideos] = useState<Record<string, Array<{ id: string; public_url: string | null; created_at: string }>>>({})
   const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null)
   const [expandedScene, setExpandedScene] = useState<string | null>(null)
+  const [videoNotices, setVideoNotices] = useState<Record<string, { type: 'info' | 'error'; message: string }>>({})
 
   // Create form
   const [showCreate, setShowCreate] = useState(false)
@@ -427,7 +430,22 @@ export default function ScenesPage({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model }),
       })
+      await fetchGenerationJobs(id)
+      setVideoNotices((prev) => ({
+        ...prev,
+        [sceneId]: {
+          type: 'info',
+          message: 'Video queued. Check the generation queue for progress.',
+        },
+      }))
       await loadSceneVideos(sceneId)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to queue video'
+      setVideoNotices((prev) => ({
+        ...prev,
+        [sceneId]: { type: 'error', message },
+      }))
+      console.error('[GenerateVideo] Failed to queue video', err)
     } finally {
       setGeneratingVideo(null)
     }
@@ -663,7 +681,8 @@ export default function ScenesPage({
             const isExpanded = expandedScene === scene.id
             const isGenVideo = generatingVideo === scene.id
             const hasFrames = !!scene.start_frame_image_id
-            const hasMotion = !!scene.motion_prompt
+            const hasMotion = !!scene.motion_prompt?.trim()
+            const notice = videoNotices[scene.id]
             const isEditing = editingId === scene.id
 
             return (
@@ -984,9 +1003,9 @@ export default function ScenesPage({
                       ) : (
                         <button
                           onClick={() => generateVideo(scene.id)}
-                          disabled={!hasFrames || !hasMotion}
+                          disabled={!hasMotion}
                           className="flex items-center gap-1.5 rounded-lg bg-purple-600 px-3 py-1.5 text-sm text-white hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                          title={!hasMotion ? 'Add a motion prompt first' : !hasFrames ? 'Generate a start frame first' : undefined}
+                          title={!hasMotion ? 'Add a motion prompt first' : undefined}
                         >
                           <Video className="h-3.5 w-3.5" />
                           Generate Video
@@ -1007,6 +1026,20 @@ export default function ScenesPage({
                         Videos {videos.length > 0 && `(${videos.length})`}
                       </button>
                     </div>
+                    {!hasFrames && hasMotion && (
+                      <p className="mt-2 text-[11px] text-zinc-500">
+                        No start frame selected — generating from motion only.
+                      </p>
+                    )}
+                    {notice && (
+                      <p
+                        className={`mt-2 text-[11px] ${
+                          notice.type === 'error' ? 'text-red-400' : 'text-zinc-400'
+                        }`}
+                      >
+                        {notice.message}
+                      </p>
+                    )}
 
                     {/* Video history */}
                     {isExpanded && (

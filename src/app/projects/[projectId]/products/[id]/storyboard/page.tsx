@@ -905,7 +905,7 @@ function SceneCard({
           ) : (
             <button
               onClick={onGenerateVideo}
-              disabled={!localMotionPrompt.trim() || !scene.start_frame_image_id}
+              disabled={!localMotionPrompt.trim()}
               className="flex items-center gap-1.5 rounded-lg bg-purple-600 px-3 py-1.5 text-sm text-white hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               <Video className="h-3.5 w-3.5" />
