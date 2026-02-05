@@ -4,3 +4,10 @@
 - Video jobs reuse `generation_jobs` with `job_type = 'video'` and `scene_id` populated; do not run video generation inline in production.
 - Concurrency is controlled via `VIDEO_JOB_CONCURRENCY` (and `IMAGE_JOB_CONCURRENCY` / `GENERATION_JOB_CONCURRENCY` defaults); ensure `GENERATION_JOB_BATCH_SIZE` is >= the concurrency you want processed per tick.
 - Gemini API keys are stored per project in `global_style_settings.gemini_api_key` and are used server-side for Gemini images and Veo video.
+
+## UI Conventions
+
+- **Escape** closes ALL modals and overlays app-wide. Use the `useModalShortcuts` hook from `src/hooks/useModalShortcuts.ts`.
+- **Cmd/Ctrl+Enter** submits any modal form. Pass `onSubmit` to the hook.
+- **Click outside** a modal closes it. Add `onClick={onClose}` to the backdrop div and `onClick={(e) => e.stopPropagation()}` to the modal content div.
+- Veo video duration must be `8` when using reference images or 1080p/4k resolution (only 720p without reference images allows 4 or 6).

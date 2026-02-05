@@ -1,9 +1,10 @@
 'use client'
 
-import { use, useEffect, useState, useRef } from 'react'
+import { use, useEffect, useState, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
+import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { Plus, Package, X, ArrowLeft, Trash2 } from 'lucide-react'
 
 export default function ProjectDetailPage({
@@ -44,6 +45,19 @@ export default function ProjectDetailPage({
     fetchProject(projectId)
     fetchProducts(projectId)
   }, [projectId, fetchProject, fetchProducts])
+
+  const handleSubmitModal = useCallback(() => {
+    if (name.trim() && !creating) {
+      const fakeEvent = { preventDefault: () => {} } as React.FormEvent
+      handleCreate(fakeEvent)
+    }
+  }, [name, creating])
+
+  useModalShortcuts({
+    isOpen: showModal,
+    onClose: () => setShowModal(false),
+    onSubmit: handleSubmitModal,
+  })
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -190,8 +204,8 @@ export default function ProjectDetailPage({
       </main>
 
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowModal(false)}>
+          <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="mb-5 flex items-center justify-between">
               <h2 className="text-lg font-semibold">New Product</h2>
               <button

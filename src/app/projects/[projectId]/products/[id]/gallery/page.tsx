@@ -2,6 +2,7 @@
 
 import { use, useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useAppStore } from '@/lib/store'
+import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
 import type { PromptTemplate } from '@/lib/types'
 import {
@@ -208,6 +209,11 @@ export default function GalleryPage({
     setSignedUrlsById(next)
     return data
   }, [])
+
+  useModalShortcuts({
+    isOpen: !!playingVideoUrl,
+    onClose: () => setPlayingVideoUrl(null),
+  })
 
   const handleApprovalChange = async (imageId: string, status: ApprovalStatus) => {
     if (status === 'rejected') {
@@ -529,8 +535,8 @@ export default function GalleryPage({
 
       {/* Video playback overlay */}
       {playingVideoUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
-          <div className="relative w-full max-w-4xl mx-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={() => setPlayingVideoUrl(null)}>
+          <div className="relative w-full max-w-4xl mx-4" onClick={(e) => e.stopPropagation()}>
             <button
               onClick={() => setPlayingVideoUrl(null)}
               className="absolute -top-10 right-0 rounded p-1 text-zinc-400 hover:text-zinc-100"
