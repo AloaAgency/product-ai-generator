@@ -64,6 +64,10 @@ export async function generateSceneVideo(
     generateAudio: scene.video_generate_audio,
   }
 
+  if (isVeo && typeof videoSettings.durationSeconds === 'number') {
+    videoSettings.durationSeconds = Math.min(8, Math.max(4, videoSettings.durationSeconds))
+  }
+
   if (scene.start_frame_image_id) {
     const { data: startImg } = await supabase
       .from(T.generated_images)
@@ -199,9 +203,12 @@ async function generateWithVeo3(
   if (aspectRatio) parameters.aspectRatio = aspectRatio
   const resolution = settings.resolution || process.env.VEO_RESOLUTION
   if (resolution) parameters.resolution = resolution
-  const durationSeconds = typeof settings.durationSeconds === 'number' && settings.durationSeconds > 0
+  const rawDurationSeconds = typeof settings.durationSeconds === 'number' && settings.durationSeconds > 0
     ? settings.durationSeconds
     : Number(process.env.VEO_DURATION_SECONDS || 0) || null
+  const durationSeconds = rawDurationSeconds
+    ? Math.min(8, Math.max(4, rawDurationSeconds))
+    : null
   if (durationSeconds) parameters.durationSeconds = durationSeconds
   const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
   if (generateAudio !== null) parameters.generateAudio = generateAudio
