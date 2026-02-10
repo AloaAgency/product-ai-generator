@@ -34,6 +34,14 @@ export interface GlobalStyleSettings {
   custom_suffix?: string
   default_variation_count?: number
   gemini_api_key?: string
+  google_api_keys?: GoogleApiKeyConfig[]
+  active_google_api_key_id?: string
+}
+
+export interface GoogleApiKeyConfig {
+  id: string
+  label: string
+  key: string
 }
 
 export interface ReferenceSet {

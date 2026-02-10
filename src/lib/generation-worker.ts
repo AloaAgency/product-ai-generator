@@ -11,7 +11,8 @@ import {
   slugify,
 } from '@/lib/image-utils'
 import { T } from '@/lib/db-tables'
-import type { ReferenceImage } from '@/lib/types'
+import type { GlobalStyleSettings, ReferenceImage } from '@/lib/types'
+import { resolveGoogleApiKey } from '@/lib/google-api-keys'
 
 type WorkerResult = {
   jobId: string
@@ -207,8 +208,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     .eq('id', job.product_id)
     .single()
 
-  let geminiApiKey =
-    (product?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+  let geminiApiKey = resolveGoogleApiKey(product?.global_style_settings as GlobalStyleSettings | null)
 
   if (!geminiApiKey && product?.project_id) {
     const { data: project } = await supabase
@@ -216,8 +216,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
       .select('global_style_settings')
       .eq('id', product.project_id)
       .single()
-    geminiApiKey =
-      (project?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+    geminiApiKey = resolveGoogleApiKey(project?.global_style_settings as GlobalStyleSettings | null)
   }
 
   // Fetch product reference images

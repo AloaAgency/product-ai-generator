@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Aloa Product AI Generator",
+  title: "Aloa AI Product Imager",
   description: "Generate hyper-realistic product images with AI",
   robots: {
     index: false,
