@@ -67,34 +67,23 @@ export default function ProjectSettingsPage({
     setSettings((prev) => {
       const currentKeys = Array.isArray(prev.google_api_keys) ? prev.google_api_keys : []
       const nextKeys = updater(currentKeys)
-      const previousActiveId = prev.active_google_api_key_id
-      const activeId = nextKeys.some((item) => item.id === previousActiveId)
-        ? previousActiveId
+      // Only recompute active ID when the current active key was removed
+      const activeId = nextKeys.some((item) => item.id === prev.active_google_api_key_id)
+        ? prev.active_google_api_key_id
         : nextKeys[0]?.id
-      const activeKey = nextKeys.find((item) => item.id === activeId)?.key.trim()
-      const fallbackKey = nextKeys.find((item) => item.key.trim())?.key.trim()
-
       return {
         ...prev,
         google_api_keys: nextKeys.length > 0 ? nextKeys : undefined,
         active_google_api_key_id: activeId,
-        gemini_api_key: activeKey || fallbackKey || undefined,
       }
     })
   }
 
   const setActiveGoogleApiKey = (id: string) => {
-    setSettings((prev) => {
-      const keys = Array.isArray(prev.google_api_keys) ? prev.google_api_keys : []
-      const activeId = keys.some((item) => item.id === id) ? id : keys[0]?.id
-      const activeKey = keys.find((item) => item.id === activeId)?.key.trim()
-      const fallbackKey = keys.find((item) => item.key.trim())?.key.trim()
-      return {
-        ...prev,
-        active_google_api_key_id: activeId,
-        gemini_api_key: activeKey || fallbackKey || undefined,
-      }
-    })
+    setSettings((prev) => ({
+      ...prev,
+      active_google_api_key_id: id,
+    }))
   }
 
   const handleSave = async () => {
