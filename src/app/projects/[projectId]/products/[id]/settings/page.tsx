@@ -139,7 +139,12 @@ export default function ProductSettingsPage({
     const tmpl = settingsTemplates.find((t) => t.id === templateId)
     if (!tmpl) return
     await activateSettingsTemplate(id, templateId)
-    setSettings((prev) => ({ ...tmpl.settings, gemini_api_key: prev.gemini_api_key }))
+    setSettings((prev) => ({
+      ...tmpl.settings,
+      gemini_api_key: prev.gemini_api_key,
+      google_api_keys: prev.google_api_keys,
+      active_google_api_key_id: prev.active_google_api_key_id,
+    }))
     const tmplValue = tmpl.settings?.default_variation_count
     setDefaultVariationInput(
       typeof tmplValue === 'number'
@@ -248,7 +253,7 @@ Use this format to generate a settings template via LLM. Save as \`.md\` or \`.j
       <label className="block text-sm font-medium text-zinc-400">{label}</label>
       <input
         type="text"
-        value={settings[key] || ''}
+        value={(settings[key] as string) || ''}
         onChange={(e) => updateField(key, e.target.value)}
         placeholder={placeholder}
         className={inputClasses}
@@ -261,7 +266,7 @@ Use this format to generate a settings template via LLM. Save as \`.md\` or \`.j
       <label className="block text-sm font-medium text-zinc-400">{label}</label>
       <textarea
         rows={2}
-        value={settings[key] || ''}
+        value={(settings[key] as string) || ''}
         onChange={(e) => updateField(key, e.target.value)}
         placeholder={placeholder}
         className={`${inputClasses} resize-y`}
@@ -273,7 +278,7 @@ Use this format to generate a settings template via LLM. Save as \`.md\` or \`.j
     <div className="space-y-1.5">
       <label className="block text-sm font-medium text-zinc-400">{label}</label>
       <select
-        value={settings[key] || ''}
+        value={(settings[key] as string) || ''}
         onChange={(e) => updateField(key, e.target.value)}
         className={inputClasses}
       >

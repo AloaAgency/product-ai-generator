@@ -18,7 +18,7 @@ async function uploadImageToTracker(itemId: string, image: ImageUpload): Promise
     const formData = new FormData()
     formData.append('file', blob, image.file.name)
     formData.append('caption', image.caption)
-    formData.append('uploaded_by', 'product-ai-generator')
+    formData.append('uploaded_by', 'aloa-ai-product-imager')
 
     const response = await fetch(`${BFT_BASE_URL}/public/items/${itemId}/attachments`, {
       method: 'POST',
@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
     title = title.trim().replace(/\s+/g, ' ').slice(0, 200)
     description = description.trim()
 
-    const enhancedDescription = `${description}\n\n---\nTimestamp: ${new Date().toISOString()}\nApp: Product AI Generator${images.length > 0 ? `\nAttachments: ${images.length} image(s)` : ''}`
+    const enhancedDescription = `${description}\n\n---\nTimestamp: ${new Date().toISOString()}\nApp: Aloa AI Product Imager${images.length > 0 ? `\nAttachments: ${images.length} image(s)` : ''}`
 
     let trackerResponseOk = false
     let itemId: string | null = null

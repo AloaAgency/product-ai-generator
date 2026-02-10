@@ -1,6 +1,8 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { slugify } from '@/lib/image-utils'
+import { resolveGoogleApiKey } from '@/lib/google-api-keys'
+import type { GlobalStyleSettings } from '@/lib/types'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 
@@ -37,8 +39,7 @@ export async function generateSceneVideo(
     .eq('id', productId)
     .single()
 
-  let geminiApiKey =
-    (product?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+  let geminiApiKey = resolveGoogleApiKey(product?.global_style_settings as GlobalStyleSettings | null)
 
   if (!geminiApiKey && product?.project_id) {
     const { data: project } = await supabase
@@ -46,7 +47,7 @@ export async function generateSceneVideo(
       .select('global_style_settings')
       .eq('id', product.project_id)
       .single()
-    geminiApiKey = (project?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+    geminiApiKey = resolveGoogleApiKey(project?.global_style_settings as GlobalStyleSettings | null)
   }
 
   const resolvedModel = model || scene.generation_model || 'veo3'

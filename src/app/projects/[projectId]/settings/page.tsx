@@ -4,8 +4,9 @@ import { use, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAppStore } from '@/lib/store'
-import { Save, CheckCircle, Settings, Camera, Palette, Trash2, ArrowLeft, Key, ChevronDown } from 'lucide-react'
-import type { GlobalStyleSettings } from '@/lib/types'
+import { Save, CheckCircle, Settings, Camera, Palette, Trash2, ArrowLeft, Key, ChevronDown, Plus } from 'lucide-react'
+import type { GlobalStyleSettings, GoogleApiKeyConfig } from '@/lib/types'
+import { createGoogleApiKeyId, normalizeGoogleApiKeySettings } from '@/lib/google-api-keys'
 
 export default function ProjectSettingsPage({
   params,
@@ -37,8 +38,8 @@ export default function ProjectSettingsPage({
     if (currentProject) {
       setName(currentProject.name)
       setDescription(currentProject.description || '')
-      setSettings(currentProject.global_style_settings || {})
-      const defaults = currentProject.global_style_settings || {}
+      const defaults = normalizeGoogleApiKeySettings(currentProject.global_style_settings || {})
+      setSettings(defaults)
       setDefaultVariationInput(
         typeof defaults.default_variation_count === 'number'
           ? String(defaults.default_variation_count)
@@ -62,15 +63,51 @@ export default function ProjectSettingsPage({
     return Math.min(50, Math.max(1, parsed))
   }
 
+  const updateGoogleApiKeys = (updater: (keys: GoogleApiKeyConfig[]) => GoogleApiKeyConfig[]) => {
+    setSettings((prev) => {
+      const currentKeys = Array.isArray(prev.google_api_keys) ? prev.google_api_keys : []
+      const nextKeys = updater(currentKeys)
+      const previousActiveId = prev.active_google_api_key_id
+      const activeId = nextKeys.some((item) => item.id === previousActiveId)
+        ? previousActiveId
+        : nextKeys[0]?.id
+      const activeKey = nextKeys.find((item) => item.id === activeId)?.key.trim()
+      const fallbackKey = nextKeys.find((item) => item.key.trim())?.key.trim()
+
+      return {
+        ...prev,
+        google_api_keys: nextKeys.length > 0 ? nextKeys : undefined,
+        active_google_api_key_id: activeId,
+        gemini_api_key: activeKey || fallbackKey || undefined,
+      }
+    })
+  }
+
+  const setActiveGoogleApiKey = (id: string) => {
+    setSettings((prev) => {
+      const keys = Array.isArray(prev.google_api_keys) ? prev.google_api_keys : []
+      const activeId = keys.some((item) => item.id === id) ? id : keys[0]?.id
+      const activeKey = keys.find((item) => item.id === activeId)?.key.trim()
+      const fallbackKey = keys.find((item) => item.key.trim())?.key.trim()
+      return {
+        ...prev,
+        active_google_api_key_id: activeId,
+        gemini_api_key: activeKey || fallbackKey || undefined,
+      }
+    })
+  }
+
   const handleSave = async () => {
     setSaving(true)
     setSaved(false)
     try {
+      const normalizedSettings = normalizeGoogleApiKeySettings(settings)
       await updateProject(projectId, {
         name,
         description: description || undefined,
-        global_style_settings: settings,
+        global_style_settings: normalizedSettings,
       })
+      setSettings(normalizedSettings)
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } finally {
@@ -129,6 +166,10 @@ export default function ProjectSettingsPage({
       </select>
     </div>
   )
+
+  const googleApiKeys = Array.isArray(settings.google_api_keys) ? settings.google_api_keys : []
+  const activeGoogleApiKeyId =
+    settings.active_google_api_key_id || googleApiKeys[0]?.id || ''
 
   const SectionCard = ({
     id,
@@ -292,18 +333,95 @@ export default function ProjectSettingsPage({
           title="API Keys"
           description="External service credentials"
         >
-          <div className="space-y-1.5">
-            <label className="block text-sm font-medium text-zinc-400">Gemini API Key</label>
-            <input
-              type="password"
-              value={(settings.gemini_api_key as string) || ''}
-              onChange={(e) => updateField('gemini_api_key', e.target.value)}
-              autoComplete="off"
-              placeholder="Enter your Gemini API key"
-              className={inputClasses}
-            />
-            <p className="text-xs text-zinc-500 mt-1.5">
-              Used for Gemini image generation and Veo video generation across all products.
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-zinc-400">Active Google API Key</label>
+              <select
+                value={activeGoogleApiKeyId}
+                onChange={(e) => setActiveGoogleApiKey(e.target.value)}
+                className={inputClasses}
+                disabled={googleApiKeys.length === 0}
+              >
+                {googleApiKeys.length === 0 && <option value="">No keys configured</option>}
+                {googleApiKeys.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label || 'Untitled Key'}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-3">
+              {googleApiKeys.map((item, index) => {
+                const isActive = item.id === activeGoogleApiKeyId
+                return (
+                  <div
+                    key={item.id}
+                    className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-zinc-500">Google Key #{index + 1}</p>
+                      <div className="flex items-center gap-2">
+                        {isActive && (
+                          <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-300">
+                            Active
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => updateGoogleApiKeys((prev) => prev.filter((entry) => entry.id !== item.id))}
+                          className="rounded-md p-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"
+                          title="Remove key"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <input
+                        type="text"
+                        value={item.label}
+                        onChange={(e) => updateGoogleApiKeys((prev) =>
+                          prev.map((entry) => entry.id === item.id ? { ...entry, label: e.target.value } : entry)
+                        )}
+                        placeholder="Label (e.g., Production Key 1)"
+                        className={inputClasses}
+                      />
+                      <input
+                        type="password"
+                        value={item.key}
+                        onChange={(e) => updateGoogleApiKeys((prev) =>
+                          prev.map((entry) => entry.id === item.id ? { ...entry, key: e.target.value } : entry)
+                        )}
+                        autoComplete="off"
+                        placeholder="Enter Google API key"
+                        className={inputClasses}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => updateGoogleApiKeys((prev) => ([
+                ...prev,
+                {
+                  id: createGoogleApiKeyId(),
+                  label: `Key ${prev.length + 1}`,
+                  key: '',
+                },
+              ]))}
+              className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-zinc-700"
+            >
+              <Plus className="h-4 w-4" />
+              Add Google API Key
+            </button>
+
+            <p className="text-xs text-zinc-500">
+              Used for Gemini image generation and Veo video generation across all products in this project.
             </p>
           </div>
         </SectionCard>

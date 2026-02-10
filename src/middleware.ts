@@ -33,7 +33,7 @@ function loginPage(error: string) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
-  <title>Login - Product AI Generator</title>
+  <title>Login - Aloa AI Product Imager</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, sans-serif; background: #09090b; color: #f4f4f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
@@ -49,7 +49,7 @@ function loginPage(error: string) {
 </head>
 <body>
   <div class="card">
-    <h1>Product AI Generator</h1>
+    <h1>Aloa AI Product Imager</h1>
     <form method="POST" action="/api/login">
       <label for="password">Password</label>
       <input type="password" id="password" name="password" placeholder="Enter password" autofocus required />

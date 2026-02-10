@@ -51,7 +51,7 @@ export default function Home() {
       {/* Header */}
       <header className="border-b border-zinc-800 px-6 py-4">
         <div className="mx-auto flex max-w-6xl items-center justify-between">
-          <h1 className="text-xl font-semibold tracking-tight">Product AI Generator</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Aloa AI Product Imager</h1>
           <button
             onClick={() => setShowModal(true)}
             className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-200"

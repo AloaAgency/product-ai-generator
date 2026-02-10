@@ -13,6 +13,7 @@ import {
 } from '@/lib/image-utils'
 import type { Product, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
+import { resolveGoogleApiKey } from '@/lib/google-api-keys'
 
 async function generateAndStoreImage(
   supabase: ReturnType<typeof createServiceClient>,
@@ -131,15 +132,15 @@ export async function POST(
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
 
-    // Fetch project API key
-    let geminiApiKey: string | undefined
-    if (product.project_id) {
+    // Resolve API key from product-level settings first, then project-level defaults.
+    let geminiApiKey = resolveGoogleApiKey((product as Product).global_style_settings)
+    if (!geminiApiKey && product.project_id) {
       const { data: project } = await supabase
         .from(T.projects)
         .select('global_style_settings')
         .eq('id', product.project_id)
         .single()
-      geminiApiKey = (project?.global_style_settings as { gemini_api_key?: string } | null)?.gemini_api_key
+      geminiApiKey = resolveGoogleApiKey(project?.global_style_settings as Product['global_style_settings'] | null)
     }
 
     // Find reference set
