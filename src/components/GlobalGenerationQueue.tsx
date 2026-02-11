@@ -8,6 +8,13 @@ const POLL_MS = 5000
 
 const isActiveStatus = (status: string) => status === 'pending' || status === 'running'
 
+const getFailureTimestamp = (iso?: string | null) => {
+  if (!iso) return null
+  const parsed = new Date(iso)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.toLocaleString()
+}
+
 export default function GlobalGenerationQueue({
   productId,
 }: {
@@ -18,11 +25,13 @@ export default function GlobalGenerationQueue({
     loadingJobs,
     fetchGenerationJobs,
     clearGenerationQueue,
+    clearGenerationFailures,
     devParallelGeneration,
     setDevParallelGeneration,
   } = useAppStore()
   const [expanded, setExpanded] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [clearingFailures, setClearingFailures] = useState(false)
 
   useEffect(() => {
     fetchGenerationJobs(productId)
@@ -38,7 +47,14 @@ export default function GlobalGenerationQueue({
     [generationJobs]
   )
   const failedJobs = useMemo(
-    () => generationJobs.filter((job) => job.status === 'failed'),
+    () =>
+      generationJobs
+        .filter((job) => job.status === 'failed')
+        .sort((a, b) => {
+          const aTs = new Date(a.completed_at || a.created_at).getTime()
+          const bTs = new Date(b.completed_at || b.created_at).getTime()
+          return bTs - aTs
+        }),
     [generationJobs]
   )
 
@@ -137,6 +153,27 @@ export default function GlobalGenerationQueue({
               {clearing ? 'Clearing…' : 'Clear'}
             </button>
           )}
+          {failedCount > 0 && (
+            <button
+              type="button"
+              className="rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={async (event) => {
+                event.stopPropagation()
+                if (clearingFailures) return
+                const confirmed = window.confirm('Clear recent failed jobs from queue history?')
+                if (!confirmed) return
+                try {
+                  setClearingFailures(true)
+                  await clearGenerationFailures(productId)
+                } finally {
+                  setClearingFailures(false)
+                }
+              }}
+              disabled={clearingFailures}
+            >
+              {clearingFailures ? 'Clearing failures…' : 'Clear failures'}
+            </button>
+          )}
           <span>
             {hasActiveJobs
               ? `${totals.totalCompleted}/${totals.totalVariations} outputs`
@@ -222,6 +259,9 @@ export default function GlobalGenerationQueue({
                   {recentFailedJobs.map((job) => (
                     <div key={job.id} className="text-xs text-red-200">
                       <p className="line-clamp-1">{job.final_prompt}</p>
+                      <p className="text-[11px] text-red-300/70">
+                        Failed at {getFailureTimestamp(job.completed_at || job.created_at) || 'Unknown'}
+                      </p>
                       {job.error_message && (
                         <p className="text-[11px] text-red-300/80 line-clamp-2">
                           {job.error_message}

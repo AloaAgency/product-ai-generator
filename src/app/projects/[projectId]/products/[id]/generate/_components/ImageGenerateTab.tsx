@@ -226,11 +226,12 @@ export function ImageGenerateTab({ productId }: ImageGenerateTabProps) {
     }
   }
 
+  const completedOrImages = currentJob
+    ? Math.max(currentJob.completed_count ?? 0, currentJob.images?.length ?? 0)
+    : 0
   const progress =
     currentJob && currentJob.variation_count
-      ? Math.round(
-          ((currentJob.completed_count ?? 0) / currentJob.variation_count) * 100
-        )
+      ? Math.round((completedOrImages / currentJob.variation_count) * 100)
       : 0
 
   const parseVariationCount = (value: string) => {
@@ -640,7 +641,7 @@ export function ImageGenerateTab({ productId }: ImageGenerateTabProps) {
       </button>
 
       {/* Active Job Monitor */}
-      {currentJob && activeJobId && (
+      {currentJob && activeJobId && (displayStatus === 'running' || displayStatus === 'pending' || displayStatus === 'completed' || displayStatus === 'failed') && (
         <section className="space-y-4 rounded-lg border border-zinc-800 bg-zinc-800/30 p-6">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Job Progress</h2>
@@ -678,17 +679,46 @@ export function ImageGenerateTab({ productId }: ImageGenerateTabProps) {
           <div className="space-y-1">
             <div className="flex justify-between text-xs text-zinc-400">
               <span>
-                {currentJob.completed_count ?? 0} /{' '}
-                {currentJob.variation_count} images
-                {hasFailures ? ` · ${failedCount} failed` : ''}
+                {displayStatus === 'pending' ? (
+                  'Starting generation...'
+                ) : displayStatus === 'completed' ? (
+                  <>
+                    {completedOrImages} / {currentJob.variation_count} images
+                    {hasFailures ? ` · ${failedCount} failed` : ''} — Complete
+                  </>
+                ) : displayStatus === 'failed' ? (
+                  <>
+                    {completedOrImages} / {currentJob.variation_count} images · {failedCount} failed
+                  </>
+                ) : completedOrImages === 0 ? (
+                  'Generating images...'
+                ) : (
+                  <>
+                    {completedOrImages} / {currentJob.variation_count} images
+                    {hasFailures ? ` · ${failedCount} failed` : ''}
+                  </>
+                )}
               </span>
-              <span>{progress}%</span>
+              {(displayStatus !== 'pending' && !(displayStatus === 'running' && completedOrImages === 0)) && (
+                <span>{progress}%</span>
+              )}
             </div>
             <div className="h-2 w-full rounded-full bg-zinc-700 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-blue-500 transition-all duration-500"
-                style={{ width: `${progress}%` }}
-              />
+              {displayStatus === 'completed' ? (
+                <div className="h-full w-full rounded-full bg-green-500 transition-all duration-500" />
+              ) : displayStatus === 'failed' ? (
+                <div
+                  className="h-full rounded-full bg-red-500 transition-all duration-500"
+                  style={{ width: `${Math.max(progress, 5)}%` }}
+                />
+              ) : (displayStatus === 'pending' || (displayStatus === 'running' && completedOrImages === 0)) ? (
+                <div className="h-full w-1/3 rounded-full bg-blue-500 animate-pulse-bar" />
+              ) : (
+                <div
+                  className="h-full rounded-full bg-blue-500 transition-all duration-500"
+                  style={{ width: `${progress}%` }}
+                />
+              )}
             </div>
           </div>
 
