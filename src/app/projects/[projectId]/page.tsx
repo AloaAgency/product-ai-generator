@@ -1,11 +1,12 @@
 'use client'
 
-import { use, useEffect, useState, useRef, useCallback } from 'react'
+import { use, useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
-import { Plus, Package, X, ArrowLeft, Trash2 } from 'lucide-react'
+import { ProjectHeader } from '@/components/ProjectHeader'
+import { Plus, Package, X, Trash2 } from 'lucide-react'
 
 export default function ProjectDetailPage({
   params,
@@ -28,18 +29,7 @@ export default function ProjectDetailPage({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [creating, setCreating] = useState(false)
-  const [editingName, setEditingName] = useState(false)
-  const [nameValue, setNameValue] = useState('')
   const [deleting, setDeleting] = useState(false)
-  const nameInputRef = useRef<HTMLInputElement>(null)
-
-  const handleNameSave = async () => {
-    const trimmed = nameValue.trim()
-    if (trimmed && trimmed !== currentProject?.name) {
-      await updateProject(projectId, { name: trimmed })
-    }
-    setEditingName(false)
-  }
 
   useEffect(() => {
     fetchProject(projectId)
@@ -77,56 +67,19 @@ export default function ProjectDetailPage({
     }
   }
 
+  const handleNameSave = async (newName: string) => {
+    await updateProject(projectId, { name: newName })
+  }
+
   return (
     <div className="min-h-screen">
-      <header className="border-b border-zinc-800 px-6 py-4">
-        <div className="mx-auto flex max-w-6xl items-center justify-between">
-          <div>
-            <Link
-              href="/"
-              className="mb-1 inline-flex items-center gap-1.5 text-sm text-zinc-500 transition-colors hover:text-zinc-300"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              All Projects
-            </Link>
-            <div className="flex items-center gap-3">
-              {editingName ? (
-                <input
-                  ref={nameInputRef}
-                  value={nameValue}
-                  onChange={(e) => setNameValue(e.target.value)}
-                  onBlur={handleNameSave}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleNameSave()
-                    if (e.key === 'Escape') setEditingName(false)
-                  }}
-                  className="rounded bg-zinc-800 px-2 py-1 text-xl font-semibold tracking-tight text-zinc-100 outline-none focus:ring-1 focus:ring-blue-500"
-                  autoFocus
-                />
-              ) : (
-                <h1
-                  className="cursor-pointer text-xl font-semibold tracking-tight transition-colors hover:text-blue-400"
-                  onClick={() => {
-                    setNameValue(currentProject?.name ?? '')
-                    setEditingName(true)
-                  }}
-                  title="Click to edit"
-                >
-                  {currentProject?.name ?? 'Loading...'}
-                </h1>
-              )}
-              <Link
-                href={`/projects/${projectId}/settings`}
-                className="rounded-lg px-2 py-1 text-xs text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
-              >
-                Settings
-              </Link>
-            </div>
-            {currentProject?.description && (
-              <p className="mt-1 text-sm text-zinc-500">{currentProject.description}</p>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
+      <ProjectHeader
+        projectId={projectId}
+        projectName={currentProject?.name}
+        projectDescription={currentProject?.description}
+        onNameSave={handleNameSave}
+        actions={
+          <>
             <button
               onClick={async () => {
                 if (!currentProject) return
@@ -152,9 +105,9 @@ export default function ProjectDetailPage({
               <Plus className="h-4 w-4" />
               New Product
             </button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="mx-auto max-w-6xl px-6 py-8">
         {loadingProducts ? (

@@ -385,6 +385,16 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
         lastError = err instanceof Error ? err.message : 'Variation failed'
       } finally {
         processed += 1
+        // Incremental progress update so polling clients see real progress
+        await supabase
+          .from(T.generation_jobs)
+          .update({
+            completed_count: startingCompleted + successCount,
+            failed_count: startingFailed + failCount,
+            ...(lastError ? { error_message: lastError } : {}),
+          })
+          .eq('id', job.id)
+          .in('status', ['pending', 'running'])
       }
     }
   }

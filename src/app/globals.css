@@ -16,3 +16,17 @@ body {
   background: var(--background);
   color: var(--foreground);
 }
+
+/* Indeterminate progress bar animation */
+@keyframes pulse-bar {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+.animate-pulse-bar {
+  animation: pulse-bar 1.5s ease-in-out infinite;
+}

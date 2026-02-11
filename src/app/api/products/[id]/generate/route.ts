@@ -287,28 +287,55 @@ export async function POST(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: productId } = await params
   try {
     const supabase = createServiceClient()
-    const { data, error } = await supabase
-      .from(T.generation_jobs)
-      .update({
-        status: 'cancelled',
-        error_message: 'Cancelled by user',
-        completed_at: new Date().toISOString(),
-      })
-      .eq('product_id', productId)
-      .in('status', ['pending', 'running'])
-      .select('id')
+    const scope = new URL(request.url).searchParams.get('scope') || 'active'
+    const now = new Date().toISOString()
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    let cancelled = 0
+    let clearedFailed = 0
+
+    if (scope === 'active' || scope === 'all') {
+      const { data, error } = await supabase
+        .from(T.generation_jobs)
+        .update({
+          status: 'cancelled',
+          error_message: 'Cancelled by user',
+          completed_at: now,
+        })
+        .eq('product_id', productId)
+        .in('status', ['pending', 'running'])
+        .select('id')
+
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 })
+      }
+      cancelled = data?.length || 0
     }
 
-    return NextResponse.json({ cancelled: data?.length || 0 })
+    if (scope === 'failed' || scope === 'all') {
+      const { data, error } = await supabase
+        .from(T.generation_jobs)
+        .delete()
+        .eq('product_id', productId)
+        .eq('status', 'failed')
+        .select('id')
+
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 })
+      }
+      clearedFailed = data?.length || 0
+    }
+
+    if (scope !== 'active' && scope !== 'failed' && scope !== 'all') {
+      return NextResponse.json({ error: 'Invalid scope. Use "active", "failed", or "all".' }, { status: 400 })
+    }
+
+    return NextResponse.json({ cancelled, cleared_failed: clearedFailed })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal server error' },
