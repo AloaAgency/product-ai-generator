@@ -9,6 +9,8 @@ import {
   Check,
   XCircle,
   Loader2,
+  Copy,
+  ExternalLink,
 } from 'lucide-react'
 
 export type ApprovalStatus = 'approved' | 'rejected' | 'pending' | null
@@ -26,6 +28,8 @@ export interface LightboxImage {
   notes?: string | null
   variation_number?: number | null
   approval_status?: ApprovalStatus
+  prompt?: string | null
+  productId?: string | null
 }
 
 interface ImageLightboxProps {
@@ -35,6 +39,7 @@ interface ImageLightboxProps {
   onNavigate: (index: number) => void
   onApprovalChange: (imageId: string, status: ApprovalStatus) => Promise<void>
   promptName?: string | null
+  projectId?: string | null
   onRequestSignedUrls?: (imageId: string) => Promise<{
     signed_url?: string | null
     download_url?: string | null
@@ -50,9 +55,12 @@ export function ImageLightbox({
   onNavigate,
   onApprovalChange,
   promptName,
+  projectId,
   onRequestSignedUrls,
 }: ImageLightboxProps) {
   const [isUpdating, setIsUpdating] = useState(false)
+  const [promptExpanded, setPromptExpanded] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const currentImage = images[currentIndex]
   const hasPrev = currentIndex > 0
@@ -114,6 +122,17 @@ export function ImageLightbox({
     }
   }, [currentImage, onRequestSignedUrls])
 
+  const handleCopyPrompt = useCallback(async () => {
+    if (!currentImage?.prompt) return
+    try {
+      await navigator.clipboard.writeText(currentImage.prompt)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Fallback: ignore clipboard errors
+    }
+  }, [currentImage?.prompt])
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       switch (e.key) {
@@ -126,11 +145,18 @@ export function ImageLightbox({
         case 'a': case 'A': void handleApprove(); break
         case 'r': case 'R': void handleReject(); break
         case 'd': case 'D': void handleDownload(); break
+        case 'c': case 'C': void handleCopyPrompt(); break
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, handlePrev, handleNext, handleApprove, handleReject, handleDownload])
+  }, [onClose, handlePrev, handleNext, handleApprove, handleReject, handleDownload, handleCopyPrompt])
+
+  // Reset prompt expanded state when navigating to a different image
+  useEffect(() => {
+    setPromptExpanded(false)
+    setCopied(false)
+  }, [currentImage?.id])
 
   // Fetch signed URLs when the current image changes and has no displayable URL
   useEffect(() => {
@@ -182,6 +208,36 @@ export function ImageLightbox({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Prompt section */}
+        {currentImage.prompt && (
+          <div className="px-4 py-2 bg-gray-900/60 border-b border-gray-800 flex items-start gap-3">
+            <button
+              onClick={() => setPromptExpanded(!promptExpanded)}
+              className={`flex-1 text-left text-sm text-gray-300 ${promptExpanded ? '' : 'line-clamp-2'}`}
+            >
+              {currentImage.prompt}
+            </button>
+            <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
+              <button
+                onClick={handleCopyPrompt}
+                className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+                title="Copy Prompt (C)"
+              >
+                {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+              </button>
+              {projectId && currentImage.productId && (
+                <a
+                  href={`/projects/${projectId}/products/${currentImage.productId}/generate?prompt=${encodeURIComponent(currentImage.prompt)}`}
+                  className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+                  title="Generate from Prompt"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                </a>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Image container */}
         <div className="relative flex-1 flex items-center justify-center bg-gray-950 overflow-hidden">

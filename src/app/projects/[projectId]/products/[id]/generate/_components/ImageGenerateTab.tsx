@@ -21,9 +21,10 @@ import { assemblePrompt, DEFAULT_ENHANCEMENTS, type PromptEnhancementValues } fr
 
 interface ImageGenerateTabProps {
   productId: string
+  initialPrompt?: string
 }
 
-export function ImageGenerateTab({ productId }: ImageGenerateTabProps) {
+export function ImageGenerateTab({ productId, initialPrompt }: ImageGenerateTabProps) {
   const {
     promptTemplates,
     referenceSets,
@@ -90,6 +91,14 @@ export function ImageGenerateTab({ productId }: ImageGenerateTabProps) {
     fetchPromptTemplates(productId)
     fetchReferenceSets(productId)
   }, [productId, fetchPromptTemplates, fetchReferenceSets])
+
+  // Pre-fill prompt from query param
+  useEffect(() => {
+    if (initialPrompt && !prompt) {
+      setPrompt(initialPrompt)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPrompt])
 
   useEffect(() => {
     setDidInitDefaults(false)

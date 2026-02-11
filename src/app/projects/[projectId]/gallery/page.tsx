@@ -98,11 +98,16 @@ export default function ProjectGalleryPage({
 
   // Flat list of all non-video images for lightbox navigation
   const allImageOnly = useMemo(() => {
-    const result: (GeneratedImage & { _productName: string })[] = []
+    const result: (GeneratedImage & { _productName: string; _prompt?: string | null; _productId: string })[] = []
     for (const group of productGroups) {
       for (const img of group.images) {
         if (img.media_type !== 'video') {
-          result.push({ ...img, _productName: group.product_name })
+          result.push({
+            ...img,
+            _productName: group.product_name,
+            _prompt: (img as GeneratedImage & { prompt?: string | null }).prompt ?? null,
+            _productId: group.product_id,
+          })
         }
       }
     }
@@ -123,6 +128,8 @@ export default function ProjectGalleryPage({
       variation_number: img.variation_number,
       approval_status: img.approval_status ?? 'pending',
       notes: img.notes,
+      prompt: img._prompt,
+      productId: img._productId,
     }))
   }, [allImageOnly, signedUrlsById])
 
@@ -387,6 +394,7 @@ export default function ProjectGalleryPage({
           onNavigate={(index) => setLightboxIndex(index)}
           onApprovalChange={handleApprovalChange}
           promptName={allImageOnly[lightboxIndex]?._productName}
+          projectId={projectId}
           onRequestSignedUrls={ensureSignedUrls}
         />
       )}
