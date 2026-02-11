@@ -16,15 +16,18 @@ import {
   Play,
   X,
   Upload,
+  Trash2,
 } from 'lucide-react'
 import Link from 'next/link'
 
-type StatusFilter = 'all' | 'pending' | 'approved'
+type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'request_changes'
 
 const STATUS_FILTERS: { label: string; value: StatusFilter }[] = [
   { label: 'All', value: 'all' },
   { label: 'Pending', value: 'pending' },
   { label: 'Approved', value: 'approved' },
+  { label: 'Rejected', value: 'rejected' },
+  { label: 'Changes', value: 'request_changes' },
 ]
 
 type SignedImageUrls = {
@@ -48,6 +51,7 @@ export default function GalleryPage({
     fetchGallery,
     updateImageApproval,
     deleteImage,
+    bulkDeleteImages,
     fetchGenerationJobs,
   } = useAppStore()
 
@@ -59,6 +63,7 @@ export default function GalleryPage({
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [signedUrlsById, setSignedUrlsById] = useState<Record<string, SignedImageUrls>>({})
+  const [bulkDeleting, setBulkDeleting] = useState(false)
   const signedUrlsRef = useRef(signedUrlsById)
 
   const [uploadingGallery, setUploadingGallery] = useState(false)
@@ -132,7 +137,17 @@ export default function GalleryPage({
   // Filtered images
   const filteredImages = useMemo(() => {
     return galleryImages.filter((img) => {
-      if (statusFilter !== 'all') {
+      if (statusFilter === 'all') {
+        // "All" excludes rejected and request_changes
+        const imgStatus = img.approval_status ?? 'pending'
+        if (imgStatus === 'rejected' || imgStatus === 'request_changes') return false
+      } else if (statusFilter === 'rejected') {
+        const imgStatus = img.approval_status ?? 'pending'
+        if (imgStatus !== 'rejected') return false
+      } else if (statusFilter === 'request_changes') {
+        const imgStatus = img.approval_status ?? 'pending'
+        if (imgStatus !== 'request_changes') return false
+      } else {
         const imgStatus = img.approval_status ?? 'pending'
         if (imgStatus !== statusFilter) return false
       }
@@ -144,6 +159,15 @@ export default function GalleryPage({
       return true
     })
   }, [galleryImages, statusFilter, mediaFilter, jobFilter])
+
+  // Count of rejected images (always from full gallery, not filtered)
+  const rejectedCount = useMemo(() => {
+    return galleryImages.filter((img) => img.approval_status === 'rejected').length
+  }, [galleryImages])
+
+  const requestChangesCount = useMemo(() => {
+    return galleryImages.filter((img) => img.approval_status === 'request_changes').length
+  }, [galleryImages])
 
   // Build a template lookup map
   const templateMap = useMemo(() => {
@@ -192,8 +216,9 @@ export default function GalleryPage({
       variation_number: img.variation_number,
       approval_status: img.approval_status ?? 'pending',
       notes: img.notes,
+      productId: id,
     }))
-  }, [imageOnly, signedUrlsById])
+  }, [imageOnly, signedUrlsById, id])
 
   const ensureSignedUrls = useCallback(async (imageId: string) => {
     const cached = signedUrlsRef.current[imageId]
@@ -215,20 +240,35 @@ export default function GalleryPage({
     onClose: () => setPlayingVideoUrl(null),
   })
 
-  const handleApprovalChange = async (imageId: string, status: ApprovalStatus) => {
-    if (status === 'rejected') {
-      await deleteImage(imageId)
-      // Adjust lightbox after deletion
-      if (lightboxIndex !== null) {
-        const newFiltered = imageOnly.filter((img) => img.id !== imageId)
-        if (newFiltered.length === 0) {
-          setLightboxIndex(null)
-        } else if (lightboxIndex >= newFiltered.length) {
-          setLightboxIndex(newFiltered.length - 1)
-        }
+  const handleApprovalChange = async (imageId: string, status: ApprovalStatus, notes?: string) => {
+    await updateImageApproval(imageId, status, notes)
+  }
+
+  const handleDelete = async (imageId: string) => {
+    await deleteImage(imageId)
+    // Adjust lightbox after deletion
+    if (lightboxIndex !== null) {
+      const newFiltered = imageOnly.filter((img) => img.id !== imageId)
+      if (newFiltered.length === 0) {
+        setLightboxIndex(null)
+      } else if (lightboxIndex >= newFiltered.length) {
+        setLightboxIndex(newFiltered.length - 1)
       }
-    } else {
-      await updateImageApproval(imageId, status)
+    }
+  }
+
+  const handleBulkDelete = async () => {
+    const rejectedIds = galleryImages
+      .filter((img) => img.approval_status === 'rejected')
+      .map((img) => img.id)
+    if (rejectedIds.length === 0) return
+    if (!window.confirm(`Permanently delete ${rejectedIds.length} rejected image${rejectedIds.length !== 1 ? 's' : ''}? This cannot be undone.`)) return
+    setBulkDeleting(true)
+    try {
+      await bulkDeleteImages(rejectedIds)
+      await fetchGallery(id)
+    } finally {
+      setBulkDeleting(false)
     }
   }
 
@@ -311,6 +351,18 @@ export default function GalleryPage({
             Approved
           </span>
         )
+      case 'rejected':
+        return (
+          <span className="absolute top-2 right-2 rounded-full bg-red-600 px-2 py-0.5 text-xs font-medium text-white">
+            Rejected
+          </span>
+        )
+      case 'request_changes':
+        return (
+          <span className="absolute top-2 right-2 rounded-full bg-orange-600 px-2 py-0.5 text-xs font-medium text-white">
+            Changes
+          </span>
+        )
       default:
         return (
           <span className="absolute top-2 right-2 rounded-full bg-zinc-600 px-2 py-0.5 text-xs font-medium text-zinc-300">
@@ -378,11 +430,25 @@ export default function GalleryPage({
                 onClick={() => setStatusFilter(f.value)}
                 className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${
                   statusFilter === f.value
-                    ? 'bg-zinc-100 text-zinc-900'
+                    ? f.value === 'rejected'
+                      ? 'bg-red-600 text-white'
+                      : f.value === 'request_changes'
+                        ? 'bg-orange-600 text-white'
+                        : 'bg-zinc-100 text-zinc-900'
                     : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
                 }`}
               >
                 {f.label}
+                {f.value === 'rejected' && rejectedCount > 0 && statusFilter !== 'rejected' && (
+                  <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-red-600 px-1.5 text-[10px] font-bold text-white min-w-[18px]">
+                    {rejectedCount}
+                  </span>
+                )}
+                {f.value === 'request_changes' && requestChangesCount > 0 && statusFilter !== 'request_changes' && (
+                  <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-orange-600 px-1.5 text-[10px] font-bold text-white min-w-[18px]">
+                    {requestChangesCount}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -438,6 +504,20 @@ export default function GalleryPage({
               ))}
             </select>
           )}
+
+          {statusFilter === 'rejected' && rejectedCount > 0 && (
+            <>
+              <div className="mx-2 hidden sm:block h-5 w-px bg-zinc-700" />
+              <button
+                onClick={handleBulkDelete}
+                disabled={bulkDeleting}
+                className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-40 transition-colors"
+              >
+                {bulkDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Delete All Rejected
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -451,9 +531,13 @@ export default function GalleryPage({
           <ImageIcon className="mb-4 h-16 w-16" />
           <p className="text-lg font-medium">No images found</p>
           <p className="mt-1 text-sm">
-            {galleryImages.length === 0
-              ? 'Generate some images to see them here.'
-              : 'Try adjusting your filters.'}
+            {statusFilter === 'rejected'
+              ? 'No rejected images to review.'
+              : statusFilter === 'request_changes'
+                ? 'No images with requested changes.'
+                : galleryImages.length === 0
+                  ? 'Generate some images to see them here.'
+                  : 'Try adjusting your filters.'}
           </p>
         </div>
       ) : sceneGroups ? (
@@ -469,21 +553,39 @@ export default function GalleryPage({
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                   {group.images.map((img) => {
                     const globalIndex = imageOnly.findIndex((item) => item.id === img.id)
+                    const isRejected = img.approval_status === 'rejected'
+                    const isChanges = img.approval_status === 'request_changes'
                     return (
                       <button
                         key={img.id}
                         onClick={() => {
                           if (globalIndex !== -1) setLightboxIndex(globalIndex)
                         }}
-                        className="group relative aspect-square overflow-hidden rounded-lg border border-zinc-800 bg-zinc-800 hover:border-zinc-600 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500"
+                        className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
+                          isRejected
+                            ? 'border-red-600/60 hover:border-red-500'
+                            : isChanges
+                              ? 'border-orange-600/60 hover:border-orange-500'
+                              : 'border-zinc-800 hover:border-zinc-600'
+                        }`}
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           src={img.thumb_public_url ?? img.public_url ?? undefined}
                           alt={`Variation ${img.variation_number}`}
-                          className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                          className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
                         />
                         {statusBadge(img.approval_status)}
+                        {isRejected && img.notes && (
+                          <div className="absolute bottom-0 inset-x-0 bg-black/70 px-2 py-1">
+                            <p className="text-[10px] text-red-300 truncate">{img.notes}</p>
+                          </div>
+                        )}
+                        {isChanges && img.notes && (
+                          <div className="absolute bottom-0 inset-x-0 bg-black/70 px-2 py-1">
+                            <p className="text-[10px] text-orange-300 truncate">{img.notes}</p>
+                          </div>
+                        )}
                       </button>
                     )
                   })}
@@ -493,8 +595,10 @@ export default function GalleryPage({
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-4 px-4 sm:px-6 py-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-            {filteredImages.map((img, index) => {
+            {filteredImages.map((img) => {
               const isVideo = (img as unknown as Record<string, unknown>).media_type === 'video'
+              const isRejected = img.approval_status === 'rejected'
+              const isChanges = img.approval_status === 'request_changes'
               const imageIndex = imageOnly.findIndex((item) => item.id === img.id)
               return (
                 <button
@@ -506,7 +610,13 @@ export default function GalleryPage({
                       if (imageIndex !== -1) setLightboxIndex(imageIndex)
                     }
                   }}
-                  className="group relative aspect-square overflow-hidden rounded-lg border border-zinc-800 bg-zinc-800 hover:border-zinc-600 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500"
+                  className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
+                    isRejected
+                      ? 'border-red-600/60 hover:border-red-500'
+                      : isChanges
+                        ? 'border-orange-600/60 hover:border-orange-500'
+                        : 'border-zinc-800 hover:border-zinc-600'
+                  }`}
                 >
                   {isVideo ? (
                     <div className="flex h-full w-full items-center justify-center bg-zinc-800">
@@ -517,7 +627,7 @@ export default function GalleryPage({
                     <img
                       src={img.thumb_public_url ?? img.public_url ?? undefined}
                       alt={`Variation ${img.variation_number}`}
-                      className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                      className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
                     />
                   )}
                   {isVideo && (
@@ -526,6 +636,16 @@ export default function GalleryPage({
                     </span>
                   )}
                   {statusBadge(img.approval_status)}
+                  {isRejected && img.notes && (
+                    <div className="absolute bottom-0 inset-x-0 bg-black/70 px-2 py-1">
+                      <p className="text-[10px] text-red-300 truncate">{img.notes}</p>
+                    </div>
+                  )}
+                  {isChanges && img.notes && (
+                    <div className="absolute bottom-0 inset-x-0 bg-black/70 px-2 py-1">
+                      <p className="text-[10px] text-orange-300 truncate">{img.notes}</p>
+                    </div>
+                  )}
                 </button>
               )
             })}
@@ -561,6 +681,8 @@ export default function GalleryPage({
           onClose={() => setLightboxIndex(null)}
           onNavigate={(index) => setLightboxIndex(index)}
           onApprovalChange={handleApprovalChange}
+          onDelete={handleDelete}
+          projectId={projectId}
           onRequestSignedUrls={ensureSignedUrls}
         />
       )}

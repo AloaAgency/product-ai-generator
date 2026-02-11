@@ -47,6 +47,7 @@ type GenerationJobRecord = {
   generation_model: string | null
   job_type?: 'image' | 'video' | null
   scene_id?: string | null
+  source_image_id?: string | null
 }
 
 const normalizeJobType = (job: GenerationJobRecord) => (job.job_type === 'video' ? 'video' : 'image')
@@ -246,6 +247,25 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
   // Combine product images first, then texture images
   const allReferenceImages = [...limitedProductImages, ...textureImages]
   const refImagesBase64: { mimeType: string; base64: string }[] = []
+
+  // If this is a Fix Image job, fetch the source image and prepend it
+  if ((job as GenerationJobRecord).source_image_id) {
+    const { data: sourceImg } = await supabase
+      .from(T.generated_images)
+      .select('storage_path, mime_type')
+      .eq('id', (job as GenerationJobRecord).source_image_id!)
+      .single()
+    if (sourceImg) {
+      const { data: sourceFileData } = await supabase.storage
+        .from('generated-images')
+        .download(sourceImg.storage_path)
+      if (sourceFileData) {
+        const arrayBuffer = await sourceFileData.arrayBuffer()
+        const base64 = Buffer.from(arrayBuffer).toString('base64')
+        refImagesBase64.push({ mimeType: sourceImg.mime_type, base64 })
+      }
+    }
+  }
 
   for (const refImg of allReferenceImages) {
     const { data: fileData } = await supabase.storage

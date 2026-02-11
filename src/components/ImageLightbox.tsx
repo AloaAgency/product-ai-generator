@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useCallback, useState } from 'react'
+import { useEffect, useCallback, useState, useRef } from 'react'
 import {
   X,
   ChevronLeft,
@@ -11,9 +11,12 @@ import {
   Loader2,
   Copy,
   ExternalLink,
+  Trash2,
+  AlertTriangle,
+  Wand2,
 } from 'lucide-react'
 
-export type ApprovalStatus = 'approved' | 'rejected' | 'pending' | null
+export type ApprovalStatus = 'approved' | 'rejected' | 'pending' | 'request_changes' | null
 
 export interface LightboxImage {
   id: string
@@ -37,7 +40,8 @@ interface ImageLightboxProps {
   currentIndex: number
   onClose: () => void
   onNavigate: (index: number) => void
-  onApprovalChange: (imageId: string, status: ApprovalStatus) => Promise<void>
+  onApprovalChange: (imageId: string, status: ApprovalStatus, notes?: string) => Promise<void>
+  onDelete?: (imageId: string) => Promise<void>
   promptName?: string | null
   projectId?: string | null
   onRequestSignedUrls?: (imageId: string) => Promise<{
@@ -54,6 +58,7 @@ export function ImageLightbox({
   onClose,
   onNavigate,
   onApprovalChange,
+  onDelete,
   promptName,
   projectId,
   onRequestSignedUrls,
@@ -61,10 +66,19 @@ export function ImageLightbox({
   const [isUpdating, setIsUpdating] = useState(false)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [notesValue, setNotesValue] = useState('')
+  const notesInputRef = useRef<HTMLInputElement>(null)
 
   const currentImage = images[currentIndex]
   const hasPrev = currentIndex > 0
   const hasNext = currentIndex < images.length - 1
+
+  // Sync notes when navigating
+  useEffect(() => {
+    setNotesValue(currentImage?.notes || '')
+    setPromptExpanded(false)
+    setCopied(false)
+  }, [currentImage?.id, currentImage?.notes])
 
   const handlePrev = useCallback(() => {
     if (hasPrev) onNavigate(currentIndex - 1)
@@ -87,14 +101,44 @@ export function ImageLightbox({
 
   const handleReject = useCallback(async () => {
     if (!currentImage || isUpdating) return
-    if (!window.confirm('Delete this image? This action cannot be undone.')) return
     setIsUpdating(true)
     try {
-      await onApprovalChange(currentImage.id, 'rejected')
+      const newStatus: ApprovalStatus = currentImage.approval_status === 'rejected' ? null : 'rejected'
+      await onApprovalChange(currentImage.id, newStatus)
     } finally {
       setIsUpdating(false)
     }
   }, [currentImage, isUpdating, onApprovalChange])
+
+  const handleRequestChanges = useCallback(async () => {
+    if (!currentImage || isUpdating) return
+    setIsUpdating(true)
+    try {
+      const newStatus: ApprovalStatus = currentImage.approval_status === 'request_changes' ? null : 'request_changes'
+      await onApprovalChange(currentImage.id, newStatus)
+    } finally {
+      setIsUpdating(false)
+    }
+  }, [currentImage, isUpdating, onApprovalChange])
+
+  const handlePermanentDelete = useCallback(async () => {
+    if (!currentImage || isUpdating || !onDelete) return
+    if (!window.confirm('Permanently delete this image? This cannot be undone.')) return
+    setIsUpdating(true)
+    try {
+      await onDelete(currentImage.id)
+    } finally {
+      setIsUpdating(false)
+    }
+  }, [currentImage, isUpdating, onDelete])
+
+  const handleSaveNotes = useCallback(async () => {
+    if (!currentImage) return
+    const status = currentImage.approval_status
+    if (status !== 'rejected' && status !== 'request_changes') return
+    if (notesValue === (currentImage.notes || '')) return
+    await onApprovalChange(currentImage.id, status, notesValue)
+  }, [currentImage, notesValue, onApprovalChange])
 
   const handleDownload = useCallback(async () => {
     if (!currentImage) return
@@ -133,30 +177,48 @@ export function ImageLightbox({
     }
   }, [currentImage?.prompt])
 
+  const isRejected = currentImage?.approval_status === 'rejected'
+  const isApproved = currentImage?.approval_status === 'approved'
+  const isRequestChanges = currentImage?.approval_status === 'request_changes'
+  const showNotesInput = isRejected || isRequestChanges
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't capture keys when typing in the notes input
+      if (notesInputRef.current && document.activeElement === notesInputRef.current) {
+        if (e.key === 'Escape') {
+          notesInputRef.current.blur()
+          e.preventDefault()
+        } else if (e.key === 'Enter') {
+          notesInputRef.current.blur()
+          e.preventDefault()
+        }
+        return
+      }
       switch (e.key) {
         case 'Escape': onClose(); break
         case 'ArrowLeft': handlePrev(); break
         case 'ArrowRight': handleNext(); break
         case 'Enter': e.preventDefault(); void handleApprove(); break
         case 'Delete':
-        case 'Backspace': e.preventDefault(); void handleReject(); break
+        case 'Backspace':
+          e.preventDefault()
+          if (isRejected && onDelete) {
+            void handlePermanentDelete()
+          } else {
+            void handleReject()
+          }
+          break
         case 'a': case 'A': void handleApprove(); break
         case 'r': case 'R': void handleReject(); break
         case 'd': case 'D': void handleDownload(); break
-        case 'c': case 'C': void handleCopyPrompt(); break
+        case 'c': case 'C': void handleRequestChanges(); break
+        case 'p': case 'P': void handleCopyPrompt(); break
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, handlePrev, handleNext, handleApprove, handleReject, handleDownload, handleCopyPrompt])
-
-  // Reset prompt expanded state when navigating to a different image
-  useEffect(() => {
-    setPromptExpanded(false)
-    setCopied(false)
-  }, [currentImage?.id])
+  }, [onClose, handlePrev, handleNext, handleApprove, handleReject, handleDownload, handleCopyPrompt, handleRequestChanges, handlePermanentDelete, isRejected, onDelete])
 
   // Fetch signed URLs when the current image changes and has no displayable URL
   useEffect(() => {
@@ -174,7 +236,6 @@ export function ImageLightbox({
     || currentImage.preview_public_url
     || currentImage.signed_url
     || currentImage.public_url
-  const isApproved = currentImage.approval_status === 'approved'
 
   return (
     <div
@@ -222,7 +283,7 @@ export function ImageLightbox({
               <button
                 onClick={handleCopyPrompt}
                 className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
-                title="Copy Prompt (C)"
+                title="Copy Prompt (P)"
               >
                 {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
               </button>
@@ -273,7 +334,46 @@ export function ImageLightbox({
               Approved
             </div>
           )}
+          {isRejected && (
+            <div className="absolute top-4 right-4 px-3 py-1.5 rounded-full text-sm font-medium bg-red-500/90 text-white">
+              Rejected
+            </div>
+          )}
+          {isRequestChanges && (
+            <div className="absolute top-4 right-4 px-3 py-1.5 rounded-full text-sm font-medium bg-orange-500/90 text-white">
+              Changes Requested
+            </div>
+          )}
         </div>
+
+        {/* Notes input (for rejected or request_changes) */}
+        {showNotesInput && (
+          <div className="px-4 py-2 bg-gray-900/60 border-t border-gray-800 flex items-center gap-3">
+            <span className={`text-sm shrink-0 ${isRequestChanges ? 'text-orange-400' : 'text-red-400'}`}>
+              {isRequestChanges ? 'Requested changes:' : 'Reason:'}
+            </span>
+            <input
+              ref={notesInputRef}
+              type="text"
+              value={notesValue}
+              onChange={(e) => setNotesValue(e.target.value)}
+              onBlur={() => void handleSaveNotes()}
+              placeholder={isRequestChanges ? 'Describe changes needed...' : 'Optional rejection reason...'}
+              className={`flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder:text-gray-500 focus:outline-none ${
+                isRequestChanges ? 'focus:border-orange-500' : 'focus:border-red-500'
+              }`}
+            />
+            {isRequestChanges && projectId && currentImage.productId && (
+              <a
+                href={`/projects/${projectId}/products/${currentImage.productId}/fix-image?sourceImageId=${currentImage.id}`}
+                className="flex items-center gap-1.5 shrink-0 rounded-lg bg-orange-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-500 transition-colors"
+              >
+                <Wand2 className="w-3.5 h-3.5" />
+                Fix
+              </a>
+            )}
+          </div>
+        )}
 
         {/* Footer toolbar */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 px-3 py-2 sm:px-4 sm:py-3 bg-gray-900/80 rounded-b-xl">
@@ -283,6 +383,8 @@ export function ImageLightbox({
               const thumbUrl = img.thumb_signed_url || img.thumb_public_url || img.signed_url || img.public_url
               const isActive = index === currentIndex
               const thumbApproved = img.approval_status === 'approved'
+              const thumbRejected = img.approval_status === 'rejected'
+              const thumbChanges = img.approval_status === 'request_changes'
               return (
                 <button
                   key={img.id}
@@ -292,7 +394,11 @@ export function ImageLightbox({
                       ? 'border-white ring-2 ring-white/50'
                       : thumbApproved
                         ? 'border-green-500'
-                        : 'border-gray-600 hover:border-gray-400'
+                        : thumbRejected
+                          ? 'border-red-500'
+                          : thumbChanges
+                            ? 'border-orange-500'
+                            : 'border-gray-600 hover:border-gray-400'
                   }`}
                 >
                   {thumbUrl && (
@@ -301,6 +407,16 @@ export function ImageLightbox({
                   {thumbApproved && (
                     <div className="absolute inset-0 flex items-center justify-center bg-green-500/30">
                       <Check className="w-4 h-4 text-green-500" />
+                    </div>
+                  )}
+                  {thumbRejected && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-red-500/30">
+                      <XCircle className="w-4 h-4 text-red-500" />
+                    </div>
+                  )}
+                  {thumbChanges && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-orange-500/30">
+                      <AlertTriangle className="w-4 h-4 text-orange-500" />
                     </div>
                   )}
                 </button>
@@ -326,12 +442,40 @@ export function ImageLightbox({
             <button
               onClick={handleReject}
               disabled={isUpdating}
-              className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors bg-gray-700 text-gray-200 hover:bg-red-600 hover:text-white"
-              title="Delete (Delete or R)"
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors ${
+                isRejected
+                  ? 'bg-red-600 text-white hover:bg-red-700'
+                  : 'bg-gray-700 text-gray-200 hover:bg-red-600 hover:text-white'
+              }`}
+              title="Reject (R)"
             >
               {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
-              <span className="hidden sm:inline">Delete</span>
+              <span className="hidden sm:inline">Reject</span>
             </button>
+            <button
+              onClick={handleRequestChanges}
+              disabled={isUpdating}
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors ${
+                isRequestChanges
+                  ? 'bg-orange-600 text-white hover:bg-orange-700'
+                  : 'bg-gray-700 text-gray-200 hover:bg-orange-600 hover:text-white'
+              }`}
+              title="Request Changes (C)"
+            >
+              {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <AlertTriangle className="w-4 h-4" />}
+              <span className="hidden sm:inline">Changes</span>
+            </button>
+            {isRejected && onDelete && (
+              <button
+                onClick={handlePermanentDelete}
+                disabled={isUpdating}
+                className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors bg-gray-700 text-gray-200 hover:bg-red-800 hover:text-white"
+                title="Permanently Delete (Delete/Backspace)"
+              >
+                {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                <span className="hidden sm:inline">Delete</span>
+              </button>
+            )}
             <button
               onClick={handleDownload}
               className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium bg-gray-700 text-gray-200 hover:bg-blue-600 hover:text-white transition-colors"
