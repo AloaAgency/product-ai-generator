@@ -98,6 +98,7 @@ export interface GenerationJob {
   generation_model: string
   job_type: 'image' | 'video'
   scene_id: string | null
+  source_image_id: string | null
   created_at: string
   started_at: string | null
   completed_at: string | null
@@ -115,7 +116,7 @@ export interface GeneratedImage {
   preview_public_url: string | null
   mime_type: string
   file_size: number | null
-  approval_status: 'approved' | 'rejected' | 'pending' | null
+  approval_status: 'approved' | 'rejected' | 'pending' | 'request_changes' | null
   notes: string | null
   media_type: 'image' | 'video'
   scene_id: string | null

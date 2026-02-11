@@ -14,14 +14,17 @@ import {
   Play,
   X,
   Package,
+  Trash2,
 } from 'lucide-react'
 
-type StatusFilter = 'all' | 'pending' | 'approved'
+type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'request_changes'
 
 const STATUS_FILTERS: { label: string; value: StatusFilter }[] = [
   { label: 'All', value: 'all' },
   { label: 'Pending', value: 'pending' },
   { label: 'Approved', value: 'approved' },
+  { label: 'Rejected', value: 'rejected' },
+  { label: 'Changes', value: 'request_changes' },
 ]
 
 type SignedImageUrls = {
@@ -44,7 +47,7 @@ export default function ProjectGalleryPage({
   params: Promise<{ projectId: string }>
 }) {
   const { projectId } = use(params)
-  const { currentProject, fetchProject, updateProject } = useAppStore()
+  const { currentProject, fetchProject, updateProject, bulkDeleteImages } = useAppStore()
 
   const [productGroups, setProductGroups] = useState<ProductGroup[]>([])
   const [loading, setLoading] = useState(true)
@@ -54,6 +57,9 @@ export default function ProjectGalleryPage({
   const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null)
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [signedUrlsById, setSignedUrlsById] = useState<Record<string, SignedImageUrls>>({})
+  const [rejectedCount, setRejectedCount] = useState(0)
+  const [requestChangesCount, setRequestChangesCount] = useState(0)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
   const signedUrlsRef = useRef(signedUrlsById)
 
   useEffect(() => {
@@ -76,6 +82,12 @@ export default function ProjectGalleryPage({
       if (!res.ok) throw new Error('Failed to fetch')
       const data = await res.json()
       setProductGroups(data.products || [])
+      if (typeof data.rejected_count === 'number') {
+        setRejectedCount(data.rejected_count)
+      }
+      if (typeof data.request_changes_count === 'number') {
+        setRequestChangesCount(data.request_changes_count)
+      }
     } catch (err) {
       console.error('[ProjectGallery] Fetch error:', err)
       setProductGroups([])
@@ -153,26 +165,41 @@ export default function ProjectGalleryPage({
     onClose: () => setPlayingVideoUrl(null),
   })
 
-  const handleApprovalChange = async (imageId: string, status: ApprovalStatus) => {
-    if (status === 'rejected') {
-      await fetch(`/api/images/${imageId}`, { method: 'DELETE' })
-    } else {
-      await fetch(`/api/images/${imageId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approval_status: status }),
-      })
-    }
-    // Refresh gallery after change
+  const handleApprovalChange = async (imageId: string, status: ApprovalStatus, notes?: string) => {
+    await fetch(`/api/images/${imageId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approval_status: status, ...(notes !== undefined ? { notes } : {}) }),
+    })
     await fetchProjectGallery()
-    // Close lightbox if deleted and no more images
-    if (status === 'rejected' && lightboxIndex !== null) {
+  }
+
+  const handleDelete = async (imageId: string) => {
+    await fetch(`/api/images/${imageId}`, { method: 'DELETE' })
+    await fetchProjectGallery()
+    // Adjust lightbox after deletion
+    if (lightboxIndex !== null) {
       const newTotal = allImageOnly.filter((img) => img.id !== imageId).length
       if (newTotal === 0) {
         setLightboxIndex(null)
       } else if (lightboxIndex >= newTotal) {
         setLightboxIndex(newTotal - 1)
       }
+    }
+  }
+
+  const handleBulkDelete = async () => {
+    const rejectedIds = allImageOnly
+      .filter((img) => img.approval_status === 'rejected')
+      .map((img) => img.id)
+    if (rejectedIds.length === 0) return
+    if (!window.confirm(`Permanently delete ${rejectedIds.length} rejected image${rejectedIds.length !== 1 ? 's' : ''}? This cannot be undone.`)) return
+    setBulkDeleting(true)
+    try {
+      await bulkDeleteImages(rejectedIds)
+      await fetchProjectGallery()
+    } finally {
+      setBulkDeleting(false)
     }
   }
 
@@ -200,6 +227,18 @@ export default function ProjectGalleryPage({
         return (
           <span className="absolute top-2 right-2 rounded-full bg-green-600 px-2 py-0.5 text-xs font-medium text-white">
             Approved
+          </span>
+        )
+      case 'rejected':
+        return (
+          <span className="absolute top-2 right-2 rounded-full bg-red-600 px-2 py-0.5 text-xs font-medium text-white">
+            Rejected
+          </span>
+        )
+      case 'request_changes':
+        return (
+          <span className="absolute top-2 right-2 rounded-full bg-orange-600 px-2 py-0.5 text-xs font-medium text-white">
+            Changes
           </span>
         )
       default:
@@ -231,11 +270,25 @@ export default function ProjectGalleryPage({
                 onClick={() => setStatusFilter(f.value)}
                 className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${
                   statusFilter === f.value
-                    ? 'bg-zinc-100 text-zinc-900'
+                    ? f.value === 'rejected'
+                      ? 'bg-red-600 text-white'
+                      : f.value === 'request_changes'
+                        ? 'bg-orange-600 text-white'
+                        : 'bg-zinc-100 text-zinc-900'
                     : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
                 }`}
               >
                 {f.label}
+                {f.value === 'rejected' && rejectedCount > 0 && statusFilter !== 'rejected' && (
+                  <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-red-600 px-1.5 text-[10px] font-bold text-white min-w-[18px]">
+                    {rejectedCount}
+                  </span>
+                )}
+                {f.value === 'request_changes' && requestChangesCount > 0 && statusFilter !== 'request_changes' && (
+                  <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-orange-600 px-1.5 text-[10px] font-bold text-white min-w-[18px]">
+                    {requestChangesCount}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -281,9 +334,21 @@ export default function ProjectGalleryPage({
             </>
           )}
 
-          <span className="ml-0 sm:ml-auto rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm text-zinc-400">
-            {totalImages} item{totalImages !== 1 ? 's' : ''}
-          </span>
+          <div className="ml-0 sm:ml-auto flex items-center gap-2">
+            {statusFilter === 'rejected' && totalImages > 0 && (
+              <button
+                onClick={handleBulkDelete}
+                disabled={bulkDeleting}
+                className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-40 transition-colors"
+              >
+                {bulkDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Delete All Rejected
+              </button>
+            )}
+            <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm text-zinc-400">
+              {totalImages} item{totalImages !== 1 ? 's' : ''}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -299,7 +364,11 @@ export default function ProjectGalleryPage({
           </div>
           <p className="text-lg font-medium">No images found</p>
           <p className="mt-1 text-sm">
-            Generate images in your products to see them here.
+            {statusFilter === 'rejected'
+              ? 'No rejected images to review.'
+              : statusFilter === 'request_changes'
+                ? 'No images with requested changes.'
+                : 'Generate images in your products to see them here.'}
           </p>
         </div>
       ) : (
@@ -317,6 +386,8 @@ export default function ProjectGalleryPage({
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                 {group.images.map((img) => {
                   const isVideo = img.media_type === 'video'
+                  const isRejected = img.approval_status === 'rejected'
+                  const isChanges = img.approval_status === 'request_changes'
                   const globalIndex = allImageOnly.findIndex(
                     (item) => item.id === img.id
                   )
@@ -330,7 +401,13 @@ export default function ProjectGalleryPage({
                           setLightboxIndex(globalIndex)
                         }
                       }}
-                      className="group relative aspect-square overflow-hidden rounded-lg border border-zinc-800 bg-zinc-800 hover:border-zinc-600 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500"
+                      className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
+                        isRejected
+                          ? 'border-red-600/60 hover:border-red-500'
+                          : isChanges
+                            ? 'border-orange-600/60 hover:border-orange-500'
+                            : 'border-zinc-800 hover:border-zinc-600'
+                      }`}
                     >
                       {isVideo ? (
                         <div className="flex h-full w-full items-center justify-center bg-zinc-800">
@@ -341,7 +418,7 @@ export default function ProjectGalleryPage({
                         <img
                           src={img.thumb_public_url ?? img.public_url ?? undefined}
                           alt={`Variation ${img.variation_number}`}
-                          className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                          className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
                         />
                       )}
                       {isVideo && (
@@ -350,6 +427,16 @@ export default function ProjectGalleryPage({
                         </span>
                       )}
                       {statusBadge(img.approval_status)}
+                      {isRejected && img.notes && (
+                        <div className="absolute bottom-0 inset-x-0 bg-black/70 px-2 py-1">
+                          <p className="text-[10px] text-red-300 truncate">{img.notes}</p>
+                        </div>
+                      )}
+                      {isChanges && img.notes && (
+                        <div className="absolute bottom-0 inset-x-0 bg-black/70 px-2 py-1">
+                          <p className="text-[10px] text-orange-300 truncate">{img.notes}</p>
+                        </div>
+                      )}
                     </button>
                   )
                 })}
@@ -393,6 +480,7 @@ export default function ProjectGalleryPage({
           onClose={() => setLightboxIndex(null)}
           onNavigate={(index) => setLightboxIndex(index)}
           onApprovalChange={handleApprovalChange}
+          onDelete={handleDelete}
           promptName={allImageOnly[lightboxIndex]?._productName}
           projectId={projectId}
           onRequestSignedUrls={ensureSignedUrls}

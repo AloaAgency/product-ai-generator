@@ -54,6 +54,7 @@ export async function POST(
       parallelism_override,
       batch_override,
       time_budget_ms_override,
+      source_image_id = null,
     } = body
 
     if (!prompt_text) {
@@ -61,6 +62,18 @@ export async function POST(
     }
 
     const supabase = createServiceClient()
+
+    // Validate source_image_id if provided
+    if (source_image_id) {
+      const { data: sourceImg, error: sourceErr } = await supabase
+        .from(T.generated_images)
+        .select('id')
+        .eq('id', source_image_id)
+        .single()
+      if (sourceErr || !sourceImg) {
+        return NextResponse.json({ error: 'Source image not found' }, { status: 400 })
+      }
+    }
 
     // Fetch product
     const { data: product, error: productError } = await supabase
@@ -189,8 +202,12 @@ export async function POST(
     const mergedSettings = mergeStyles(projectStyles, typedProduct.global_style_settings)
 
     // Build final prompt
+    let userPrompt = prompt_text
+    if (source_image_id) {
+      userPrompt = `Using the provided source image as a base, recreate it with the following modifications: ${prompt_text}. Keep the rest of the image as close to the original as possible.`
+    }
     const finalPrompt = buildFullPrompt(
-      prompt_text,
+      userPrompt,
       mergedSettings,
       finalProductCount,
       finalTextureCount
@@ -215,6 +232,7 @@ export async function POST(
         failed_count: 0,
         generation_model: process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview',
         job_type: 'image',
+        source_image_id: source_image_id || null,
       })
       .select()
       .single()

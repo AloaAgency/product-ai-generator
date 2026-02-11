@@ -97,8 +97,15 @@ export async function GET(
       imagesQuery = imagesQuery.in('scene_id', sceneIds)
     }
 
-    if (approvalStatus) {
+    if (approvalStatus === 'rejected') {
+      imagesQuery = imagesQuery.eq('approval_status', 'rejected')
+    } else if (approvalStatus === 'request_changes') {
+      imagesQuery = imagesQuery.eq('approval_status', 'request_changes')
+    } else if (approvalStatus) {
       imagesQuery = imagesQuery.eq('approval_status', approvalStatus)
+    } else {
+      // Default: exclude rejected and request_changes images
+      imagesQuery = imagesQuery.or('approval_status.is.null,approval_status.in.(approved,pending)')
     }
     if (mediaType && mediaType !== 'all') {
       imagesQuery = imagesQuery.eq('media_type', mediaType)
@@ -190,7 +197,47 @@ export async function GET(
       ? result
       : result.filter((p) => p.images.length > 0)
 
-    return NextResponse.json({ products: filtered })
+    // Count rejected and request_changes images (for badge display)
+    let rejectedCount = 0
+    let requestChangesCount = 0
+
+    if (approvalStatus !== 'rejected') {
+      let rejectedQuery = supabase
+        .from(T.generated_images)
+        .select('id', { count: 'exact', head: true })
+        .eq('approval_status', 'rejected')
+      if (jobIds.length > 0 && sceneIds.length > 0) {
+        rejectedQuery = rejectedQuery.or(
+          `job_id.in.(${jobIds.join(',')}),scene_id.in.(${sceneIds.join(',')})`
+        )
+      } else if (jobIds.length > 0) {
+        rejectedQuery = rejectedQuery.in('job_id', jobIds)
+      } else {
+        rejectedQuery = rejectedQuery.in('scene_id', sceneIds)
+      }
+      const { count } = await rejectedQuery
+      rejectedCount = count ?? 0
+    }
+
+    if (approvalStatus !== 'request_changes') {
+      let changesQuery = supabase
+        .from(T.generated_images)
+        .select('id', { count: 'exact', head: true })
+        .eq('approval_status', 'request_changes')
+      if (jobIds.length > 0 && sceneIds.length > 0) {
+        changesQuery = changesQuery.or(
+          `job_id.in.(${jobIds.join(',')}),scene_id.in.(${sceneIds.join(',')})`
+        )
+      } else if (jobIds.length > 0) {
+        changesQuery = changesQuery.in('job_id', jobIds)
+      } else {
+        changesQuery = changesQuery.in('scene_id', sceneIds)
+      }
+      const { count } = await changesQuery
+      requestChangesCount = count ?? 0
+    }
+
+    return NextResponse.json({ products: filtered, rejected_count: rejectedCount, request_changes_count: requestChangesCount })
   } catch (err) {
     console.error('[ProjectGallery] Error:', err)
     return NextResponse.json(

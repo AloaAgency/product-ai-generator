@@ -70,6 +70,7 @@ interface AppState {
     texture_set_id?: string
     product_image_count?: number
     texture_image_count?: number
+    source_image_id?: string
   }) => Promise<GenerationJob>
   fetchJobStatus: (productId: string, jobId: string) => Promise<void>
   retryGenerationJob: (productId: string, jobId: string) => Promise<GenerationJob>
@@ -84,6 +85,7 @@ interface AppState {
   fetchGallery: (productId: string, filters?: { job_id?: string; approval_status?: string; media_type?: string; scene_id?: string }) => Promise<void>
   updateImageApproval: (imageId: string, approval_status: string | null, notes?: string) => Promise<void>
   deleteImage: (imageId: string) => Promise<void>
+  bulkDeleteImages: (imageIds: string[]) => Promise<void>
 
   // Settings Templates
   settingsTemplates: SettingsTemplate[]
@@ -536,6 +538,23 @@ export const useAppStore = create<AppState>((set, get) => ({
         ? {
             ...s.currentJob,
             images: s.currentJob.images.filter((img) => img.id !== imageId),
+          }
+        : s.currentJob,
+    }))
+  },
+  bulkDeleteImages: async (imageIds) => {
+    await api('/api/images/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageIds }),
+    })
+    const idSet = new Set(imageIds)
+    set((s) => ({
+      galleryImages: s.galleryImages.filter((i) => !idSet.has(i.id)),
+      currentJob: s.currentJob?.images
+        ? {
+            ...s.currentJob,
+            images: s.currentJob.images.filter((img) => !idSet.has(img.id)),
           }
         : s.currentJob,
     }))
