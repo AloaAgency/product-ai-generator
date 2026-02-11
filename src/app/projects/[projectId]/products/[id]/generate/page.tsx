@@ -1,6 +1,7 @@
 'use client'
 
 import { use, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Image as ImageIcon, Video } from 'lucide-react'
 import { ImageGenerateTab } from './_components/ImageGenerateTab'
 import { VideoGenerateTab } from './_components/VideoGenerateTab'
@@ -11,6 +12,8 @@ export default function GeneratePage({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { id } = use(params)
+  const searchParams = useSearchParams()
+  const initialPrompt = searchParams.get('prompt') ?? undefined
   const [activeTab, setActiveTab] = useState<'image' | 'video'>('image')
 
   return (
@@ -45,7 +48,7 @@ export default function GeneratePage({
 
       {/* Tab Content */}
       {activeTab === 'image' ? (
-        <ImageGenerateTab productId={id} />
+        <ImageGenerateTab productId={id} initialPrompt={initialPrompt} />
       ) : (
         <VideoGenerateTab productId={id} />
       )}

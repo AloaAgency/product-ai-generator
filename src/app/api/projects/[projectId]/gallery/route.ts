@@ -42,11 +42,12 @@ export async function GET(
     // 2. Fetch all generation_jobs for these products
     const { data: jobs } = await supabase
       .from(T.generation_jobs)
-      .select('id, product_id, prompt_template_id')
+      .select('id, product_id, prompt_template_id, final_prompt')
       .in('product_id', productIds)
 
     const jobIds = (jobs || []).map((j) => j.id)
     const jobProductMap = new Map((jobs || []).map((j) => [j.id, j.product_id]))
+    const jobPromptMap = new Map((jobs || []).map((j) => [j.id, j.final_prompt as string | null]))
 
     // 3. Fetch storyboard scenes for these products
     const { data: boards } = await supabase
@@ -180,6 +181,7 @@ export async function GET(
         thumb_public_url: img.thumb_storage_path
           ? (signedThumbs.get(img.thumb_storage_path) ?? null)
           : null,
+        prompt: img.job_id ? (jobPromptMap.get(img.job_id) ?? null) : null,
       })),
     }))
 
