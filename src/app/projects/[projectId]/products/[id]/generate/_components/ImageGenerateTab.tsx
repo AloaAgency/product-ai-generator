@@ -412,7 +412,7 @@ export function ImageGenerateTab({ productId, initialPrompt }: ImageGenerateTabP
           onChange={(e) => setPrompt(e.target.value)}
         />
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <button
             onClick={handleRefine}
             disabled={aiLoading || !prompt.trim()}

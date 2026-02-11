@@ -109,7 +109,7 @@ export default function ProjectDetailPage({
         }
       />
 
-      <main className="mx-auto max-w-6xl px-6 py-8">
+      <main className="mx-auto max-w-6xl px-4 sm:px-6 py-6 sm:py-8">
         {loadingProducts ? (
           <div className="flex items-center justify-center py-20">
             <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-600 border-t-white" />

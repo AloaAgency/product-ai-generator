@@ -49,7 +49,7 @@ export default function Home() {
   return (
     <div className="min-h-screen">
       {/* Header */}
-      <header className="border-b border-zinc-800 px-6 py-4">
+      <header className="border-b border-zinc-800 px-4 sm:px-6 py-3 sm:py-4">
         <div className="mx-auto flex max-w-6xl items-center justify-between">
           <h1 className="text-xl font-semibold tracking-tight">Aloa AI Product Imager</h1>
           <button
@@ -63,7 +63,7 @@ export default function Home() {
       </header>
 
       {/* Content */}
-      <main className="mx-auto max-w-6xl px-6 py-8">
+      <main className="mx-auto max-w-6xl px-4 sm:px-6 py-6 sm:py-8">
         {loadingProjects ? (
           <div className="flex items-center justify-center py-20">
             <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-600 border-t-white" />

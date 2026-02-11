@@ -48,8 +48,8 @@ export function ProjectHeader({
 
   return (
     <header className="border-b border-zinc-800">
-      <div className="px-6 py-4">
-        <div className="mx-auto flex max-w-6xl items-center justify-between">
+      <div className="px-4 sm:px-6 py-3 sm:py-4">
+        <div className="mx-auto flex max-w-6xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <Link
               href="/"
@@ -98,7 +98,7 @@ export function ProjectHeader({
           {actions && <div className="flex items-center gap-2">{actions}</div>}
         </div>
       </div>
-      <div className="mx-auto max-w-6xl px-6">
+      <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <nav className="flex gap-0">
           {tabs.map((tab) => {
             const isActive =

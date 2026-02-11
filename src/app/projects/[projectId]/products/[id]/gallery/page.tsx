@@ -323,8 +323,8 @@ export default function GalleryPage({
   return (
     <div className="min-h-screen bg-zinc-900 text-zinc-100">
       {/* Header */}
-      <div className="border-b border-zinc-800 px-6 py-4">
-        <div className="flex items-center justify-between">
+      <div className="border-b border-zinc-800 px-4 sm:px-6 py-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <Link
               href={`/projects/${projectId}/products/${id}`}
@@ -368,8 +368,8 @@ export default function GalleryPage({
       </div>
 
       {/* Filter bar */}
-      <div className="border-b border-zinc-800 px-6 py-3">
-        <div className="flex items-center gap-4">
+      <div className="border-b border-zinc-800 px-4 sm:px-6 py-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-4">
           <div className="flex items-center gap-1.5">
             <Filter className="h-4 w-4 text-zinc-500" />
             {STATUS_FILTERS.map((f) => (
@@ -387,7 +387,7 @@ export default function GalleryPage({
             ))}
           </div>
 
-          <div className="mx-2 h-5 w-px bg-zinc-700" />
+          <div className="mx-2 hidden sm:block h-5 w-px bg-zinc-700" />
 
           <div className="flex items-center gap-1.5">
             {([
@@ -410,7 +410,7 @@ export default function GalleryPage({
             ))}
           </div>
 
-          <div className="mx-2 h-5 w-px bg-zinc-700" />
+          <div className="mx-2 hidden sm:block h-5 w-px bg-zinc-700" />
 
           <button
             onClick={() => setGroupByScene((v) => !v)}
@@ -457,7 +457,7 @@ export default function GalleryPage({
           </p>
         </div>
       ) : sceneGroups ? (
-          <div className="space-y-8 p-6">
+          <div className="space-y-8 px-4 sm:px-6 py-6">
             {sceneGroups.map((group) => (
               <div key={group.templateId}>
                 <div className="mb-3 flex items-center gap-2">
@@ -492,7 +492,7 @@ export default function GalleryPage({
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-4 p-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+          <div className="grid grid-cols-2 gap-4 px-4 sm:px-6 py-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
             {filteredImages.map((img, index) => {
               const isVideo = (img as unknown as Record<string, unknown>).media_type === 'video'
               const imageIndex = imageOnly.findIndex((item) => item.id === img.id)

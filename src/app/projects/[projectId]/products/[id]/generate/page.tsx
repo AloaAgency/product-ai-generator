@@ -17,7 +17,7 @@ export default function GeneratePage({
   const [activeTab, setActiveTab] = useState<'image' | 'video'>('image')
 
   return (
-    <div className="min-h-screen bg-zinc-900 text-zinc-100 p-6 space-y-8 max-w-4xl mx-auto">
+    <div className="min-h-screen bg-zinc-900 text-zinc-100 p-4 sm:p-6 space-y-6 sm:space-y-8 max-w-4xl mx-auto">
       <h1 className="text-2xl font-bold">Generate</h1>
 
       {/* Tab Toggle */}
