@@ -221,8 +221,8 @@ export default function ProjectGalleryPage({
       />
 
       {/* Filter bar */}
-      <div className="border-b border-zinc-800 px-6 py-3">
-        <div className="mx-auto flex max-w-6xl items-center gap-4">
+      <div className="border-b border-zinc-800 px-4 sm:px-6 py-3">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2 sm:gap-4">
           <div className="flex items-center gap-1.5">
             <Filter className="h-4 w-4 text-zinc-500" />
             {STATUS_FILTERS.map((f) => (
@@ -240,7 +240,7 @@ export default function ProjectGalleryPage({
             ))}
           </div>
 
-          <div className="mx-2 h-5 w-px bg-zinc-700" />
+          <div className="mx-2 hidden sm:block h-5 w-px bg-zinc-700" />
 
           <div className="flex items-center gap-1.5">
             {([
@@ -265,7 +265,7 @@ export default function ProjectGalleryPage({
 
           {allProducts.length > 1 && (
             <>
-              <div className="mx-2 h-5 w-px bg-zinc-700" />
+              <div className="mx-2 hidden sm:block h-5 w-px bg-zinc-700" />
               <select
                 value={productFilter}
                 onChange={(e) => setProductFilter(e.target.value)}
@@ -281,7 +281,7 @@ export default function ProjectGalleryPage({
             </>
           )}
 
-          <span className="ml-auto rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm text-zinc-400">
+          <span className="ml-0 sm:ml-auto rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm text-zinc-400">
             {totalImages} item{totalImages !== 1 ? 's' : ''}
           </span>
         </div>
@@ -303,7 +303,7 @@ export default function ProjectGalleryPage({
           </p>
         </div>
       ) : (
-        <div className="mx-auto max-w-6xl space-y-8 p-6">
+        <div className="mx-auto max-w-6xl space-y-8 px-4 sm:px-6 py-6">
           {productGroups.map((group) => (
             <div key={group.product_id}>
               <div className="mb-3 flex items-center gap-2">

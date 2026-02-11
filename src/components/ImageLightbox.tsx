@@ -178,7 +178,7 @@ export function ImageLightbox({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-2 sm:p-4"
       onClick={onClose}
     >
       <div
@@ -186,17 +186,17 @@ export function ImageLightbox({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 bg-gray-900/80 rounded-t-xl">
-          <div className="flex items-center gap-4">
-            <span className="text-white font-medium">
+        <div className="flex items-center justify-between px-3 py-2 sm:px-4 sm:py-3 bg-gray-900/80 rounded-t-xl">
+          <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+            <span className="text-white font-medium text-sm sm:text-base whitespace-nowrap">
               Variation {currentImage.variation_number ?? currentIndex + 1}
             </span>
             {promptName && (
-              <span className="text-gray-400 text-sm truncate max-w-[300px]">
+              <span className="text-gray-400 text-sm truncate max-w-[120px] sm:max-w-[300px] hidden sm:inline">
                 {promptName}
               </span>
             )}
-            <span className="text-gray-500 text-sm">
+            <span className="text-gray-500 text-sm whitespace-nowrap">
               {currentIndex + 1} / {images.length}
             </span>
           </div>
@@ -244,17 +244,17 @@ export function ImageLightbox({
           {hasPrev && (
             <button
               onClick={handlePrev}
-              className="absolute left-4 z-10 p-3 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
+              className="absolute left-2 sm:left-4 z-10 p-2 sm:p-3 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
             >
-              <ChevronLeft className="w-6 h-6" />
+              <ChevronLeft className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
           )}
           {hasNext && (
             <button
               onClick={handleNext}
-              className="absolute right-4 z-10 p-3 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
+              className="absolute right-2 sm:right-4 z-10 p-2 sm:p-3 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
             >
-              <ChevronRight className="w-6 h-6" />
+              <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
           )}
 
@@ -276,9 +276,9 @@ export function ImageLightbox({
         </div>
 
         {/* Footer toolbar */}
-        <div className="flex items-center justify-between px-4 py-3 bg-gray-900/80 rounded-b-xl">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 px-3 py-2 sm:px-4 sm:py-3 bg-gray-900/80 rounded-b-xl">
           {/* Thumbnail strip */}
-          <div className="flex items-center gap-2 overflow-x-auto max-w-[50%] pb-1">
+          <div className="flex items-center gap-2 overflow-x-auto max-w-full sm:max-w-[50%] pb-1">
             {images.map((img, index) => {
               const thumbUrl = img.thumb_signed_url || img.thumb_public_url || img.signed_url || img.public_url
               const isActive = index === currentIndex
@@ -309,11 +309,11 @@ export function ImageLightbox({
           </div>
 
           {/* Action buttons */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 justify-end">
             <button
               onClick={handleApprove}
               disabled={isUpdating}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors ${
                 isApproved
                   ? 'bg-green-600 text-white hover:bg-green-700'
                   : 'bg-gray-700 text-gray-200 hover:bg-green-600 hover:text-white'
@@ -321,24 +321,24 @@ export function ImageLightbox({
               title="Approve (Enter or A)"
             >
               {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-              Approve
+              <span className="hidden sm:inline">Approve</span>
             </button>
             <button
               onClick={handleReject}
               disabled={isUpdating}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors bg-gray-700 text-gray-200 hover:bg-red-600 hover:text-white"
+              className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors bg-gray-700 text-gray-200 hover:bg-red-600 hover:text-white"
               title="Delete (Delete or R)"
             >
               {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
-              Delete
+              <span className="hidden sm:inline">Delete</span>
             </button>
             <button
               onClick={handleDownload}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium bg-gray-700 text-gray-200 hover:bg-blue-600 hover:text-white transition-colors"
+              className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium bg-gray-700 text-gray-200 hover:bg-blue-600 hover:text-white transition-colors"
               title="Download (D)"
             >
               <Download className="w-4 h-4" />
-              Download
+              <span className="hidden sm:inline">Download</span>
             </button>
           </div>
         </div>
