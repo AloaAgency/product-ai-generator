@@ -272,13 +272,15 @@ export function ImageLightbox({
 
         {/* Prompt section – collapsed by default, capped height when expanded */}
         {currentImage.prompt && (
-          <div className="px-4 py-2 bg-gray-900/60 border-b border-gray-800 flex items-start gap-3">
-            <button
+          <div className="shrink-0 px-4 py-2 bg-gray-900/60 border-b border-gray-800 flex items-start gap-3">
+            <div
               onClick={() => setPromptExpanded(!promptExpanded)}
-              className={`flex-1 text-left text-sm text-gray-300 ${promptExpanded ? 'max-h-24 overflow-y-auto' : 'line-clamp-1'}`}
+              role="button"
+              tabIndex={0}
+              className={`flex-1 text-left text-sm text-gray-300 cursor-pointer ${promptExpanded ? 'max-h-20 overflow-y-auto' : 'overflow-hidden whitespace-nowrap text-ellipsis'}`}
             >
               {currentImage.prompt}
-            </button>
+            </div>
             <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
               <button
                 onClick={handleCopyPrompt}
@@ -301,7 +303,7 @@ export function ImageLightbox({
         )}
 
         {/* Image container */}
-        <div className="relative flex-1 flex items-center justify-center bg-gray-950 overflow-hidden">
+        <div className="relative flex-1 min-h-0 flex items-center justify-center bg-gray-950 overflow-hidden">
           {hasPrev && (
             <button
               onClick={handlePrev}
