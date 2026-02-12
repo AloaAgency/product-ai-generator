@@ -270,12 +270,12 @@ export function ImageLightbox({
           </button>
         </div>
 
-        {/* Prompt section */}
+        {/* Prompt section – collapsed by default, capped height when expanded */}
         {currentImage.prompt && (
           <div className="px-4 py-2 bg-gray-900/60 border-b border-gray-800 flex items-start gap-3">
             <button
               onClick={() => setPromptExpanded(!promptExpanded)}
-              className={`flex-1 text-left text-sm text-gray-300 ${promptExpanded ? '' : 'line-clamp-2'}`}
+              className={`flex-1 text-left text-sm text-gray-300 ${promptExpanded ? 'max-h-24 overflow-y-auto' : 'line-clamp-1'}`}
             >
               {currentImage.prompt}
             </button>

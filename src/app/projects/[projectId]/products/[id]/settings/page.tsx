@@ -6,6 +6,53 @@ import { useAppStore } from '@/lib/store'
 import { Save, CheckCircle, Settings, Camera, Palette, Trash2, FolderOpen, Plus, Download, Upload, ChevronDown, FileText } from 'lucide-react'
 import type { GlobalStyleSettings, SettingsTemplate } from '@/lib/types'
 
+function SectionCard({
+  id,
+  icon: Icon,
+  title,
+  description,
+  expanded,
+  onToggle,
+  children,
+}: {
+  id: string
+  icon: React.ComponentType<{ className?: string }>
+  title: string
+  description?: string
+  expanded: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between p-4 text-left hover:bg-zinc-800/50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className="rounded-lg bg-zinc-800 p-2">
+            <Icon className="h-4 w-4 text-zinc-400" />
+          </div>
+          <div>
+            <h2 className="font-medium text-zinc-100">{title}</h2>
+            {description && <p className="text-xs text-zinc-500">{description}</p>}
+          </div>
+        </div>
+        <ChevronDown
+          className={`h-5 w-5 text-zinc-500 transition-transform ${
+            expanded ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+      {expanded && (
+        <div className="border-t border-zinc-800 p-4 space-y-4">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function parseTemplateMarkdown(text: string): { name: string; settings: GlobalStyleSettings } | null {
   // Try to extract JSON from a ```json code block
   const jsonBlockMatch = text.match(/```json\s*([\s\S]*?)```/)
@@ -69,6 +116,8 @@ export default function ProductSettingsPage({
     output: true,
   })
 
+  const initializedForId = useRef<string | null>(null)
+
   useEffect(() => {
     fetchProduct(id)
     fetchProjects()
@@ -76,7 +125,8 @@ export default function ProductSettingsPage({
   }, [id, fetchProduct, fetchProjects, fetchSettingsTemplates])
 
   useEffect(() => {
-    if (currentProduct) {
+    if (currentProduct && initializedForId.current !== id) {
+      initializedForId.current = id
       setName(currentProduct.name)
       setDescription(currentProduct.description || '')
       setSettings(currentProduct.global_style_settings || {})
@@ -87,7 +137,7 @@ export default function ProductSettingsPage({
           : ''
       )
     }
-  }, [currentProduct])
+  }, [currentProduct, id])
 
   const activeTemplate = settingsTemplates.find((t) => t.is_active)
 
@@ -290,47 +340,6 @@ Use this format to generate a settings template via LLM. Save as \`.md\` or \`.j
     </div>
   )
 
-  const SectionCard = ({
-    id,
-    icon: Icon,
-    title,
-    description,
-    children,
-  }: {
-    id: string
-    icon: React.ComponentType<{ className?: string }>
-    title: string
-    description?: string
-    children: React.ReactNode
-  }) => (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
-      <button
-        onClick={() => toggleSection(id)}
-        className="w-full flex items-center justify-between p-4 text-left hover:bg-zinc-800/50 transition-colors"
-      >
-        <div className="flex items-center gap-3">
-          <div className="rounded-lg bg-zinc-800 p-2">
-            <Icon className="h-4 w-4 text-zinc-400" />
-          </div>
-          <div>
-            <h2 className="font-medium text-zinc-100">{title}</h2>
-            {description && <p className="text-xs text-zinc-500">{description}</p>}
-          </div>
-        </div>
-        <ChevronDown
-          className={`h-5 w-5 text-zinc-500 transition-transform ${
-            expandedSections[id] ? 'rotate-180' : ''
-          }`}
-        />
-      </button>
-      {expandedSections[id] && (
-        <div className="border-t border-zinc-800 p-4 space-y-4">
-          {children}
-        </div>
-      )}
-    </div>
-  )
-
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8 space-y-6">
@@ -396,6 +405,8 @@ Use this format to generate a settings template via LLM. Save as \`.md\` or \`.j
           icon={FileText}
           title="Settings Template"
           description="Save and load preset configurations"
+          expanded={expandedSections.templates}
+          onToggle={() => toggleSection('templates')}
         >
           <div className="flex flex-wrap items-center gap-2">
             <select
@@ -493,6 +504,8 @@ Use this format to generate a settings template via LLM. Save as \`.md\` or \`.j
           icon={Palette}
           title="Style Settings"
           description="Photography and visual style configuration"
+          expanded={expandedSections.style}
+          onToggle={() => toggleSection('style')}
         >
           <div className="grid gap-4">
             {textArea('Subject Rule', 'subject_rule', 'How the product should be framed...')}
@@ -515,6 +528,8 @@ Use this format to generate a settings template via LLM. Save as \`.md\` or \`.j
           icon={Camera}
           title="Default Output Settings"
           description="Resolution, aspect ratio, and generation defaults"
+          expanded={expandedSections.output}
+          onToggle={() => toggleSection('output')}
         >
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {selectField('Resolution', 'default_resolution', ['2K', '4K'])}

@@ -1,12 +1,59 @@
 'use client'
 
-import { use, useEffect, useState } from 'react'
+import { use, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAppStore } from '@/lib/store'
 import { Save, CheckCircle, Settings, Camera, Palette, Trash2, ArrowLeft, Key, ChevronDown, Plus } from 'lucide-react'
 import type { GlobalStyleSettings, GoogleApiKeyConfig } from '@/lib/types'
 import { createGoogleApiKeyId, normalizeGoogleApiKeySettings } from '@/lib/google-api-keys'
+
+function SectionCard({
+  id,
+  icon: Icon,
+  title,
+  description,
+  expanded,
+  onToggle,
+  children,
+}: {
+  id: string
+  icon: React.ComponentType<{ className?: string }>
+  title: string
+  description?: string
+  expanded: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between p-4 text-left hover:bg-zinc-800/50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className="rounded-lg bg-zinc-800 p-2">
+            <Icon className="h-4 w-4 text-zinc-400" />
+          </div>
+          <div>
+            <h2 className="font-medium text-zinc-100">{title}</h2>
+            {description && <p className="text-xs text-zinc-500">{description}</p>}
+          </div>
+        </div>
+        <ChevronDown
+          className={`h-5 w-5 text-zinc-500 transition-transform ${
+            expanded ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+      {expanded && (
+        <div className="border-t border-zinc-800 p-4 space-y-4">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function ProjectSettingsPage({
   params,
@@ -30,12 +77,15 @@ export default function ProjectSettingsPage({
     api: true,
   })
 
+  const initializedForId = useRef<string | null>(null)
+
   useEffect(() => {
     fetchProject(projectId)
   }, [projectId, fetchProject])
 
   useEffect(() => {
-    if (currentProject) {
+    if (currentProject && initializedForId.current !== projectId) {
+      initializedForId.current = projectId
       setName(currentProject.name)
       setDescription(currentProject.description || '')
       const defaults = normalizeGoogleApiKeySettings(currentProject.global_style_settings || {})
@@ -46,7 +96,7 @@ export default function ProjectSettingsPage({
           : ''
       )
     }
-  }, [currentProject])
+  }, [currentProject, projectId])
 
   const toggleSection = (section: string) => {
     setExpandedSections((prev) => ({ ...prev, [section]: !prev[section] }))
@@ -160,47 +210,6 @@ export default function ProjectSettingsPage({
   const activeGoogleApiKeyId =
     settings.active_google_api_key_id || googleApiKeys[0]?.id || ''
 
-  const SectionCard = ({
-    id,
-    icon: Icon,
-    title,
-    description,
-    children,
-  }: {
-    id: string
-    icon: React.ComponentType<{ className?: string }>
-    title: string
-    description?: string
-    children: React.ReactNode
-  }) => (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
-      <button
-        onClick={() => toggleSection(id)}
-        className="w-full flex items-center justify-between p-4 text-left hover:bg-zinc-800/50 transition-colors"
-      >
-        <div className="flex items-center gap-3">
-          <div className="rounded-lg bg-zinc-800 p-2">
-            <Icon className="h-4 w-4 text-zinc-400" />
-          </div>
-          <div>
-            <h2 className="font-medium text-zinc-100">{title}</h2>
-            {description && <p className="text-xs text-zinc-500">{description}</p>}
-          </div>
-        </div>
-        <ChevronDown
-          className={`h-5 w-5 text-zinc-500 transition-transform ${
-            expandedSections[id] ? 'rotate-180' : ''
-          }`}
-        />
-      </button>
-      {expandedSections[id] && (
-        <div className="border-t border-zinc-800 p-4 space-y-4">
-          {children}
-        </div>
-      )}
-    </div>
-  )
-
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8 space-y-6">
@@ -257,6 +266,8 @@ export default function ProjectSettingsPage({
           icon={Palette}
           title="Default Style Settings"
           description="Photography and visual style defaults"
+          expanded={expandedSections.style}
+          onToggle={() => toggleSection('style')}
         >
           <div className="grid gap-4">
             {textArea('Subject Rule', 'subject_rule', 'How the product should be framed...')}
@@ -279,6 +290,8 @@ export default function ProjectSettingsPage({
           icon={Camera}
           title="Default Output Settings"
           description="Resolution, aspect ratio, and generation defaults"
+          expanded={expandedSections.output}
+          onToggle={() => toggleSection('output')}
         >
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {dropdown('Resolution', 'default_resolution', ['2K', '4K'])}
@@ -320,6 +333,8 @@ export default function ProjectSettingsPage({
           id="api"
           icon={Key}
           title="API Keys"
+          expanded={expandedSections.api}
+          onToggle={() => toggleSection('api')}
           description="External service credentials"
         >
           <div className="space-y-4">
