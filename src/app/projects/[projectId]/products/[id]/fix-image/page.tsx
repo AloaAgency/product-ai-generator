@@ -4,15 +4,12 @@ import { use, useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
-import { ReferenceImagePicker } from '../generate/_components/ReferenceImagePicker'
 import {
   Wand2,
   Loader2,
   X,
   ChevronDown,
   Image as ImageIcon,
-  Play,
-  AlertTriangle,
   Upload,
 } from 'lucide-react'
 import type { GeneratedImage } from '@/lib/types'
@@ -92,14 +89,7 @@ export default function FixImagePage({
     setDidInitDefaults(true)
   }, [currentProduct, productId, didInitDefaults])
 
-  // Default to active reference set
   const productSets = referenceSets.filter((rs) => rs.type === 'product' || !rs.type)
-  useEffect(() => {
-    if (productSets.length > 0 && !selectedRefSetId) {
-      const active = productSets.find((rs) => rs.is_active)
-      setSelectedRefSetId(active?.id ?? productSets[0].id)
-    }
-  }, [productSets, selectedRefSetId])
 
   // Load source image from query param
   useEffect(() => {
@@ -324,14 +314,11 @@ export default function FixImagePage({
         </div>
       </section>
 
-      {/* Reference Set */}
+      {/* Reference Set (optional) */}
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-zinc-300">Reference Set</h2>
+        <h2 className="text-sm font-semibold text-zinc-300">Reference Set <span className="text-zinc-500 font-normal">(optional)</span></h2>
         {productSets.length === 0 ? (
-          <div className="flex items-center gap-2 rounded-lg border border-yellow-600 bg-yellow-950/40 px-4 py-3 text-yellow-300 text-sm">
-            <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span>No product reference sets found.</span>
-          </div>
+          <p className="text-sm text-zinc-500">No product reference sets available.</p>
         ) : (
           <div className="relative">
             <select
@@ -339,6 +326,7 @@ export default function FixImagePage({
               onChange={(e) => setSelectedRefSetId(e.target.value)}
               className="w-full appearance-none rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2.5 pr-10 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
             >
+              <option value="">None — fix image only</option>
               {productSets.map((rs) => (
                 <option key={rs.id} value={rs.id}>
                   {rs.name}{rs.is_active ? ' (Active)' : ''}
@@ -356,7 +344,6 @@ export default function FixImagePage({
         disabled={
           !changeDescription.trim() ||
           !sourceImageId ||
-          !selectedRefSetId ||
           generating ||
           !variationCountValue
         }

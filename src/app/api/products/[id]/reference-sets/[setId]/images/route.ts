@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { processReferenceImageCompression } from '@/lib/reference-image-compression'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -70,6 +71,13 @@ export async function POST(
         if (dbError) {
           results.push({ file: upload.file_name, error: dbError.message })
         } else {
+          // Compress in background — merge updated metadata into the response
+          const compression = await processReferenceImageCompression(record.id, record.storage_path)
+          if (compression.wasCompressed && compression.newStoragePath && !compression.error) {
+            record.storage_path = compression.newStoragePath
+            record.mime_type = 'image/webp'
+            record.file_size = compression.compressedSize
+          }
           results.push(record)
         }
       }
