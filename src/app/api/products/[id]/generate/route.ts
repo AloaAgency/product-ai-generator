@@ -349,11 +349,26 @@ export async function DELETE(
       clearedFailed = data?.length || 0
     }
 
-    if (scope !== 'active' && scope !== 'failed' && scope !== 'all') {
-      return NextResponse.json({ error: 'Invalid scope. Use "active", "failed", or "all".' }, { status: 400 })
+    let clearedLog = 0
+    if (scope === 'log') {
+      const { data, error } = await supabase
+        .from(T.generation_jobs)
+        .delete()
+        .eq('product_id', productId)
+        .in('status', ['completed', 'failed', 'cancelled'])
+        .select('id')
+
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 })
+      }
+      clearedLog = data?.length || 0
     }
 
-    return NextResponse.json({ cancelled, cleared_failed: clearedFailed })
+    if (!['active', 'failed', 'all', 'log'].includes(scope)) {
+      return NextResponse.json({ error: 'Invalid scope. Use "active", "failed", "all", or "log".' }, { status: 400 })
+    }
+
+    return NextResponse.json({ cancelled, cleared_failed: clearedFailed, cleared_log: clearedLog })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal server error' },

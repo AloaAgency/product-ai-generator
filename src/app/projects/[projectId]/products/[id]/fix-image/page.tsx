@@ -548,12 +548,17 @@ function SourceImagePicker({
       if (!firstResult || firstResult.error || !firstResult.signed_url || !firstResult.image?.id) {
         throw new Error(firstResult?.error || 'Failed to prepare upload')
       }
-      await fetch(firstResult.signed_url, {
+      const putRes = await fetch(firstResult.signed_url, {
         method: 'PUT',
         headers: { 'Content-Type': file.type || 'application/octet-stream' },
         body: file,
       })
-      onSelect(firstResult.image.id, firstResult.image.thumb_public_url || firstResult.image.public_url || null)
+      if (!putRes.ok) throw new Error('File upload failed')
+      // Fetch a signed download URL so the thumbnail can be displayed
+      const signedRes = await fetch(`/api/images/${firstResult.image.id}/signed`)
+      const signedData = signedRes.ok ? await signedRes.json() : null
+      const thumbUrl = signedData?.thumb_signed_url || signedData?.preview_signed_url || signedData?.signed_url || null
+      onSelect(firstResult.image.id, thumbUrl)
     } finally {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''

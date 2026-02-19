@@ -18,6 +18,7 @@ import {
   Clapperboard,
   Menu,
   Wand2,
+  ScrollText,
 } from 'lucide-react'
 
 const navItems = [
@@ -30,6 +31,7 @@ const navItems = [
   { label: 'Fix Image', href: '/fix-image', icon: Wand2 },
   { label: 'Storyboard', href: '/storyboard', icon: Film },
   { label: 'Scenes', href: '/scenes', icon: Clapperboard },
+  { label: 'Log', href: '/log', icon: ScrollText },
 ]
 
 export default function ProductLayout({
