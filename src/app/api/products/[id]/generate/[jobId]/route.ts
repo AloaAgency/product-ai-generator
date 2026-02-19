@@ -97,3 +97,50 @@ export async function GET(
     )
   }
 }
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string; jobId: string }> }
+) {
+  const { id: productId, jobId } = await params
+
+  try {
+    const supabase = createServiceClient()
+
+    // Fetch the job and validate ownership
+    const { data: job, error: fetchError } = await supabase
+      .from(T.generation_jobs)
+      .select('id, status')
+      .eq('id', jobId)
+      .eq('product_id', productId)
+      .single()
+
+    if (fetchError || !job) {
+      return NextResponse.json({ error: 'Job not found' }, { status: 404 })
+    }
+
+    // Block deleting active jobs
+    if (job.status === 'pending' || job.status === 'running') {
+      return NextResponse.json(
+        { error: 'Cannot delete an active job. Cancel it first.' },
+        { status: 409 }
+      )
+    }
+
+    const { error: deleteError } = await supabase
+      .from(T.generation_jobs)
+      .delete()
+      .eq('id', jobId)
+
+    if (deleteError) {
+      return NextResponse.json({ error: deleteError.message }, { status: 500 })
+    }
+
+    return NextResponse.json({ deleted: jobId })
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 }
+    )
+  }
+}

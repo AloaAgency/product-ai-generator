@@ -76,6 +76,8 @@ interface AppState {
   retryGenerationJob: (productId: string, jobId: string) => Promise<GenerationJob>
   clearGenerationQueue: (productId: string) => Promise<void>
   clearGenerationFailures: (productId: string) => Promise<void>
+  deleteGenerationJob: (productId: string, jobId: string) => Promise<void>
+  clearGenerationLog: (productId: string) => Promise<void>
   devParallelGeneration: boolean
   setDevParallelGeneration: (enabled: boolean) => void
 
@@ -488,6 +490,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearGenerationFailures: async (productId) => {
     await api(`/api/products/${productId}/generate?scope=failed`, { method: 'DELETE' })
     await get().fetchGenerationJobs(productId)
+  },
+  deleteGenerationJob: async (productId, jobId) => {
+    await api(`/api/products/${productId}/generate/${jobId}`, { method: 'DELETE' })
+    set((s) => ({ generationJobs: s.generationJobs.filter((j) => j.id !== jobId) }))
+  },
+  clearGenerationLog: async (productId) => {
+    await api(`/api/products/${productId}/generate?scope=log`, { method: 'DELETE' })
+    set((s) => ({
+      generationJobs: s.generationJobs.filter((j) => j.status === 'pending' || j.status === 'running'),
+    }))
   },
 
   // Gallery
