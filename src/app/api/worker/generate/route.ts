@@ -34,6 +34,10 @@ export async function GET(request: NextRequest) {
   const imageJobConcurrency = Number(url.searchParams.get('imageJobs') || process.env.IMAGE_JOB_CONCURRENCY || defaultJobConcurrency || 1)
   const videoJobConcurrency = Number(url.searchParams.get('videoJobs') || process.env.VIDEO_JOB_CONCURRENCY || defaultJobConcurrency || 1)
   const timeBudgetMs = Number(url.searchParams.get('budget') || process.env.GENERATION_TIME_BUDGET_MS || 50000)
+  const staleRunningMsRaw = Number(process.env.GENERATION_RUNNING_STALE_MS)
+  const staleRunningMs = Number.isFinite(staleRunningMsRaw) && staleRunningMsRaw > 0
+    ? staleRunningMsRaw
+    : 15 * 60 * 1000
 
   try {
     console.log('[Worker] Trigger', {
@@ -44,16 +48,32 @@ export async function GET(request: NextRequest) {
       imageJobConcurrency,
       videoJobConcurrency,
       timeBudgetMs,
+      staleRunningMs,
     })
     if (jobId) {
       const result = await processGenerationJob(jobId, { batchSize, parallelism, timeBudgetMs })
       return NextResponse.json({ processed: 1, results: [result] })
     }
 
+    // Re-queue stale running jobs in case a previous worker invocation crashed.
+    const staleCutoff = new Date(Date.now() - staleRunningMs).toISOString()
+    const { data: staleJobs, error: staleError } = await supabase
+      .from(T.generation_jobs)
+      .update({ status: 'pending' })
+      .eq('status', 'running')
+      .lt('started_at', staleCutoff)
+      .select('id')
+
+    if (staleError) {
+      console.warn('[Worker] Failed to requeue stale jobs', { error: staleError.message })
+    } else if (staleJobs && staleJobs.length > 0) {
+      console.log('[Worker] Requeued stale jobs', { count: staleJobs.length })
+    }
+
     const { data: jobs, error } = await supabase
       .from(T.generation_jobs)
       .select('id,status,created_at,job_type')
-      .in('status', ['pending', 'running'])
+      .eq('status', 'pending')
       .order('created_at', { ascending: true })
       .limit(Math.max(1, jobBatchSize))
 
