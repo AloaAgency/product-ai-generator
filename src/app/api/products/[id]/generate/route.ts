@@ -61,6 +61,20 @@ export async function POST(
       return NextResponse.json({ error: 'prompt_text is required' }, { status: 400 })
     }
 
+    const parsedVariationCount = Number(variation_count)
+    if (
+      !Number.isInteger(parsedVariationCount) ||
+      parsedVariationCount < 1 ||
+      parsedVariationCount > 100
+    ) {
+      return NextResponse.json(
+        { error: 'variation_count must be an integer between 1 and 100' },
+        { status: 400 }
+      )
+    }
+
+    const sanitizedVariationCount = parsedVariationCount
+
     const supabase = createServiceClient()
 
     // Validate source_image_id if provided
@@ -224,7 +238,7 @@ export async function POST(
         product_image_count: finalProductCount,
         texture_image_count: finalTextureCount > 0 ? finalTextureCount : null,
         final_prompt: finalPrompt,
-        variation_count,
+        variation_count: sanitizedVariationCount,
         resolution,
         aspect_ratio,
         status: 'pending',
@@ -248,7 +262,7 @@ export async function POST(
       const batchSizeRaw = Number(process.env.GENERATION_BATCH_SIZE)
       const batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0
         ? batchSizeRaw
-        : variation_count || 1
+        : sanitizedVariationCount
       const parallelismRaw = Number(process.env.GENERATION_PARALLELISM)
       const parallelism = Number.isFinite(parallelismRaw) && parallelismRaw > 0 ? parallelismRaw : 1
       const timeBudgetMsRaw = Number(process.env.GENERATION_TIME_BUDGET_MS)

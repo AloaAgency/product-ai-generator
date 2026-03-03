@@ -166,20 +166,17 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     ? retryBaseMsRaw
     : 1500
 
-  const { data: job, error: jobError } = await supabase
+  const { data: initialJob, error: jobError } = await supabase
     .from(T.generation_jobs)
     .select('*')
     .eq('id', jobId)
     .single()
 
-  if (jobError || !job) {
+  if (jobError || !initialJob) {
     throw new Error('Generation job not found')
   }
 
-  const jobType = normalizeJobType(job as GenerationJobRecord)
-  if (jobType === 'video') {
-    return processVideoJob(job as GenerationJobRecord, supabase)
-  }
+  let job = initialJob as GenerationJobRecord
 
   if (job.status === 'completed' || job.status === 'cancelled') {
     return {
@@ -191,12 +188,60 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     }
   }
 
-  if (job.status === 'pending') {
-    await supabase
+  // Only one worker should claim a pending job. Running jobs are already owned by another worker.
+  if (job.status === 'running') {
+    return {
+      jobId,
+      processed: 0,
+      completed: job.completed_count || 0,
+      failed: job.failed_count || 0,
+      status: job.status,
+    }
+  }
+
+  if (job.status !== 'pending') {
+    return {
+      jobId,
+      processed: 0,
+      completed: job.completed_count || 0,
+      failed: job.failed_count || 0,
+      status: job.status,
+    }
+  }
+
+  const { data: claimedJob, error: claimError } = await supabase
+    .from(T.generation_jobs)
+    .update({ status: 'running', started_at: new Date().toISOString() })
+    .eq('id', job.id)
+    .eq('status', 'pending')
+    .select('*')
+    .maybeSingle()
+
+  if (claimError) {
+    throw new Error(`Failed to claim generation job: ${claimError.message}`)
+  }
+
+  if (!claimedJob) {
+    const { data: latestJob } = await supabase
       .from(T.generation_jobs)
-      .update({ status: 'running', started_at: new Date().toISOString() })
+      .select('status, completed_count, failed_count')
       .eq('id', job.id)
-      .in('status', ['pending', 'running'])
+      .single()
+
+    return {
+      jobId,
+      processed: 0,
+      completed: latestJob?.completed_count || 0,
+      failed: latestJob?.failed_count || 0,
+      status: latestJob?.status || 'running',
+    }
+  }
+
+  job = claimedJob as GenerationJobRecord
+
+  const jobType = normalizeJobType(job)
+  if (jobType === 'video') {
+    return processVideoJob(job, supabase)
   }
 
   if (!job.reference_set_id) {
@@ -430,7 +475,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     .update({
       completed_count: completedCount,
       failed_count: failedCount,
-      status: 'running',
+      status: 'pending',
       ...(lastError ? { error_message: lastError } : {}),
     })
     .eq('id', job.id)
@@ -475,6 +520,6 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     processed,
     completed: completedCount,
     failed: failedCount,
-    status: 'running',
+    status: 'pending',
   }
 }
