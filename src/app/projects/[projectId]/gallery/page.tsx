@@ -410,9 +410,29 @@ export default function ProjectGalleryPage({
                       }`}
                     >
                       {isVideo ? (
-                        <div className="flex h-full w-full items-center justify-center bg-zinc-800">
-                          <Play className="h-10 w-10 text-zinc-400 group-hover:text-zinc-200 transition-colors" />
-                        </div>
+                        <>
+                          {img.thumb_public_url ? (
+                            /* eslint-disable-next-line @next/next/no-img-element */
+                            <img
+                              src={img.thumb_public_url}
+                              alt="Video thumbnail"
+                              className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                            />
+                          ) : (
+                            <video
+                              src={`${img.public_url}#t=0.1`}
+                              preload="metadata"
+                              muted
+                              playsInline
+                              className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                            />
+                          )}
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="rounded-full bg-black/50 p-3">
+                              <Play className="h-6 w-6 text-white fill-white" />
+                            </div>
+                          </div>
+                        </>
                       ) : (
                         /* eslint-disable-next-line @next/next/no-img-element */
                         <img

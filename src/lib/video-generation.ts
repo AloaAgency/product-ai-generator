@@ -1,6 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { slugify } from '@/lib/image-utils'
+import { slugify, extractVideoThumbnail, buildThumbnailPath } from '@/lib/image-utils'
 import { resolveGoogleApiKey } from '@/lib/google-api-keys'
 import type { GlobalStyleSettings } from '@/lib/types'
 
@@ -152,6 +152,25 @@ export async function generateSceneVideo(
 
   if (uploadErr) throw new Error(`Upload failed: ${uploadErr.message}`)
 
+  // Extract and upload thumbnail
+  let thumbStoragePath: string | null = null
+  try {
+    const thumb = await extractVideoThumbnail(videoBuffer)
+    thumbStoragePath = buildThumbnailPath(storagePath, thumb.extension)
+
+    const { error: thumbUploadErr } = await supabase.storage
+      .from('generated-videos')
+      .upload(thumbStoragePath, thumb.buffer, { contentType: thumb.mimeType })
+
+    if (thumbUploadErr) {
+      console.warn(`Video thumbnail upload failed: ${thumbUploadErr.message}`)
+      thumbStoragePath = null
+    }
+  } catch (err) {
+    console.warn('Video thumbnail extraction failed:', err)
+    thumbStoragePath = null
+  }
+
   // Insert record
   const { data: record, error: insertErr } = await supabase
     .from(T.generated_images)
@@ -159,6 +178,7 @@ export async function generateSceneVideo(
       job_id: jobId || null,
       variation_number: 1,
       storage_path: storagePath,
+      thumb_storage_path: thumbStoragePath,
       mime_type: mimeType,
       file_size: videoBuffer.length,
       media_type: 'video',

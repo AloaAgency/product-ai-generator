@@ -3,6 +3,16 @@
  */
 
 import sharp from 'sharp'
+import ffmpegStatic from 'ffmpeg-static'
+import ffmpeg from 'fluent-ffmpeg'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { randomUUID } from 'crypto'
+import { writeFile, readFile, unlink } from 'fs/promises'
+
+if (ffmpegStatic) {
+  ffmpeg.setFfmpegPath(ffmpegStatic)
+}
 
 /**
  * Slugify a string for use in filenames
@@ -156,5 +166,44 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
     originalSize,
     compressedSize: compressed.length,
     wasCompressed: true,
+  }
+}
+
+/**
+ * Extract the first frame from a video buffer and create a 480px WebP thumbnail.
+ * Uses ffmpeg-static to extract the frame, then sharp to resize and convert.
+ */
+export const extractVideoThumbnail = async (
+  videoBuffer: Buffer,
+  width = 480
+): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => {
+  const id = randomUUID()
+  const tmpVideo = join(tmpdir(), `vid-${id}.mp4`)
+  const tmpFrame = join(tmpdir(), `frame-${id}.png`)
+
+  try {
+    await writeFile(tmpVideo, videoBuffer)
+
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg(tmpVideo)
+        .seekInput(0.1)
+        .frames(1)
+        .outputOptions('-update', '1')
+        .output(tmpFrame)
+        .on('end', () => resolve())
+        .on('error', (err: Error) => reject(err))
+        .run()
+    })
+
+    const frameBuffer = await readFile(tmpFrame)
+    const thumb = await sharp(frameBuffer)
+      .resize({ width, withoutEnlargement: true })
+      .webp({ quality: 72 })
+      .toBuffer()
+
+    return { buffer: thumb, mimeType: 'image/webp', extension: 'webp' }
+  } finally {
+    await unlink(tmpVideo).catch(() => {})
+    await unlink(tmpFrame).catch(() => {})
   }
 }
