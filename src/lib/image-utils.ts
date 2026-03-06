@@ -3,15 +3,37 @@
  */
 
 import sharp from 'sharp'
-import ffmpegStatic from 'ffmpeg-static'
 import ffmpeg from 'fluent-ffmpeg'
+import { execSync } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
-import { writeFile, readFile, unlink } from 'fs/promises'
+import { writeFile, readFile, unlink, access } from 'fs/promises'
 
-if (ffmpegStatic) {
-  ffmpeg.setFfmpegPath(ffmpegStatic)
+// Resolve ffmpeg path: try ffmpeg-static first (checking the file exists),
+// then fall back to system ffmpeg
+async function resolveFfmpegPath(): Promise<string | null> {
+  try {
+    // ffmpeg-static path can be mangled by bundlers, so verify it exists
+    const ffmpegStatic = require('ffmpeg-static') as string
+    if (ffmpegStatic) {
+      await access(ffmpegStatic)
+      return ffmpegStatic
+    }
+  } catch { /* not available or path mangled */ }
+  try {
+    const systemPath = execSync('which ffmpeg', { encoding: 'utf-8' }).trim()
+    if (systemPath) return systemPath
+  } catch { /* no system ffmpeg */ }
+  return null
+}
+
+let ffmpegPathResolved = false
+async function ensureFfmpegPath() {
+  if (ffmpegPathResolved) return
+  const p = await resolveFfmpegPath()
+  if (p) ffmpeg.setFfmpegPath(p)
+  ffmpegPathResolved = true
 }
 
 /**
@@ -177,6 +199,8 @@ export const extractVideoThumbnail = async (
   videoBuffer: Buffer,
   width = 480
 ): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => {
+  await ensureFfmpegPath()
+
   const id = randomUUID()
   const tmpVideo = join(tmpdir(), `vid-${id}.mp4`)
   const tmpFrame = join(tmpdir(), `frame-${id}.png`)
