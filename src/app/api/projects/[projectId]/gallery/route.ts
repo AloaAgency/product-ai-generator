@@ -142,12 +142,16 @@ export async function GET(
     const videoPaths = videoItems
       .map((v) => v.storage_path)
       .filter(Boolean) as string[]
+    const videoThumbPaths = videoItems
+      .map((v) => v.thumb_storage_path)
+      .filter(Boolean) as string[]
 
     let signedVideos = new Map<string, string>()
-    if (videoPaths.length > 0) {
+    const allVideoBucketPaths = [...videoPaths, ...videoThumbPaths]
+    if (allVideoBucketPaths.length > 0) {
       const { data: signed } = await supabase.storage
         .from('generated-videos')
-        .createSignedUrls(videoPaths, SIGNED_URL_TTL_SECONDS)
+        .createSignedUrls(allVideoBucketPaths, SIGNED_URL_TTL_SECONDS)
       if (signed) {
         signedVideos = new Map(
           signed
@@ -185,9 +189,9 @@ export async function GET(
           ? (signedVideos.get(img.storage_path) ?? null)
           : null,
         preview_public_url: null,
-        thumb_public_url: img.thumb_storage_path
-          ? (signedThumbs.get(img.thumb_storage_path) ?? null)
-          : null,
+        thumb_public_url: img.media_type === 'video'
+          ? (img.thumb_storage_path ? (signedVideos.get(img.thumb_storage_path) ?? null) : null)
+          : (img.thumb_storage_path ? (signedThumbs.get(img.thumb_storage_path) ?? null) : null),
         prompt: img.job_id ? (jobPromptMap.get(img.job_id) ?? null) : null,
       })),
     }))
