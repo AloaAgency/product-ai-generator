@@ -1,4 +1,6 @@
-# CLAUDE.md
+# Product AI Generator — Project Knowledge
+
+> Cross-project standards (Supabase, Next.js, API, security, git) are in `~/.claude/CLAUDE.md`. This file covers patterns specific to this app.
 
 ## Project Overview
 
