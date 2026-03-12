@@ -6,9 +6,14 @@ const COOKIE_NAME = 'site-auth'
 export async function POST(request: NextRequest) {
   const formData = await request.formData()
   const password = formData.get('password') as string
+  const redirectPath = (formData.get('redirect') as string) || '/'
+
+  // Validate redirect path: must be a relative path starting with /
+  // to prevent open-redirect attacks
+  const safeRedirect = redirectPath.startsWith('/') ? redirectPath : '/'
 
   if (password === PASSWORD) {
-    const response = NextResponse.redirect(new URL('/', request.url))
+    const response = NextResponse.redirect(new URL(safeRedirect, request.url))
     response.cookies.set(COOKIE_NAME, 'authenticated', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -19,9 +24,11 @@ export async function POST(request: NextRequest) {
     return response
   }
 
-  // Wrong password — show login page again with error
+  // Wrong password — redirect back to the same page to show login with error
+  const errorUrl = new URL(safeRedirect, request.url)
+  errorUrl.searchParams.set('error', '1')
   return new NextResponse(null, {
     status: 303,
-    headers: { Location: '/?error=1' },
+    headers: { Location: errorUrl.pathname + errorUrl.search },
   })
 }

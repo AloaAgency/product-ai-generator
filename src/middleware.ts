@@ -17,16 +17,15 @@ export function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  // Redirect to login page
-  const loginUrl = new URL('/api/login', request.url)
-  loginUrl.searchParams.set('redirect', pathname)
-  return new NextResponse(loginPage(loginUrl.searchParams.get('error') || ''), {
+  // Show login page, preserving the intended destination
+  const errorParam = request.nextUrl.searchParams.get('error') || ''
+  return new NextResponse(loginPage(errorParam, pathname), {
     status: 401,
     headers: { 'content-type': 'text/html' },
   })
 }
 
-function loginPage(error: string) {
+function loginPage(error: string, redirectPath: string) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -51,6 +50,7 @@ function loginPage(error: string) {
   <div class="card">
     <h1>Aloa AI Product Imager</h1>
     <form method="POST" action="/api/login">
+      <input type="hidden" name="redirect" value="${redirectPath}" />
       <label for="password">Password</label>
       <input type="password" id="password" name="password" placeholder="Enter password" autofocus required />
       <button type="submit">Sign In</button>
