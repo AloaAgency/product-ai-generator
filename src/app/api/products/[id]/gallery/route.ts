@@ -18,10 +18,10 @@ export async function GET(
   try {
     const supabase = createServiceClient()
 
-    // Get all job IDs (and prompt_template_id) for this product
+    // Get all job IDs (and prompt_template_id + final_prompt) for this product
     let jobsQuery = supabase
       .from(T.generation_jobs)
-      .select('id, prompt_template_id')
+      .select('id, prompt_template_id, final_prompt')
       .eq('product_id', productId)
 
     if (jobId) {
@@ -36,6 +36,7 @@ export async function GET(
 
     const jobIds = (jobs || []).map((j) => j.id)
     const jobTemplateMap = new Map((jobs || []).map((j) => [j.id, j.prompt_template_id]))
+    const jobPromptMap = new Map((jobs || []).map((j) => [j.id, j.final_prompt as string | null]))
 
     // Fetch generated images - include both job-based and scene-based (job_id is null)
     let imagesQuery = supabase
@@ -169,6 +170,7 @@ export async function GET(
         ? (img.thumb_storage_path ? (signedVideos.get(img.thumb_storage_path) ?? null) : null)
         : (img.thumb_storage_path ? (signedImageBucket.get(img.thumb_storage_path) ?? null) : null),
       prompt_template_id: img.job_id ? (jobTemplateMap.get(img.job_id) ?? null) : null,
+      prompt: img.job_id ? (jobPromptMap.get(img.job_id) ?? null) : null,
     }))
 
     return NextResponse.json({ images: signedImages })

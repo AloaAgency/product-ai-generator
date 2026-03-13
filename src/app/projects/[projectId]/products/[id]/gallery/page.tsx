@@ -216,6 +216,7 @@ export default function GalleryPage({
       variation_number: img.variation_number,
       approval_status: img.approval_status ?? 'pending',
       notes: img.notes,
+      prompt: img.prompt ?? null,
       productId: id,
     }))
   }, [imageOnly, signedUrlsById, id])

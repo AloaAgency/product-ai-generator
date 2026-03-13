@@ -121,6 +121,7 @@ export interface GeneratedImage {
   media_type: 'image' | 'video'
   scene_id: string | null
   scene_name: string | null
+  prompt?: string | null
   created_at: string
 }
 
