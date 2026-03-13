@@ -230,7 +230,7 @@ export async function POST(
         status: 'pending',
         completed_count: 0,
         failed_count: 0,
-        generation_model: process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview',
+        generation_model: process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview',
         job_type: 'image',
         source_image_id: source_image_id || null,
       })
