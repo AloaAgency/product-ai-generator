@@ -21,7 +21,7 @@ export interface GeminiImageResult {
   raw: unknown
 }
 
-const DEFAULT_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview'
+const DEFAULT_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview'
 const DEFAULT_RESOLUTION = (process.env.GEMINI_IMAGE_RESOLUTION_DEFAULT as GeminiImageResolution) || '4K'
 
 const resolveEndpoint = (model: string) =>
@@ -149,7 +149,21 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
 
     const inline = extractInlineImage(raw)
     if (!inline) {
-      throw new Error('Gemini response did not include image data')
+      // Log the response structure to help diagnose missing image data
+      const textParts = raw?.candidates?.[0]?.content?.parts
+        ?.filter((p: any) => p.text)
+        ?.map((p: any) => p.text)
+        ?.join(' ') || ''
+      const finishReason = raw?.candidates?.[0]?.finishReason || 'unknown'
+      console.error(
+        `[Gemini] Response did not include image data. finishReason=${finishReason}, ` +
+        `textResponse=${textParts.slice(0, 200)}, ` +
+        `candidateCount=${raw?.candidates?.length || 0}, ` +
+        `model=${model}`
+      )
+      throw new Error(
+        `Gemini response did not include image data (finishReason: ${finishReason}, model: ${model})`
+      )
     }
 
     return {
