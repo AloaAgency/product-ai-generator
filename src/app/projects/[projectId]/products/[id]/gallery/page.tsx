@@ -203,22 +203,30 @@ export default function GalleryPage({
 
   // Map to lightbox format
   const lightboxImages: LightboxImage[] = useMemo(() => {
-    return imageOnly.map((img) => ({
-      id: img.id,
-      public_url: img.public_url,
-      thumb_public_url: img.thumb_public_url,
-      preview_public_url: img.preview_public_url,
-      signed_url: signedUrlsById[img.id]?.signed_url ?? null,
-      download_url: signedUrlsById[img.id]?.download_url ?? null,
-      thumb_signed_url: signedUrlsById[img.id]?.thumb_signed_url ?? null,
-      preview_signed_url: signedUrlsById[img.id]?.preview_signed_url ?? null,
-      file_name: img.storage_path?.split('/').pop() ?? null,
-      variation_number: img.variation_number,
-      approval_status: img.approval_status ?? 'pending',
-      notes: img.notes,
-      prompt: img.prompt ?? null,
-      productId: id,
-    }))
+    return imageOnly.map((img) => {
+      const imgAny = img as unknown as Record<string, unknown>
+      return {
+        id: img.id,
+        public_url: img.public_url,
+        thumb_public_url: img.thumb_public_url,
+        preview_public_url: img.preview_public_url,
+        signed_url: signedUrlsById[img.id]?.signed_url ?? null,
+        download_url: signedUrlsById[img.id]?.download_url ?? null,
+        thumb_signed_url: signedUrlsById[img.id]?.thumb_signed_url ?? null,
+        preview_signed_url: signedUrlsById[img.id]?.preview_signed_url ?? null,
+        file_name: img.storage_path?.split('/').pop() ?? null,
+        variation_number: img.variation_number,
+        approval_status: img.approval_status ?? 'pending',
+        notes: img.notes,
+        prompt: img.prompt ?? null,
+        productId: id,
+        // Job settings for regeneration
+        reference_set_id: (imgAny.reference_set_id as string) ?? null,
+        texture_set_id: (imgAny.texture_set_id as string) ?? null,
+        product_image_count: (imgAny.product_image_count as number) ?? null,
+        texture_image_count: (imgAny.texture_image_count as number) ?? null,
+      }
+    })
   }, [imageOnly, signedUrlsById, id])
 
   const ensureSignedUrls = useCallback(async (imageId: string) => {

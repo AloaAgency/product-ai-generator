@@ -14,6 +14,10 @@ export default function GeneratePage({
   const { id } = use(params)
   const searchParams = useSearchParams()
   const initialPrompt = searchParams.get('prompt') ?? undefined
+  const initialRefSetId = searchParams.get('reference_set_id') ?? undefined
+  const initialTextureSetId = searchParams.get('texture_set_id') ?? undefined
+  const initialProductImageCount = searchParams.get('product_image_count') ?? undefined
+  const initialTextureImageCount = searchParams.get('texture_image_count') ?? undefined
   const [activeTab, setActiveTab] = useState<'image' | 'video'>('image')
 
   return (
@@ -48,7 +52,14 @@ export default function GeneratePage({
 
       {/* Tab Content */}
       {activeTab === 'image' ? (
-        <ImageGenerateTab productId={id} initialPrompt={initialPrompt} />
+        <ImageGenerateTab
+          productId={id}
+          initialPrompt={initialPrompt}
+          initialRefSetId={initialRefSetId}
+          initialTextureSetId={initialTextureSetId}
+          initialProductImageCount={initialProductImageCount}
+          initialTextureImageCount={initialTextureImageCount}
+        />
       ) : (
         <VideoGenerateTab productId={id} />
       )}

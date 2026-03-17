@@ -18,10 +18,10 @@ export async function GET(
   try {
     const supabase = createServiceClient()
 
-    // Get all job IDs (and prompt_template_id + final_prompt) for this product
+    // Get all job IDs (and prompt_template_id + final_prompt + settings) for this product
     let jobsQuery = supabase
       .from(T.generation_jobs)
-      .select('id, prompt_template_id, final_prompt')
+      .select('id, prompt_template_id, final_prompt, reference_set_id, texture_set_id, product_image_count, texture_image_count')
       .eq('product_id', productId)
 
     if (jobId) {
@@ -37,6 +37,10 @@ export async function GET(
     const jobIds = (jobs || []).map((j) => j.id)
     const jobTemplateMap = new Map((jobs || []).map((j) => [j.id, j.prompt_template_id]))
     const jobPromptMap = new Map((jobs || []).map((j) => [j.id, j.final_prompt as string | null]))
+    const jobRefSetMap = new Map((jobs || []).map((j) => [j.id, j.reference_set_id as string | null]))
+    const jobTextureSetMap = new Map((jobs || []).map((j) => [j.id, j.texture_set_id as string | null]))
+    const jobProductImageCountMap = new Map((jobs || []).map((j) => [j.id, j.product_image_count as number | null]))
+    const jobTextureImageCountMap = new Map((jobs || []).map((j) => [j.id, j.texture_image_count as number | null]))
 
     // Fetch generated images - include both job-based and scene-based (job_id is null)
     let imagesQuery = supabase
@@ -171,6 +175,10 @@ export async function GET(
         : (img.thumb_storage_path ? (signedImageBucket.get(img.thumb_storage_path) ?? null) : null),
       prompt_template_id: img.job_id ? (jobTemplateMap.get(img.job_id) ?? null) : null,
       prompt: img.job_id ? (jobPromptMap.get(img.job_id) ?? null) : null,
+      reference_set_id: img.job_id ? (jobRefSetMap.get(img.job_id) ?? null) : null,
+      texture_set_id: img.job_id ? (jobTextureSetMap.get(img.job_id) ?? null) : null,
+      product_image_count: img.job_id ? (jobProductImageCountMap.get(img.job_id) ?? null) : null,
+      texture_image_count: img.job_id ? (jobTextureImageCountMap.get(img.job_id) ?? null) : null,
     }))
 
     return NextResponse.json({ images: signedImages })
