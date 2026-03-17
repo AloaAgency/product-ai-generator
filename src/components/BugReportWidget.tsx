@@ -1,16 +1,13 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-
-interface SelectedImage {
-  file: File
-  preview: string
-  caption: string
-}
-
-const MAX_IMAGES = 5
-const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
-const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+import {
+  buildBugReportSubmission,
+  MAX_BUG_REPORT_IMAGES,
+  parseBugReportResponse,
+  type SelectedBugReportImage,
+  validateBugReportFiles,
+} from './bugReportWidget.helpers'
 
 export function BugReportWidget() {
   const [isOpen, setIsOpen] = useState(false)
@@ -19,7 +16,7 @@ export function BugReportWidget() {
   const [description, setDescription] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
-  const [images, setImages] = useState<SelectedImage[]>([])
+  const [images, setImages] = useState<SelectedBugReportImage[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Auto-dismiss toast
@@ -44,24 +41,15 @@ export function BugReportWidget() {
     const files = e.target.files
     if (!files) return
 
-    const newImages: SelectedImage[] = []
-    const errors: string[] = []
-
-    Array.from(files).forEach(file => {
-      if (images.length + newImages.length >= MAX_IMAGES) {
-        errors.push(`Maximum ${MAX_IMAGES} images allowed`)
-        return
-      }
-      if (!ALLOWED_TYPES.includes(file.type)) {
-        errors.push(`${file.name}: Invalid file type`)
-        return
-      }
-      if (file.size > MAX_FILE_SIZE) {
-        errors.push(`${file.name}: File too large (max 5MB)`)
-        return
-      }
-      newImages.push({ file, preview: URL.createObjectURL(file), caption: '' })
+    const { acceptedFiles, errors } = validateBugReportFiles({
+      currentCount: images.length,
+      files: Array.from(files),
     })
+    const newImages = acceptedFiles.map((file) => ({
+      file,
+      preview: URL.createObjectURL(file),
+      caption: '',
+    }))
 
     if (errors.length > 0) setToast({ message: errors.join('. '), type: 'error' })
     if (newImages.length > 0) setImages(prev => [...prev, ...newImages])
@@ -94,16 +82,21 @@ export function BugReportWidget() {
 
     setIsSubmitting(true)
     try {
-      const formData = new FormData()
-      formData.append('type', type)
-      formData.append('title', title.trim())
-      formData.append('description', description.trim())
-
-      images.forEach((img, index) => {
-        formData.append(`image_${index}`, img.file)
-        formData.append(`caption_${index}`, img.caption || `Screenshot ${index + 1}`)
+      const submission = buildBugReportSubmission({
+        type,
+        title,
+        description,
+        images,
       })
-      formData.append('imageCount', images.length.toString())
+      const formData = new FormData()
+      formData.append('type', submission.type)
+      formData.append('title', submission.title)
+      formData.append('description', submission.description)
+      submission.imageEntries.forEach((entry) => {
+        formData.append(entry.imageField, entry.file)
+        formData.append(entry.captionField, entry.caption)
+      })
+      formData.append('imageCount', submission.imageCount)
 
       const response = await fetch('/api/bug-report', {
         method: 'POST',
@@ -111,8 +104,7 @@ export function BugReportWidget() {
       })
 
       const raw = await response.text()
-      let data: any = null
-      try { data = JSON.parse(raw) } catch {}
+      const data = parseBugReportResponse(raw)
 
       if (response.ok && (data?.success ?? true)) {
         setToast({ message: data?.message || `${type === 'bug' ? 'Bug' : 'Feature'} report submitted`, type: 'success' })
@@ -264,16 +256,16 @@ export function BugReportWidget() {
                   </div>
                 )}
 
-                {images.length < MAX_IMAGES && (
+                {images.length < MAX_BUG_REPORT_IMAGES && (
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     className="w-full flex items-center justify-center gap-2 px-4 py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-400 hover:border-blue-400 hover:text-blue-600 transition-colors text-sm"
                   >
-                    Add screenshot{images.length > 0 ? ` (${images.length}/${MAX_IMAGES})` : ''}
+                    Add screenshot{images.length > 0 ? ` (${images.length}/${MAX_BUG_REPORT_IMAGES})` : ''}
                   </button>
                 )}
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Max {MAX_IMAGES} images, 5MB each.</p>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Max {MAX_BUG_REPORT_IMAGES} images, 5MB each.</p>
               </div>
 
               {/* Actions */}

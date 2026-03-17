@@ -13,6 +13,60 @@ import type {
   GlobalStyleSettings,
 } from './types'
 
+const DEFAULT_ERROR_MESSAGE = 'Request failed'
+const MAX_ERROR_MESSAGE_LENGTH = 200
+const MAX_SUGGESTED_PROMPT_COUNT = 10
+const requestVersions = new Map<string, number>()
+let aiRequestCount = 0
+
+const sanitizePathSegment = (value: string) => encodeURIComponent(value.trim())
+
+const buildApiPath = (...segments: string[]) =>
+  segments.map((segment) => sanitizePathSegment(segment)).join('/')
+
+const normalizeLabelInput = (value: string) => value.trim().replace(/\s+/g, ' ')
+const trimTextInput = (value: string) => value.trim()
+
+const sanitizeStringArray = (values: string[]) =>
+  Array.from(
+    new Set(
+      values
+        .map((value) => value.trim())
+        .filter(Boolean)
+    )
+  )
+
+const clampInteger = (value: number, min: number, max: number, fallback: number) => {
+  if (!Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.trunc(value)))
+}
+
+const beginTrackedRequest = (key: string) => {
+  const version = (requestVersions.get(key) ?? 0) + 1
+  requestVersions.set(key, version)
+  return version
+}
+
+const isLatestRequest = (key: string, version: number) =>
+  (requestVersions.get(key) ?? 0) === version
+
+const extractErrorMessage = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null
+  const message = value.trim().replace(/\s+/g, ' ')
+  if (!message) return null
+  return message.slice(0, MAX_ERROR_MESSAGE_LENGTH)
+}
+
+const safeParseResponse = async (res: Response) => {
+  const contentType = res.headers.get('content-type') || ''
+  if (contentType.includes('application/json')) {
+    return res.json().catch(() => null)
+  }
+
+  const text = await res.text().catch(() => '')
+  return text ? { error: text } : null
+}
+
 interface AppState {
   // Projects
   projects: Project[]
@@ -107,10 +161,22 @@ interface AppState {
 const api = async (url: string, options?: RequestInit) => {
   const res = await fetch(url, options)
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || res.statusText)
+    const err = await safeParseResponse(res)
+    const message =
+      extractErrorMessage(
+        err && typeof err === 'object' && 'error' in err ? err.error : null
+      ) ||
+      extractErrorMessage(
+        err && typeof err === 'object' && 'message' in err ? err.message : null
+      ) ||
+      extractErrorMessage(res.statusText) ||
+      DEFAULT_ERROR_MESSAGE
+
+    throw new Error(message)
   }
-  return res.json()
+
+  const data = await safeParseResponse(res)
+  return data ?? null
 }
 
 const getDevParallelDefault = () => {
@@ -133,32 +199,48 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentProject: null,
   loadingProjects: false,
   fetchProjects: async () => {
+    const requestKey = 'projects'
+    const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingProjects: true })
     try {
       const data = await api('/api/projects')
+      if (!isLatestRequest(requestKey, requestVersion)) return
       set({ projects: data })
     } finally {
-      set({ loadingProjects: false })
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ loadingProjects: false })
+      }
     }
   },
   fetchProject: async (id) => {
-    const data = await api(`/api/projects/${id}`)
+    const requestKey = 'currentProject'
+    const requestVersion = beginTrackedRequest(requestKey)
+    const data = await api(`/api/projects/${buildApiPath(id)}`)
+    if (!isLatestRequest(requestKey, requestVersion)) return
     set({ currentProject: data })
   },
   createProject: async (data) => {
     const project = await api('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        name: normalizeLabelInput(data.name),
+        description: data.description ? trimTextInput(data.description) : undefined,
+      }),
     })
     set((s) => ({ projects: [project, ...s.projects] }))
     return project
   },
   updateProject: async (id, data) => {
-    const project = await api(`/api/projects/${id}`, {
+    const project = await api(`/api/projects/${buildApiPath(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        name: data.name ? normalizeLabelInput(data.name) : data.name,
+        description:
+          typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+      }),
     })
     set((s) => ({
       currentProject: s.currentProject?.id === id ? project : s.currentProject,
@@ -166,7 +248,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
   },
   deleteProject: async (id) => {
-    await api(`/api/projects/${id}`, { method: 'DELETE' })
+    await api(`/api/projects/${buildApiPath(id)}`, { method: 'DELETE' })
     set((s) => ({
       projects: s.projects.filter((p) => p.id !== id),
       currentProject: s.currentProject?.id === id ? null : s.currentProject,
@@ -178,33 +260,54 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentProduct: null,
   loadingProducts: false,
   fetchProducts: async (projectId) => {
+    const requestKey = 'products'
+    const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingProducts: true })
     try {
-      const qs = projectId ? `?project_id=${projectId}` : ''
-      const data = await api(`/api/products${qs}`)
+      const params = new URLSearchParams()
+      if (projectId) params.set('project_id', projectId.trim())
+      const qs = params.toString()
+      const data = await api(`/api/products${qs ? `?${qs}` : ''}`)
+      if (!isLatestRequest(requestKey, requestVersion)) return
       set({ products: data })
     } finally {
-      set({ loadingProducts: false })
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ loadingProducts: false })
+      }
     }
   },
   fetchProduct: async (id) => {
-    const data = await api(`/api/products/${id}`)
+    const requestKey = 'currentProduct'
+    const requestVersion = beginTrackedRequest(requestKey)
+    const data = await api(`/api/products/${buildApiPath(id)}`)
+    if (!isLatestRequest(requestKey, requestVersion)) return
     set({ currentProduct: data })
   },
   createProduct: async (data) => {
     const product = await api('/api/products', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        name: normalizeLabelInput(data.name),
+        description: data.description ? trimTextInput(data.description) : undefined,
+        project_id: data.project_id.trim(),
+      }),
     })
     set((s) => ({ products: [product, ...s.products] }))
     return product
   },
   updateProduct: async (id, data) => {
-    const product = await api(`/api/products/${id}`, {
+    const product = await api(`/api/products/${buildApiPath(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        name: data.name ? normalizeLabelInput(data.name) : data.name,
+        description:
+          typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+        project_id: data.project_id?.trim(),
+      }),
     })
     set((s) => ({
       currentProduct: s.currentProduct?.id === id ? product : s.currentProduct,
@@ -212,7 +315,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
   },
   deleteProduct: async (id) => {
-    await api(`/api/products/${id}`, { method: 'DELETE' })
+    await api(`/api/products/${buildApiPath(id)}`, { method: 'DELETE' })
     set((s) => ({
       products: s.products.filter((p) => p.id !== id),
       currentProduct: s.currentProduct?.id === id ? null : s.currentProduct,
@@ -223,28 +326,42 @@ export const useAppStore = create<AppState>((set, get) => ({
   referenceSets: [],
   loadingRefSets: false,
   fetchReferenceSets: async (productId) => {
+    const requestKey = 'referenceSets'
+    const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingRefSets: true })
     try {
-      const data = await api(`/api/products/${productId}/reference-sets`)
+      const data = await api(`/api/products/${buildApiPath(productId)}/reference-sets`)
+      if (!isLatestRequest(requestKey, requestVersion)) return
       set({ referenceSets: data })
     } finally {
-      set({ loadingRefSets: false })
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ loadingRefSets: false })
+      }
     }
   },
   createReferenceSet: async (productId, data) => {
-    const refSet = await api(`/api/products/${productId}/reference-sets`, {
+    const refSet = await api(`/api/products/${buildApiPath(productId)}/reference-sets`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        name: normalizeLabelInput(data.name),
+        description: data.description ? trimTextInput(data.description) : undefined,
+      }),
     })
     set((s) => ({ referenceSets: [...s.referenceSets, refSet] }))
     return refSet
   },
   updateReferenceSet: async (productId, setId, data) => {
-    const refSet = await api(`/api/products/${productId}/reference-sets/${setId}`, {
+    const refSet = await api(`/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        name: data.name ? normalizeLabelInput(data.name) : data.name,
+        description:
+          typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+      }),
     })
     set((s) => ({
       referenceSets: s.referenceSets.map((r) =>
@@ -253,18 +370,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
   },
   deleteReferenceSet: async (productId, setId) => {
-    await api(`/api/products/${productId}/reference-sets/${setId}`, { method: 'DELETE' })
+    await api(`/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}`, { method: 'DELETE' })
     set((s) => ({ referenceSets: s.referenceSets.filter((r) => r.id !== setId) }))
   },
 
   // Reference Images
   referenceImages: {},
   fetchReferenceImages: async (productId, setId) => {
+    const requestKey = `referenceImages:${productId}:${setId}`
+    const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await api(`/api/products/${productId}/reference-sets/${setId}/images`)
+      const data = await api(
+        `/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}/images`
+      )
+      if (!isLatestRequest(requestKey, requestVersion)) return
       set((s) => ({ referenceImages: { ...s.referenceImages, [setId]: data } }))
-    } catch (err) {
-      console.error('[ReferenceImages] Failed to fetch images', err)
+    } catch {
+      console.error('[ReferenceImages] Failed to fetch images')
     }
   },
   uploadReferenceImages: async (productId, setId, files) => {
@@ -276,7 +398,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
 
     const signed = await api(
-      `/api/products/${productId}/reference-sets/${setId}/images/upload-urls`,
+      `/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}/images/upload-urls`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -370,7 +492,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const successfulUploads = uploadResults.filter((u) => !u.error)
     let payload: Array<ReferenceImage & { error?: string; file?: string }> = []
     if (successfulUploads.length > 0) {
-      const data = await api(`/api/products/${productId}/reference-sets/${setId}/images`, {
+      const data = await api(`/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}/images`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uploads: successfulUploads }),
@@ -398,7 +520,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   deleteReferenceImage: async (productId, setId, imgId) => {
-    await api(`/api/products/${productId}/reference-sets/${setId}/images/${imgId}`, { method: 'DELETE' })
+    await api(
+      `/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}/images/${buildApiPath(imgId)}`,
+      { method: 'DELETE' }
+    )
     set((s) => ({
       referenceImages: {
         ...s.referenceImages,
@@ -410,28 +535,42 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Prompt Templates
   promptTemplates: [],
   fetchPromptTemplates: async (productId) => {
-    const data = await api(`/api/products/${productId}/prompts`)
+    const requestKey = 'promptTemplates'
+    const requestVersion = beginTrackedRequest(requestKey)
+    const data = await api(`/api/products/${buildApiPath(productId)}/prompts`)
+    if (!isLatestRequest(requestKey, requestVersion)) return
     set({ promptTemplates: data })
   },
   createPromptTemplate: async (productId, data) => {
-    const tmpl = await api(`/api/products/${productId}/prompts`, {
+    const tmpl = await api(`/api/products/${buildApiPath(productId)}/prompts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        name: normalizeLabelInput(data.name),
+        prompt_text: trimTextInput(data.prompt_text),
+        tags: data.tags ? sanitizeStringArray(data.tags) : undefined,
+      }),
     })
     set((s) => ({ promptTemplates: [...s.promptTemplates, tmpl] }))
     return tmpl
   },
   updatePromptTemplate: async (productId, promptId, data) => {
-    const tmpl = await api(`/api/products/${productId}/prompts/${promptId}`, {
+    const tmpl = await api(`/api/products/${buildApiPath(productId)}/prompts/${buildApiPath(promptId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        name: data.name ? normalizeLabelInput(data.name) : data.name,
+        prompt_text:
+          typeof data.prompt_text === 'string' ? trimTextInput(data.prompt_text) : data.prompt_text,
+        tags: data.tags ? sanitizeStringArray(data.tags) : data.tags,
+      }),
     })
     set((s) => ({ promptTemplates: s.promptTemplates.map((p) => (p.id === promptId ? tmpl : p)) }))
   },
   deletePromptTemplate: async (productId, promptId) => {
-    await api(`/api/products/${productId}/prompts/${promptId}`, { method: 'DELETE' })
+    await api(`/api/products/${buildApiPath(productId)}/prompts/${buildApiPath(promptId)}`, { method: 'DELETE' })
     set((s) => ({ promptTemplates: s.promptTemplates.filter((p) => p.id !== promptId) }))
   },
 
@@ -440,15 +579,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentJob: null,
   loadingJobs: false,
   fetchGenerationJobs: async (productId) => {
+    const requestKey = 'generationJobs'
+    const requestVersion = beginTrackedRequest(requestKey)
     const shouldShowLoading = get().generationJobs.length === 0
     if (shouldShowLoading) set({ loadingJobs: true })
     try {
-      const data = await api(`/api/products/${productId}/generate`)
+      const data = await api(`/api/products/${buildApiPath(productId)}/generate`)
+      if (!isLatestRequest(requestKey, requestVersion)) return
       set({ generationJobs: data })
-    } catch (err) {
-      console.error('[GenerationJobs] Failed to fetch jobs', err)
+    } catch {
+      console.error('[GenerationJobs] Failed to fetch jobs')
     } finally {
-      if (shouldShowLoading) set({ loadingJobs: false })
+      if (shouldShowLoading && isLatestRequest(requestKey, requestVersion)) {
+        set({ loadingJobs: false })
+      }
     }
   },
   startGeneration: async (productId, data) => {
@@ -459,7 +603,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ? { parallelism_override: 1, batch_override: 1 }
         : {}),
     }
-    const result = await api(`/api/products/${productId}/generate`, {
+    const result = await api(`/api/products/${buildApiPath(productId)}/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -469,11 +613,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     return job
   },
   fetchJobStatus: async (productId, jobId) => {
-    const data = await api(`/api/products/${productId}/generate/${jobId}`)
+    const requestKey = 'currentJob'
+    const requestVersion = beginTrackedRequest(requestKey)
+    const data = await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`)
+    if (!isLatestRequest(requestKey, requestVersion)) return
     set({ currentJob: { ...data.job, images: data.images } })
   },
   retryGenerationJob: async (productId, jobId) => {
-    const data = await api(`/api/products/${productId}/generate/${jobId}/retry`, {
+    const data = await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}/retry`, {
       method: 'POST',
     })
     const job = data.job ?? data
@@ -484,19 +631,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     return job
   },
   clearGenerationQueue: async (productId) => {
-    await api(`/api/products/${productId}/generate`, { method: 'DELETE' })
+    await api(`/api/products/${buildApiPath(productId)}/generate`, { method: 'DELETE' })
     await get().fetchGenerationJobs(productId)
   },
   clearGenerationFailures: async (productId) => {
-    await api(`/api/products/${productId}/generate?scope=failed`, { method: 'DELETE' })
+    await api(`/api/products/${buildApiPath(productId)}/generate?scope=failed`, { method: 'DELETE' })
     await get().fetchGenerationJobs(productId)
   },
   deleteGenerationJob: async (productId, jobId) => {
-    await api(`/api/products/${productId}/generate/${jobId}`, { method: 'DELETE' })
+    await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`, { method: 'DELETE' })
     set((s) => ({ generationJobs: s.generationJobs.filter((j) => j.id !== jobId) }))
   },
   clearGenerationLog: async (productId) => {
-    await api(`/api/products/${productId}/generate?scope=log`, { method: 'DELETE' })
+    await api(`/api/products/${buildApiPath(productId)}/generate?scope=log`, { method: 'DELETE' })
     set((s) => ({
       generationJobs: s.generationJobs.filter((j) => j.status === 'pending' || j.status === 'running'),
     }))
@@ -506,26 +653,34 @@ export const useAppStore = create<AppState>((set, get) => ({
   galleryImages: [],
   loadingGallery: false,
   fetchGallery: async (productId, filters) => {
+    const params = new URLSearchParams()
+    if (filters?.job_id) params.set('job_id', filters.job_id.trim())
+    if (filters?.approval_status) params.set('approval_status', filters.approval_status.trim())
+    if (filters?.media_type) params.set('media_type', filters.media_type.trim())
+    if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
+    const qs = params.toString()
+    const requestKey = 'gallery'
+    const requestVersion = beginTrackedRequest(requestKey)
     const shouldShowLoading = get().galleryImages.length === 0
     if (shouldShowLoading) set({ loadingGallery: true })
     try {
-      const params = new URLSearchParams()
-      if (filters?.job_id) params.set('job_id', filters.job_id)
-      if (filters?.approval_status) params.set('approval_status', filters.approval_status)
-      if (filters?.media_type) params.set('media_type', filters.media_type)
-      if (filters?.scene_id) params.set('scene_id', filters.scene_id)
-      const qs = params.toString()
-      const data = await api(`/api/products/${productId}/gallery${qs ? `?${qs}` : ''}`)
+      const data = await api(`/api/products/${buildApiPath(productId)}/gallery${qs ? `?${qs}` : ''}`)
+      if (!isLatestRequest(requestKey, requestVersion)) return
       set({ galleryImages: data.images ?? data })
     } finally {
-      if (shouldShowLoading) set({ loadingGallery: false })
+      if (shouldShowLoading && isLatestRequest(requestKey, requestVersion)) {
+        set({ loadingGallery: false })
+      }
     }
   },
   updateImageApproval: async (imageId, approval_status, notes) => {
-    const data = await api(`/api/images/${imageId}`, {
+    const data = await api(`/api/images/${buildApiPath(imageId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approval_status, notes }),
+      body: JSON.stringify({
+        approval_status: approval_status?.trim() || null,
+        notes: typeof notes === 'string' ? trimTextInput(notes) : notes,
+      }),
     })
     const updated = data.image ?? data
     set((s) => ({
@@ -543,7 +698,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
   },
   deleteImage: async (imageId) => {
-    await api(`/api/images/${imageId}`, { method: 'DELETE' })
+    await api(`/api/images/${buildApiPath(imageId)}`, { method: 'DELETE' })
     set((s) => ({
       galleryImages: s.galleryImages.filter((i) => i.id !== imageId),
       currentJob: s.currentJob?.images
@@ -555,12 +710,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
   },
   bulkDeleteImages: async (imageIds) => {
+    const sanitizedIds = sanitizeStringArray(imageIds)
+    if (sanitizedIds.length === 0) return
     await api('/api/images/bulk-delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ imageIds }),
+      body: JSON.stringify({ imageIds: sanitizedIds }),
     })
-    const idSet = new Set(imageIds)
+    const idSet = new Set(sanitizedIds)
     set((s) => ({
       galleryImages: s.galleryImages.filter((i) => !idSet.has(i.id)),
       currentJob: s.currentJob?.images
@@ -576,28 +733,40 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsTemplates: [],
   loadingSettingsTemplates: false,
   fetchSettingsTemplates: async (productId) => {
+    const requestKey = 'settingsTemplates'
+    const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingSettingsTemplates: true })
     try {
-      const data = await api(`/api/products/${productId}/settings-templates`)
+      const data = await api(`/api/products/${buildApiPath(productId)}/settings-templates`)
+      if (!isLatestRequest(requestKey, requestVersion)) return
       set({ settingsTemplates: data })
     } finally {
-      set({ loadingSettingsTemplates: false })
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ loadingSettingsTemplates: false })
+      }
     }
   },
   createSettingsTemplate: async (productId, data) => {
-    const tmpl = await api(`/api/products/${productId}/settings-templates`, {
+    const tmpl = await api(`/api/products/${buildApiPath(productId)}/settings-templates`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        name: normalizeLabelInput(data.name),
+      }),
     })
     set((s) => ({ settingsTemplates: [...s.settingsTemplates, tmpl] }))
     return tmpl
   },
   updateSettingsTemplate: async (productId, templateId, data) => {
-    const tmpl = await api(`/api/products/${productId}/settings-templates/${templateId}`, {
+    const requestBody = {
+      ...data,
+      name: data.name ? normalizeLabelInput(data.name) : data.name,
+    }
+    const tmpl = await api(`/api/products/${buildApiPath(productId)}/settings-templates/${buildApiPath(templateId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify(requestBody),
     })
     set((s) => ({
       settingsTemplates: s.settingsTemplates.map((t) =>
@@ -606,11 +775,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
   },
   deleteSettingsTemplate: async (productId, templateId) => {
-    await api(`/api/products/${productId}/settings-templates/${templateId}`, { method: 'DELETE' })
+    await api(
+      `/api/products/${buildApiPath(productId)}/settings-templates/${buildApiPath(templateId)}`,
+      { method: 'DELETE' }
+    )
     set((s) => ({ settingsTemplates: s.settingsTemplates.filter((t) => t.id !== templateId) }))
   },
   activateSettingsTemplate: async (productId, templateId) => {
-    const tmpl = await api(`/api/products/${productId}/settings-templates/${templateId}`, {
+    const tmpl = await api(`/api/products/${buildApiPath(productId)}/settings-templates/${buildApiPath(templateId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_active: true }),
@@ -627,29 +799,39 @@ export const useAppStore = create<AppState>((set, get) => ({
   // AI
   aiLoading: false,
   buildPrompt: async (productId, userPrompt) => {
+    aiRequestCount += 1
     set({ aiLoading: true })
     try {
       const data = await api('/api/ai/build-prompt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product_id: productId, user_prompt: userPrompt }),
+        body: JSON.stringify({
+          product_id: productId.trim(),
+          user_prompt: trimTextInput(userPrompt),
+        }),
       })
       return data.refined_prompt
     } finally {
-      set({ aiLoading: false })
+      aiRequestCount = Math.max(0, aiRequestCount - 1)
+      set({ aiLoading: aiRequestCount > 0 })
     }
   },
   suggestPrompts: async (productId, count = 5) => {
+    aiRequestCount += 1
     set({ aiLoading: true })
     try {
       const data = await api('/api/ai/suggest-prompts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product_id: productId, count }),
+        body: JSON.stringify({
+          product_id: productId.trim(),
+          count: clampInteger(count, 1, MAX_SUGGESTED_PROMPT_COUNT, 5),
+        }),
       })
       return data.prompts
     } finally {
-      set({ aiLoading: false })
+      aiRequestCount = Math.max(0, aiRequestCount - 1)
+      set({ aiLoading: aiRequestCount > 0 })
     }
   },
 }))

@@ -27,7 +27,7 @@ Next.js application for AI-powered product image and video generation. Uses Supa
 - Video jobs use `generation_jobs` with `job_type = 'video'` and `scene_id` populated.
 - Gemini API keys are stored per project in `global_style_settings.gemini_api_key`.
 
-### Playwright UI Verification (Claude Code only)
+## Playwright UI Verification (Claude Code only)
 Playwright MCP configured in `.mcp.json` for browser automation.
 - After UI changes, use Playwright to visually verify: navigate to the page, take a `browser_snapshot`, check `browser_console_messages` for JS errors, check `browser_network_requests` for failed API calls
 - Click through affected features — test happy path + error states

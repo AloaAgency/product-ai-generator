@@ -16,6 +16,13 @@ import {
   Wand2,
   RefreshCw,
 } from 'lucide-react'
+import {
+  getDisplayImageUrl,
+  getDownloadImageUrl,
+  getKeyboardAction,
+  getNextApprovalStatus,
+  shouldRequestSignedUrls,
+} from './imageLightbox.helpers'
 
 export type ApprovalStatus = 'approved' | 'rejected' | 'pending' | 'request_changes' | null
 
@@ -109,7 +116,7 @@ export function ImageLightbox({
     if (!currentImage || isUpdating) return
     setIsUpdating(true)
     try {
-      const newStatus: ApprovalStatus = currentImage.approval_status === 'approved' ? null : 'approved'
+      const newStatus = getNextApprovalStatus(currentImage.approval_status, 'approved')
       await onApprovalChange(currentImage.id, newStatus)
     } finally {
       setIsUpdating(false)
@@ -120,7 +127,7 @@ export function ImageLightbox({
     if (!currentImage || isUpdating) return
     setIsUpdating(true)
     try {
-      const newStatus: ApprovalStatus = currentImage.approval_status === 'rejected' ? null : 'rejected'
+      const newStatus = getNextApprovalStatus(currentImage.approval_status, 'rejected')
       await onApprovalChange(currentImage.id, newStatus)
     } finally {
       setIsUpdating(false)
@@ -131,7 +138,7 @@ export function ImageLightbox({
     if (!currentImage || isUpdating) return
     setIsUpdating(true)
     try {
-      const newStatus: ApprovalStatus = currentImage.approval_status === 'request_changes' ? null : 'request_changes'
+      const newStatus = getNextApprovalStatus(currentImage.approval_status, 'request_changes')
       await onApprovalChange(currentImage.id, newStatus)
     } finally {
       setIsUpdating(false)
@@ -159,10 +166,10 @@ export function ImageLightbox({
 
   const handleDownload = useCallback(async () => {
     if (!currentImage) return
-    let url = currentImage.download_url || currentImage.signed_url || currentImage.public_url
+    let url = getDownloadImageUrl(currentImage)
     if (!url && onRequestSignedUrls) {
       const signed = await onRequestSignedUrls(currentImage.id)
-      url = signed?.download_url || signed?.signed_url || url
+      url = getDownloadImageUrl(currentImage, signed)
     }
     if (!url) return
 
@@ -201,36 +208,47 @@ export function ImageLightbox({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't capture keys when typing in the notes input
-      if (notesInputRef.current && document.activeElement === notesInputRef.current) {
-        if (e.key === 'Escape') {
-          notesInputRef.current.blur()
-          e.preventDefault()
-        } else if (e.key === 'Enter') {
-          notesInputRef.current.blur()
-          e.preventDefault()
-        }
-        return
-      }
-      switch (e.key) {
-        case 'Escape': onClose(); break
-        case 'ArrowLeft': handlePrev(); break
-        case 'ArrowRight': handleNext(); break
-        case 'Enter': e.preventDefault(); void handleApprove(); break
-        case 'Delete':
-        case 'Backspace':
-          e.preventDefault()
-          if (isRejected && onDelete) {
-            void handlePermanentDelete()
-          } else {
-            void handleReject()
+      const { action, preventDefault } = getKeyboardAction({
+        key: e.key,
+        isNotesFocused: !!notesInputRef.current && document.activeElement === notesInputRef.current,
+        isRejected,
+        hasDelete: !!onDelete,
+      })
+      if (preventDefault) e.preventDefault()
+
+      switch (action) {
+        case 'blurNotes':
+          notesInputRef.current?.blur()
+          break
+        case 'close':
+          onClose()
+          break
+        case 'prev':
+          handlePrev()
+          break
+        case 'next':
+          handleNext()
+          break
+        case 'approve':
+          void handleApprove()
+          break
+        case 'delete':
+          void handlePermanentDelete()
+          break
+        case 'reject':
+          void handleReject()
+          break
+        case 'download':
+          void handleDownload()
+          break
+        case 'requestChanges':
+          void handleRequestChanges()
+          break
+        case 'none':
+          if (e.key === 'p' || e.key === 'P') {
+            void handleCopyPrompt()
           }
           break
-        case 'a': case 'A': void handleApprove(); break
-        case 'r': case 'R': void handleReject(); break
-        case 'd': case 'D': void handleDownload(); break
-        case 'c': case 'C': void handleRequestChanges(); break
-        case 'p': case 'P': void handleCopyPrompt(); break
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -240,19 +258,14 @@ export function ImageLightbox({
   // Fetch signed URLs when the current image changes and has no displayable URL
   useEffect(() => {
     if (!currentImage || !onRequestSignedUrls) return
-    const hasUrl = currentImage.preview_signed_url || currentImage.preview_public_url
-      || currentImage.signed_url || currentImage.public_url
-    if (!hasUrl) {
+    if (shouldRequestSignedUrls(currentImage, !!onRequestSignedUrls)) {
       void onRequestSignedUrls(currentImage.id)
     }
   }, [currentImage?.id, currentImage?.signed_url, currentImage?.preview_signed_url, currentImage?.preview_public_url, currentImage?.public_url, onRequestSignedUrls])
 
   if (!currentImage) return null
 
-  const imageUrl = currentImage.preview_signed_url
-    || currentImage.preview_public_url
-    || currentImage.signed_url
-    || currentImage.public_url
+  const imageUrl = getDisplayImageUrl(currentImage)
 
   return (
     <div
