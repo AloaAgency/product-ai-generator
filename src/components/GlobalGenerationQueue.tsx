@@ -3,17 +3,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAppStore } from '@/lib/store'
 import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
-
-const POLL_MS = 5000
-
-const isActiveStatus = (status: string) => status === 'pending' || status === 'running'
-
-const getFailureTimestamp = (iso?: string | null) => {
-  if (!iso) return null
-  const parsed = new Date(iso)
-  if (Number.isNaN(parsed.getTime())) return null
-  return parsed.toLocaleString()
-}
+import {
+  deriveGenerationQueueState,
+  getFailureTimestamp,
+  getGenerationJobProgress,
+  POLL_MS,
+} from './globalGenerationQueue.helpers'
 
 export default function GlobalGenerationQueue({
   productId,
@@ -42,53 +37,16 @@ export default function GlobalGenerationQueue({
     return () => clearInterval(interval)
   }, [productId, fetchGenerationJobs])
 
-  const activeJobs = useMemo(
-    () => generationJobs.filter((job) => isActiveStatus(job.status)),
-    [generationJobs]
-  )
-  const failedJobs = useMemo(
-    () =>
-      generationJobs
-        .filter((job) => job.status === 'failed')
-        .sort((a, b) => {
-          const aTs = new Date(a.completed_at || a.created_at).getTime()
-          const bTs = new Date(b.completed_at || b.created_at).getTime()
-          return bTs - aTs
-        }),
-    [generationJobs]
-  )
-
-  const pendingCount = useMemo(
-    () => activeJobs.filter((job) => job.status === 'pending').length,
-    [activeJobs]
-  )
-
-  const runningCount = useMemo(
-    () => activeJobs.filter((job) => job.status === 'running').length,
-    [activeJobs]
-  )
-
-  const failedCount = failedJobs.length
-  const recentFailedJobs = failedJobs.slice(0, 3)
-
-  const totals = useMemo(() => {
-    const totalVariations = activeJobs.reduce(
-      (sum, job) => sum + (job.variation_count || 0),
-      0
-    )
-    const totalCompleted = activeJobs.reduce(
-      (sum, job) => sum + (job.completed_count || 0),
-      0
-    )
-    return { totalVariations, totalCompleted }
-  }, [activeJobs])
-
-  const overallProgress =
-    totals.totalVariations > 0
-      ? Math.round((totals.totalCompleted / totals.totalVariations) * 100)
-      : 0
-
-  const hasActiveJobs = activeJobs.length > 0
+  const {
+    activeJobs,
+    pendingCount,
+    runningCount,
+    failedCount,
+    recentFailedJobs,
+    totals,
+    overallProgress,
+    hasActiveJobs,
+  } = useMemo(() => deriveGenerationQueueState(generationJobs), [generationJobs])
 
   return (
     <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/70 backdrop-blur">
@@ -205,9 +163,7 @@ export default function GlobalGenerationQueue({
           <div className="mt-4 space-y-3">
             {hasActiveJobs ? (
               activeJobs.map((job) => {
-                const jobProgress = job.variation_count
-                  ? Math.round((job.completed_count / job.variation_count) * 100)
-                  : 0
+                const jobProgress = getGenerationJobProgress(job)
 
                 const unitLabel = job.job_type === 'video'
                   ? (job.variation_count === 1 ? 'video' : 'videos')
