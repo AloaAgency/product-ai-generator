@@ -150,25 +150,25 @@ export default function ProductDashboard({
                 || ((job.completed_count ?? 0) === 0 && (job.failed_count ?? 0) > 0)
 
               return (
-                <div key={job.id} className="flex items-center justify-between px-5 py-3">
-                  <div className="flex items-center gap-3">
+                <div key={job.id} className="flex flex-col gap-3 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-start gap-3">
                     {statusIcon(job.status)}
-                    <div>
-                      <p className="line-clamp-1 text-sm text-zinc-200">
+                    <div className="min-w-0">
+                      <p className="break-words text-sm leading-5 text-zinc-200 sm:line-clamp-2">
                         {job.final_prompt.slice(0, 80)}
                         {job.final_prompt.length > 80 ? '...' : ''}
                       </p>
-                      <p className="text-xs text-zinc-600">
+                      <p className="mt-1 break-words text-xs leading-5 text-zinc-600">
                         {new Date(job.created_at).toLocaleString()} &middot; {job.variation_count} {unitLabel}
                       </p>
                       {job.error_message && (
-                        <p className="mt-1 text-xs text-red-400 line-clamp-1">
+                        <p className="mt-1 break-words text-xs leading-5 text-red-400 sm:line-clamp-2">
                           {job.error_message}
                         </p>
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                     {canRetry && (
                       <button
                         onClick={async () => {
@@ -181,12 +181,12 @@ export default function ProductDashboard({
                           }
                         }}
                         disabled={retryingJobId === job.id}
-                        className="rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        className="min-h-11 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {retryingJobId === job.id ? 'Retrying...' : 'Retry'}
                       </button>
                     )}
-                    <span className="shrink-0 rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs font-medium capitalize text-zinc-400">
+                    <span className="shrink-0 rounded-full bg-zinc-800 px-2.5 py-1 text-xs font-medium capitalize text-zinc-400">
                       {job.status}
                     </span>
                   </div>
