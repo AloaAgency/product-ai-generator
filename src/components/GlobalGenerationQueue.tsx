@@ -174,23 +174,23 @@ export default function GlobalGenerationQueue({
                     key={job.id}
                     className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="line-clamp-1 text-sm text-zinc-200">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <p className="min-w-0 break-words text-sm leading-5 text-zinc-200 sm:line-clamp-2">
                         {job.final_prompt}
                       </p>
-                      <span className="shrink-0 rounded-full bg-zinc-800 px-2 py-0.5 text-[11px] font-medium capitalize text-zinc-400">
+                      <span className="shrink-0 self-start rounded-full bg-zinc-800 px-2.5 py-1 text-xs font-medium capitalize text-zinc-400">
                         {job.status}
                       </span>
                     </div>
-                    <div className="mt-1 flex items-center justify-between text-xs text-zinc-500">
-                      <span>
+                    <div className="mt-1 flex flex-col gap-1 text-xs text-zinc-500 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="break-words">
                         {job.completed_count} / {job.variation_count} {unitLabel}
                         {job.failed_count ? ` · ${job.failed_count} failed` : ''}
                       </span>
                       <span>{jobProgress}%</span>
                     </div>
                     {job.error_message && (
-                      <p className="mt-1 text-[11px] text-red-400 line-clamp-1">
+                      <p className="mt-1 break-words text-xs leading-5 text-red-400 sm:line-clamp-2">
                         {job.error_message}
                       </p>
                     )}
@@ -213,13 +213,13 @@ export default function GlobalGenerationQueue({
                 <p className="text-xs font-medium text-red-300">Recent failures</p>
                 <div className="mt-2 space-y-2">
                   {recentFailedJobs.map((job) => (
-                    <div key={job.id} className="text-xs text-red-200">
-                      <p className="line-clamp-1">{job.final_prompt}</p>
-                      <p className="text-[11px] text-red-300/70">
+                    <div key={job.id} className="rounded-lg border border-red-900/30 bg-black/10 px-3 py-2 text-xs text-red-200">
+                      <p className="break-words leading-5 sm:line-clamp-2">{job.final_prompt}</p>
+                      <p className="mt-1 text-xs text-red-300/70">
                         Failed at {getFailureTimestamp(job.completed_at || job.created_at) || 'Unknown'}
                       </p>
                       {job.error_message && (
-                        <p className="text-[11px] text-red-300/80 line-clamp-2">
+                        <p className="mt-1 break-words text-xs leading-5 text-red-300/80 sm:line-clamp-3">
                           {job.error_message}
                         </p>
                       )}
