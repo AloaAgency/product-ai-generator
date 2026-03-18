@@ -50,11 +50,11 @@ export default function GlobalGenerationQueue({
 
   return (
     <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/70 backdrop-blur">
-      <div className="flex w-full items-center justify-between gap-3 px-3 sm:px-4 py-3">
+      <div className="flex w-full flex-col gap-3 px-3 py-3 sm:px-4 sm:flex-row sm:items-center sm:justify-between">
         <button
           type="button"
           onClick={() => setExpanded((prev) => !prev)}
-          className="flex flex-1 items-center gap-3 text-left"
+          className="flex min-h-11 w-full min-w-0 flex-1 items-center gap-3 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
           aria-expanded={expanded}
         >
           <div className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-500/10 text-blue-400">
@@ -64,9 +64,9 @@ export default function GlobalGenerationQueue({
               <span className="text-xs font-semibold">AI</span>
             )}
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-sm font-medium text-zinc-100">Generation queue</p>
-            <p className="text-xs text-zinc-500">
+            <p className="break-words text-xs text-zinc-500">
               {loadingJobs && generationJobs.length === 0
                 ? 'Checking queue...'
                 : hasActiveJobs
@@ -77,11 +77,11 @@ export default function GlobalGenerationQueue({
             </p>
           </div>
         </button>
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-zinc-400">
+        <div className="flex w-full flex-wrap items-center gap-2 text-xs text-zinc-400 sm:w-auto sm:justify-end sm:gap-3">
           {process.env.NODE_ENV === 'development' && (
             <button
               type="button"
-              className="whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100"
+              className="min-h-11 whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100"
               onClick={(event) => {
                 event.stopPropagation()
                 setDevParallelGeneration(!devParallelGeneration)
@@ -93,7 +93,7 @@ export default function GlobalGenerationQueue({
           {hasActiveJobs && (
             <button
               type="button"
-              className="whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-11 whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
               onClick={async (event) => {
                 event.stopPropagation()
                 if (clearing) return
@@ -114,7 +114,7 @@ export default function GlobalGenerationQueue({
           {failedCount > 0 && (
             <button
               type="button"
-              className="whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-11 whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
               onClick={async (event) => {
                 event.stopPropagation()
                 if (clearingFailures) return
@@ -132,7 +132,7 @@ export default function GlobalGenerationQueue({
               {clearingFailures ? 'Clearing failures…' : 'Clear failures'}
             </button>
           )}
-          <span>
+          <span className="min-h-11 min-w-0 content-center break-words text-left sm:text-right">
             {hasActiveJobs
               ? `${totals.totalCompleted}/${totals.totalVariations} outputs`
               : failedCount
@@ -147,8 +147,8 @@ export default function GlobalGenerationQueue({
         </div>
       </div>
 
-      <div className="px-3 sm:px-4 pb-4">
-        <div className="flex items-center justify-between text-xs text-zinc-400">
+      <div className="px-3 pb-4 sm:px-4">
+        <div className="flex flex-col gap-1 text-xs text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
           <span>{overallProgress}% overall</span>
           <span>Updates every {POLL_MS / 1000}s</span>
         </div>
