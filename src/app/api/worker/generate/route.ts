@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { processGenerationJob } from '@/lib/generation-worker'
+import { logError } from '@/lib/error-logger'
 import { T } from '@/lib/db-tables'
 
 export const runtime = 'nodejs'
@@ -123,6 +124,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ processed: results.length, results })
   } catch (err) {
     console.warn('[Worker] Error', err)
+    await logError({
+      errorMessage: err instanceof Error ? err.message : 'Worker error',
+      errorSource: 'api/worker/generate',
+    })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Worker error' },
       { status: 500 }

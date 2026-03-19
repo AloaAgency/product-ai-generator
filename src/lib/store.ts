@@ -11,6 +11,7 @@ import type {
   GeneratedImage,
   SettingsTemplate,
   GlobalStyleSettings,
+  ErrorLog,
 } from './types'
 
 interface AppState {
@@ -71,6 +72,11 @@ interface AppState {
     product_image_count?: number
     texture_image_count?: number
     source_image_id?: string
+    lens?: string
+    camera_height?: string
+    lighting?: string
+    color_grading?: string
+    style?: string
   }) => Promise<GenerationJob>
   fetchJobStatus: (productId: string, jobId: string) => Promise<void>
   retryGenerationJob: (productId: string, jobId: string) => Promise<GenerationJob>
@@ -97,6 +103,12 @@ interface AppState {
   updateSettingsTemplate: (productId: string, templateId: string, data: Partial<Pick<SettingsTemplate, 'name' | 'settings' | 'is_active'>>) => Promise<void>
   deleteSettingsTemplate: (productId: string, templateId: string) => Promise<void>
   activateSettingsTemplate: (productId: string, templateId: string) => Promise<void>
+
+  // Error Logs
+  errorLogs: ErrorLog[]
+  loadingErrorLogs: boolean
+  fetchErrorLogs: (projectId: string) => Promise<void>
+  clearErrorLogs: (projectId: string) => Promise<void>
 
   // AI
   aiLoading: boolean
@@ -622,6 +634,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
     // Refresh product to get synced settings
     await get().fetchProduct(productId)
+  },
+
+  // Error Logs
+  errorLogs: [],
+  loadingErrorLogs: false,
+  fetchErrorLogs: async (projectId) => {
+    set({ loadingErrorLogs: true })
+    try {
+      const data = await api(`/api/error-logs?project_id=${projectId}`)
+      set({ errorLogs: data })
+    } catch (err) {
+      console.error('[ErrorLogs] Failed to fetch', err)
+    } finally {
+      set({ loadingErrorLogs: false })
+    }
+  },
+  clearErrorLogs: async (projectId) => {
+    await api(`/api/error-logs?project_id=${projectId}`, { method: 'DELETE' })
+    set({ errorLogs: [] })
   },
 
   // AI
