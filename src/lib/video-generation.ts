@@ -312,33 +312,23 @@ async function generateWithVeo3(
   )
 
   if (!response.ok) {
-    const errBody = await response.text()
-    throw new Error(`Veo API error: ${response.status} ${errBody}`)
+    const message = await getResponseErrorMessage(response)
+    throw new Error(`Veo API error: ${response.status} ${message}`)
   }
 
   let operation = await response.json()
   const operationName = operation?.name
   if (!operationName) throw new Error('No operation name in Veo response')
 
-  const pollIntervalMs = Number(process.env.VEO_POLL_INTERVAL_MS || 10000)
-  const timeoutMs = Number(process.env.VEO_POLL_TIMEOUT_MS || 600000)
-  const startedAt = Date.now()
-
-  while (!operation?.done) {
-    if (Date.now() - startedAt > timeoutMs) {
-      const timeoutSeconds = Math.round(timeoutMs / 1000)
-      throw new Error(`Veo generation timed out after ${timeoutSeconds}s`)
-    }
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
-    const statusResp = await fetch(`${baseUrl}/${operationName}`, {
-      headers: { 'x-goog-api-key': apiKey },
-    })
-    if (!statusResp.ok) {
-      const errBody = await statusResp.text()
-      throw new Error(`Veo operation error: ${statusResp.status} ${errBody}`)
-    }
-    operation = await statusResp.json()
-  }
+  const pollIntervalMs = getPositiveNumberOrDefault(
+    process.env.VEO_POLL_INTERVAL_MS,
+    DEFAULT_VEO_POLL_INTERVAL_MS
+  )
+  const timeoutMs = getPositiveNumberOrDefault(
+    process.env.VEO_POLL_TIMEOUT_MS,
+    DEFAULT_VEO_POLL_TIMEOUT_MS
+  )
+  operation = await pollVeoOperation(baseUrl, operationName, apiKey, pollIntervalMs, timeoutMs)
 
   if (operation?.error) {
     const message =
@@ -369,19 +359,19 @@ async function generateWithVeo3(
 
 async function generateWithLtx(
   prompt: string,
-  frameRefs: { start?: FrameRef; end?: FrameRef },
+  frameRefs: FrameRefs,
   settings: SceneVideoSettings
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
+): Promise<VideoGenerationResult> {
   const apiKey = process.env.LTX_API_KEY
   if (!apiKey) throw new Error('LTX_API_KEY not configured')
 
-  const baseUrl = (process.env.LTX_API_BASE_URL || 'https://api.ltx.video/v1').replace(/\/$/, '')
-  const model = process.env.LTX_MODEL || 'ltx-2-pro'
-  const duration = typeof settings.durationSeconds === 'number' && settings.durationSeconds > 0
-    ? settings.durationSeconds
-    : Number(process.env.LTX_DURATION ?? '8')
-  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 8
-  const resolution = settings.resolution || process.env.LTX_RESOLUTION || '1920x1080'
+  const baseUrl = (process.env.LTX_API_BASE_URL || DEFAULT_LTX_API_BASE_URL).replace(/\/$/, '')
+  const model = process.env.LTX_MODEL || DEFAULT_LTX_MODEL
+  const safeDuration = getPositiveNumberOrDefault(
+    settings.durationSeconds ?? process.env.LTX_DURATION,
+    DEFAULT_LTX_DURATION_SECONDS
+  )
+  const resolution = settings.resolution || process.env.LTX_RESOLUTION || DEFAULT_LTX_RESOLUTION
   const fps = typeof settings.fps === 'number' && settings.fps > 0 ? settings.fps : null
   const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
 
@@ -407,8 +397,8 @@ async function generateWithLtx(
   })
 
   if (!response.ok) {
-    const errBody = await response.text()
-    throw new Error(`LTX API error: ${response.status} ${errBody}`)
+    const message = await getResponseErrorMessage(response)
+    throw new Error(`LTX API error: ${response.status} ${message}`)
   }
 
   const videoBuffer = Buffer.from(await response.arrayBuffer())
