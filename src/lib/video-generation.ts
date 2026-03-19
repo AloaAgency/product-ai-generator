@@ -3,8 +3,16 @@ import { T } from '@/lib/db-tables'
 import { slugify, extractVideoThumbnail, buildThumbnailPath } from '@/lib/image-utils'
 import { resolveGoogleApiKey } from '@/lib/google-api-keys'
 import type { GlobalStyleSettings } from '@/lib/types'
+import { isLtxModel, normalizeDurationValue, parsePositiveNumber } from '@/lib/video-constants'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
+const DEFAULT_VEO_MODEL = 'veo-3.1-generate-preview'
+const DEFAULT_VEO_POLL_INTERVAL_MS = 10_000
+const DEFAULT_VEO_POLL_TIMEOUT_MS = 600_000
+const DEFAULT_LTX_API_BASE_URL = 'https://api.ltx.video/v1'
+const DEFAULT_LTX_MODEL = 'ltx-2-pro'
+const DEFAULT_LTX_DURATION_SECONDS = 8
+const DEFAULT_LTX_RESOLUTION = '1920x1080'
 
 type FrameRef = { url: string; mimeType: string }
 type SceneVideoSettings = {
@@ -13,6 +21,92 @@ type SceneVideoSettings = {
   durationSeconds?: number | null
   fps?: number | null
   generateAudio?: boolean | null
+}
+
+type VideoGenerationResult = { buffer: Buffer; mimeType: string; extension: string }
+type FrameRefs = { start?: FrameRef; end?: FrameRef }
+type GeneratedImageFrame = { storage_path: string | null; mime_type: string | null }
+
+const isVeoModel = (model: string) => model.toLowerCase().startsWith('veo')
+
+function getResponseMimeType(response: Response, fallback: string) {
+  return (response.headers.get('content-type') || fallback).split(';')[0]
+}
+
+async function getResponseErrorMessage(response: Response) {
+  const body = (await response.text()).trim()
+  return body || response.statusText || 'Unknown error'
+}
+
+function getPositiveNumberOrDefault(value: unknown, fallback: number) {
+  return parsePositiveNumber(value) ?? fallback
+}
+
+async function createFrameRef(supabase: ReturnType<typeof createServiceClient>, imageId: string) {
+  const { data: image } = await supabase
+    .from(T.generated_images)
+    .select('storage_path, mime_type')
+    .eq('id', imageId)
+    .single<GeneratedImageFrame>()
+
+  if (!image?.storage_path) return undefined
+
+  const { data: signed } = await supabase.storage
+    .from('generated-images')
+    .createSignedUrl(image.storage_path, SIGNED_URL_TTL_SECONDS)
+
+  if (!signed?.signedUrl) return undefined
+
+  return {
+    url: signed.signedUrl,
+    mimeType: image.mime_type || 'image/png',
+  }
+}
+
+async function fetchFrameBytes(frameRef: FrameRef, label: 'start' | 'end') {
+  const response = await fetch(frameRef.url)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${label} frame (${response.status})`)
+  }
+
+  return {
+    mimeType: frameRef.mimeType || getResponseMimeType(response, 'image/png'),
+    bytesBase64Encoded: Buffer.from(await response.arrayBuffer()).toString('base64'),
+  }
+}
+
+async function pollVeoOperation(
+  baseUrl: string,
+  operationName: string,
+  apiKey: string,
+  pollIntervalMs: number,
+  timeoutMs: number
+) {
+  const startedAt = Date.now()
+  let operation: Record<string, unknown> | null = null
+
+  while (!operation || !operation.done) {
+    if (Date.now() - startedAt > timeoutMs) {
+      const timeoutSeconds = Math.round(timeoutMs / 1000)
+      throw new Error(`Veo generation timed out after ${timeoutSeconds}s`)
+    }
+
+    if (operation) {
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+    }
+
+    const statusResp = await fetch(`${baseUrl}/${operationName}`, {
+      headers: { 'x-goog-api-key': apiKey },
+    })
+    if (!statusResp.ok) {
+      const message = await getResponseErrorMessage(statusResp)
+      throw new Error(`Veo operation error: ${statusResp.status} ${message}`)
+    }
+
+    operation = await statusResp.json()
+  }
+
+  return operation
 }
 
 export async function generateSceneVideo(
@@ -51,12 +145,11 @@ export async function generateSceneVideo(
   }
 
   const resolvedModel = model || scene.generation_model || 'veo3'
-  const normalizedModel = resolvedModel.toLowerCase()
-  const isLtx = normalizedModel.startsWith('ltx')
-  const isVeo = normalizedModel.startsWith('veo')
+  const isLtx = isLtxModel(resolvedModel)
+  const isVeo = isVeoModel(resolvedModel)
 
   // Get signed URLs for start/end frame images
-  const frameRefs: { start?: FrameRef; end?: FrameRef } = {}
+  const frameRefs: FrameRefs = {}
   const videoSettings: SceneVideoSettings = {
     resolution: scene.video_resolution,
     aspectRatio: scene.video_aspect_ratio,
@@ -65,77 +158,31 @@ export async function generateSceneVideo(
     generateAudio: scene.video_generate_audio,
   }
 
-  const hasReferenceImages = !!scene.start_frame_image_id || !!scene.end_frame_image_id
-  const resLower = (videoSettings.resolution || '').toLowerCase()
-  const isHighRes = resLower === '1080p' || resLower === '4k'
-  const mustBe8 = isVeo && (hasReferenceImages || isHighRes)
+  videoSettings.durationSeconds = normalizeDurationValue(
+    resolvedModel,
+    videoSettings.durationSeconds,
+    videoSettings.resolution,
+    !!scene.start_frame_image_id,
+    !!scene.end_frame_image_id
+  )
 
-  if (isVeo && typeof videoSettings.durationSeconds === 'number') {
-    if (mustBe8) {
-      videoSettings.durationSeconds = 8
-    } else {
-      const allowed = [4, 6, 8]
-      videoSettings.durationSeconds = allowed.reduce((closest, current) => {
-        const currentDiff = Math.abs(current - videoSettings.durationSeconds!)
-        const closestDiff = Math.abs(closest - videoSettings.durationSeconds!)
-        if (currentDiff < closestDiff) return current
-        if (currentDiff === closestDiff && current > closest) return current
-        return closest
-      }, allowed[0])
-    }
-  } else if (mustBe8) {
-    videoSettings.durationSeconds = 8
-  }
+  const [startFrameRef, endFrameRef] = await Promise.all([
+    scene.start_frame_image_id ? createFrameRef(supabase, scene.start_frame_image_id) : Promise.resolve(undefined),
+    scene.end_frame_image_id && !isLtx
+      ? createFrameRef(supabase, scene.end_frame_image_id)
+      : Promise.resolve(undefined),
+  ])
 
-  if (scene.start_frame_image_id) {
-    const { data: startImg } = await supabase
-      .from(T.generated_images)
-      .select('storage_path, mime_type')
-      .eq('id', scene.start_frame_image_id)
-      .single()
-
-    if (startImg?.storage_path) {
-      const { data: signed } = await supabase.storage
-        .from('generated-images')
-        .createSignedUrl(startImg.storage_path, SIGNED_URL_TTL_SECONDS)
-      if (signed?.signedUrl) {
-        frameRefs.start = { url: signed.signedUrl, mimeType: startImg.mime_type || 'image/png' }
-      }
-    }
-  }
-
-  if (scene.end_frame_image_id && !isLtx) {
-    const { data: endImg } = await supabase
-      .from(T.generated_images)
-      .select('storage_path, mime_type')
-      .eq('id', scene.end_frame_image_id)
-      .single()
-
-    if (endImg?.storage_path) {
-      const { data: signed } = await supabase.storage
-        .from('generated-images')
-        .createSignedUrl(endImg.storage_path, SIGNED_URL_TTL_SECONDS)
-      if (signed?.signedUrl) {
-        frameRefs.end = { url: signed.signedUrl, mimeType: endImg.mime_type || 'image/png' }
-      }
-    }
-  }
+  if (startFrameRef) frameRefs.start = startFrameRef
+  if (endFrameRef) frameRefs.end = endFrameRef
 
   // Generate video
-  let videoBuffer: Buffer
-  let mimeType: string
-  let extension: string
+  let result: VideoGenerationResult
 
   if (isVeo) {
-    const result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings, geminiApiKey)
-    videoBuffer = result.buffer
-    mimeType = result.mimeType
-    extension = result.extension
+    result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings, geminiApiKey)
   } else if (isLtx) {
-    const result = await generateWithLtx(scene.motion_prompt, frameRefs, videoSettings)
-    videoBuffer = result.buffer
-    mimeType = result.mimeType
-    extension = result.extension
+    result = await generateWithLtx(scene.motion_prompt, frameRefs, videoSettings)
   } else {
     throw new Error(`Unsupported model: ${resolvedModel}`)
   }
@@ -143,19 +190,19 @@ export async function generateSceneVideo(
   // Upload to storage
   const slug = slugify(scene.motion_prompt)
   const timestamp = Date.now()
-  const fileName = `video-${slug}-${timestamp}.${extension}`
+  const fileName = `video-${slug}-${timestamp}.${result.extension}`
   const storagePath = `products/${productId}/scenes/${sceneId}/${fileName}`
 
   const { error: uploadErr } = await supabase.storage
     .from('generated-videos')
-    .upload(storagePath, videoBuffer, { contentType: mimeType })
+    .upload(storagePath, result.buffer, { contentType: result.mimeType })
 
   if (uploadErr) throw new Error(`Upload failed: ${uploadErr.message}`)
 
   // Extract and upload thumbnail
   let thumbStoragePath: string | null = null
   try {
-    const thumb = await extractVideoThumbnail(videoBuffer)
+    const thumb = await extractVideoThumbnail(result.buffer)
     thumbStoragePath = buildThumbnailPath(storagePath, thumb.extension)
 
     const { error: thumbUploadErr } = await supabase.storage
@@ -179,8 +226,8 @@ export async function generateSceneVideo(
       variation_number: 1,
       storage_path: storagePath,
       thumb_storage_path: thumbStoragePath,
-      mime_type: mimeType,
-      file_size: videoBuffer.length,
+      mime_type: result.mimeType,
+      file_size: result.buffer.length,
       media_type: 'video',
       scene_id: sceneId,
       scene_name: scene.title || null,
@@ -199,44 +246,29 @@ export async function generateSceneVideo(
 
 async function generateWithVeo3(
   prompt: string,
-  frameRefs: { start?: FrameRef; end?: FrameRef },
+  frameRefs: FrameRefs,
   settings: SceneVideoSettings,
   apiKeyOverride?: string | null
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
+) : Promise<VideoGenerationResult> {
   const apiKey = apiKeyOverride || process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY
   if (!apiKey) throw new Error('Google AI API key not configured')
 
-  const defaultModel = 'veo-3.1-generate-preview'
   const configuredModel = process.env.VEO_MODEL?.trim()
-  const model = configuredModel || defaultModel
+  const model = configuredModel || DEFAULT_VEO_MODEL
   const baseUrl = 'https://generativelanguage.googleapis.com/v1beta'
   const instance: Record<string, unknown> = { prompt }
   const instances: Array<Record<string, unknown>> = [instance]
   const parameters: Record<string, unknown> = {}
 
   if (frameRefs.start?.url) {
-    const imgResp = await fetch(frameRefs.start.url)
-    if (!imgResp.ok) throw new Error(`Failed to fetch start frame (${imgResp.status})`)
-    const imgBuf = Buffer.from(await imgResp.arrayBuffer())
-    const mimeType = frameRefs.start.mimeType || imgResp.headers.get('content-type') || 'image/png'
-    instance.image = {
-      mimeType,
-      bytesBase64Encoded: imgBuf.toString('base64'),
-    }
+    instance.image = await fetchFrameBytes(frameRefs.start, 'start')
   }
 
   if (frameRefs.end?.url) {
     if (!frameRefs.start?.url) {
       console.warn('[Veo] Ignoring end frame because no start frame was provided.')
     } else {
-      const imgResp = await fetch(frameRefs.end.url)
-      if (!imgResp.ok) throw new Error(`Failed to fetch end frame (${imgResp.status})`)
-      const imgBuf = Buffer.from(await imgResp.arrayBuffer())
-      const mimeType = frameRefs.end.mimeType || imgResp.headers.get('content-type') || 'image/png'
-      instance.lastFrame = {
-        mimeType,
-        bytesBase64Encoded: imgBuf.toString('base64'),
-      }
+      instance.lastFrame = await fetchFrameBytes(frameRefs.end, 'end')
     }
   }
 
@@ -244,25 +276,14 @@ async function generateWithVeo3(
   if (aspectRatio) parameters.aspectRatio = aspectRatio
   const resolution = settings.resolution || process.env.VEO_RESOLUTION
   if (resolution) parameters.resolution = resolution
-  const hasFrames = !!frameRefs.start || !!frameRefs.end
-  const resLower = (resolution || '').toLowerCase()
-  const needsDuration8 = hasFrames || resLower === '1080p' || resLower === '4k'
-  const durationSource = settings.durationSeconds ?? process.env.VEO_DURATION_SECONDS ?? null
-  const parsedDuration = Number(durationSource)
-  const rawDurationSeconds = Number.isFinite(parsedDuration) && parsedDuration > 0
-    ? parsedDuration
-    : null
-  const durationSeconds = needsDuration8
-    ? 8
-    : rawDurationSeconds
-      ? [4, 6, 8].reduce((closest, current) => {
-        const currentDiff = Math.abs(current - rawDurationSeconds)
-        const closestDiff = Math.abs(closest - rawDurationSeconds)
-        if (currentDiff < closestDiff) return current
-        if (currentDiff === closestDiff && current > closest) return current
-        return closest
-      }, 4)
-      : null
+  const durationSource = settings.durationSeconds ?? process.env.VEO_DURATION_SECONDS
+  const durationSeconds = normalizeDurationValue(
+    model,
+    durationSource,
+    resolution,
+    !!frameRefs.start,
+    !!frameRefs.end
+  )
   const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
   const veoSupportsAudio = process.env.VEO_SUPPORTS_AUDIO === 'true'
   if (veoSupportsAudio && generateAudio !== null) parameters.generateAudio = generateAudio
@@ -272,7 +293,6 @@ async function generateWithVeo3(
     console.log('[Veo] parameters', {
       model,
       durationSeconds,
-      needsDuration8,
       resolution: parameters.resolution,
       aspectRatio: parameters.aspectRatio,
       generateAudio: parameters.generateAudio,
@@ -292,33 +312,23 @@ async function generateWithVeo3(
   )
 
   if (!response.ok) {
-    const errBody = await response.text()
-    throw new Error(`Veo API error: ${response.status} ${errBody}`)
+    const message = await getResponseErrorMessage(response)
+    throw new Error(`Veo API error: ${response.status} ${message}`)
   }
 
   let operation = await response.json()
   const operationName = operation?.name
   if (!operationName) throw new Error('No operation name in Veo response')
 
-  const pollIntervalMs = Number(process.env.VEO_POLL_INTERVAL_MS || 10000)
-  const timeoutMs = Number(process.env.VEO_POLL_TIMEOUT_MS || 600000)
-  const startedAt = Date.now()
-
-  while (!operation?.done) {
-    if (Date.now() - startedAt > timeoutMs) {
-      const timeoutSeconds = Math.round(timeoutMs / 1000)
-      throw new Error(`Veo generation timed out after ${timeoutSeconds}s`)
-    }
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
-    const statusResp = await fetch(`${baseUrl}/${operationName}`, {
-      headers: { 'x-goog-api-key': apiKey },
-    })
-    if (!statusResp.ok) {
-      const errBody = await statusResp.text()
-      throw new Error(`Veo operation error: ${statusResp.status} ${errBody}`)
-    }
-    operation = await statusResp.json()
-  }
+  const pollIntervalMs = getPositiveNumberOrDefault(
+    process.env.VEO_POLL_INTERVAL_MS,
+    DEFAULT_VEO_POLL_INTERVAL_MS
+  )
+  const timeoutMs = getPositiveNumberOrDefault(
+    process.env.VEO_POLL_TIMEOUT_MS,
+    DEFAULT_VEO_POLL_TIMEOUT_MS
+  )
+  operation = await pollVeoOperation(baseUrl, operationName, apiKey, pollIntervalMs, timeoutMs)
 
   if (operation?.error) {
     const message =
@@ -337,7 +347,7 @@ async function generateWithVeo3(
   })
   if (!videoResp.ok) throw new Error(`Failed to download video (${videoResp.status})`)
   const videoBuffer = Buffer.from(await videoResp.arrayBuffer())
-  const mimeType = (videoResp.headers.get('content-type') || 'video/mp4').split(';')[0]
+  const mimeType = getResponseMimeType(videoResp, 'video/mp4')
   const extension = mimeType.includes('/') ? mimeType.split('/')[1] : 'mp4'
 
   return {
@@ -349,19 +359,19 @@ async function generateWithVeo3(
 
 async function generateWithLtx(
   prompt: string,
-  frameRefs: { start?: FrameRef; end?: FrameRef },
+  frameRefs: FrameRefs,
   settings: SceneVideoSettings
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
+): Promise<VideoGenerationResult> {
   const apiKey = process.env.LTX_API_KEY
   if (!apiKey) throw new Error('LTX_API_KEY not configured')
 
-  const baseUrl = (process.env.LTX_API_BASE_URL || 'https://api.ltx.video/v1').replace(/\/$/, '')
-  const model = process.env.LTX_MODEL || 'ltx-2-pro'
-  const duration = typeof settings.durationSeconds === 'number' && settings.durationSeconds > 0
-    ? settings.durationSeconds
-    : Number(process.env.LTX_DURATION ?? '8')
-  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 8
-  const resolution = settings.resolution || process.env.LTX_RESOLUTION || '1920x1080'
+  const baseUrl = (process.env.LTX_API_BASE_URL || DEFAULT_LTX_API_BASE_URL).replace(/\/$/, '')
+  const model = process.env.LTX_MODEL || DEFAULT_LTX_MODEL
+  const safeDuration = getPositiveNumberOrDefault(
+    settings.durationSeconds ?? process.env.LTX_DURATION,
+    DEFAULT_LTX_DURATION_SECONDS
+  )
+  const resolution = settings.resolution || process.env.LTX_RESOLUTION || DEFAULT_LTX_RESOLUTION
   const fps = typeof settings.fps === 'number' && settings.fps > 0 ? settings.fps : null
   const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
 
@@ -387,12 +397,12 @@ async function generateWithLtx(
   })
 
   if (!response.ok) {
-    const errBody = await response.text()
-    throw new Error(`LTX API error: ${response.status} ${errBody}`)
+    const message = await getResponseErrorMessage(response)
+    throw new Error(`LTX API error: ${response.status} ${message}`)
   }
 
   const videoBuffer = Buffer.from(await response.arrayBuffer())
-  const mimeType = (response.headers.get('content-type') || 'video/mp4').split(';')[0]
+  const mimeType = getResponseMimeType(response, 'video/mp4')
   const extension = mimeType.includes('/') ? mimeType.split('/')[1] : 'mp4'
 
   return { buffer: videoBuffer, mimeType, extension: extension || 'mp4' }
