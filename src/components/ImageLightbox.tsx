@@ -14,6 +14,7 @@ import {
   Trash2,
   AlertTriangle,
   Wand2,
+  RefreshCw,
 } from 'lucide-react'
 import {
   getDisplayImageUrl,
@@ -40,6 +41,11 @@ export interface LightboxImage {
   approval_status?: ApprovalStatus
   prompt?: string | null
   productId?: string | null
+  // Job settings for regeneration
+  reference_set_id?: string | null
+  texture_set_id?: string | null
+  product_image_count?: number | null
+  texture_image_count?: number | null
 }
 
 interface ImageLightboxProps {
@@ -57,6 +63,17 @@ interface ImageLightboxProps {
     thumb_signed_url?: string | null
     preview_signed_url?: string | null
   } | null>
+}
+
+/** Build generate URL with all job settings pre-filled for regeneration */
+function buildRegenerateUrl(projectId: string, image: LightboxImage): string {
+  const params = new URLSearchParams()
+  if (image.prompt) params.set('prompt', image.prompt)
+  if (image.reference_set_id) params.set('reference_set_id', image.reference_set_id)
+  if (image.texture_set_id) params.set('texture_set_id', image.texture_set_id)
+  if (image.product_image_count != null) params.set('product_image_count', String(image.product_image_count))
+  if (image.texture_image_count != null) params.set('texture_image_count', String(image.texture_image_count))
+  return `/projects/${projectId}/products/${image.productId}/generate?${params.toString()}`
 }
 
 export function ImageLightbox({
@@ -304,9 +321,9 @@ export function ImageLightbox({
               </button>
               {projectId && currentImage.productId && (
                 <a
-                  href={`/projects/${projectId}/products/${currentImage.productId}/generate?prompt=${encodeURIComponent(currentImage.prompt)}`}
+                  href={buildRegenerateUrl(projectId, currentImage)}
                   className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
-                  title="Generate from Prompt"
+                  title="Regenerate with this prompt"
                 >
                   <ExternalLink className="w-4 h-4" />
                 </a>
@@ -490,6 +507,16 @@ export function ImageLightbox({
                 {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                 <span className="hidden sm:inline">Delete</span>
               </button>
+            )}
+            {projectId && currentImage.productId && currentImage.prompt && (
+              <a
+                href={buildRegenerateUrl(projectId, currentImage)}
+                className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium bg-gray-700 text-gray-200 hover:bg-purple-600 hover:text-white transition-colors"
+                title="Regenerate with this prompt"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span className="hidden sm:inline">Regenerate</span>
+              </a>
             )}
             <button
               onClick={handleDownload}

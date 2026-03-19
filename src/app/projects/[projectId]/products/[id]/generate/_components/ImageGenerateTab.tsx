@@ -22,9 +22,20 @@ import { assemblePrompt, DEFAULT_ENHANCEMENTS, type PromptEnhancementValues } fr
 interface ImageGenerateTabProps {
   productId: string
   initialPrompt?: string
+  initialRefSetId?: string
+  initialTextureSetId?: string
+  initialProductImageCount?: string
+  initialTextureImageCount?: string
 }
 
-export function ImageGenerateTab({ productId, initialPrompt }: ImageGenerateTabProps) {
+export function ImageGenerateTab({
+  productId,
+  initialPrompt,
+  initialRefSetId,
+  initialTextureSetId,
+  initialProductImageCount,
+  initialTextureImageCount,
+}: ImageGenerateTabProps) {
   const {
     promptTemplates,
     referenceSets,
@@ -123,13 +134,35 @@ export function ImageGenerateTab({ productId, initialPrompt }: ImageGenerateTabP
   const productSets = referenceSets.filter((rs) => rs.type === 'product' || !rs.type)
   const textureSets = referenceSets.filter((rs) => rs.type === 'texture')
 
-  // Default to active reference set when sets load
+  // Default to active reference set when sets load, or use URL param
+  const [didInitRefSet, setDidInitRefSet] = useState(false)
   useEffect(() => {
-    if (productSets.length > 0 && !selectedRefSetId) {
-      const active = productSets.find((rs) => rs.is_active)
-      setSelectedRefSetId(active?.id ?? productSets[0].id)
+    if (productSets.length > 0 && !didInitRefSet) {
+      if (initialRefSetId && productSets.some((rs) => rs.id === initialRefSetId)) {
+        setSelectedRefSetId(initialRefSetId)
+      } else if (!selectedRefSetId) {
+        const active = productSets.find((rs) => rs.is_active)
+        setSelectedRefSetId(active?.id ?? productSets[0].id)
+      }
+      setDidInitRefSet(true)
     }
-  }, [productSets, selectedRefSetId])
+  }, [productSets, selectedRefSetId, initialRefSetId, didInitRefSet])
+
+  // Pre-fill texture set and image counts from URL params
+  const [didInitTextureSet, setDidInitTextureSet] = useState(false)
+  useEffect(() => {
+    if (didInitTextureSet) return
+    if (referenceSets.length === 0) return
+    if (initialTextureSetId) {
+      const exists = textureSets.some((rs) => rs.id === initialTextureSetId)
+      if (exists) {
+        setSelectedTextureSetId(initialTextureSetId)
+        if (initialProductImageCount) setProductImageCountInput(initialProductImageCount)
+        if (initialTextureImageCount) setTextureImageCountInput(initialTextureImageCount)
+      }
+    }
+    setDidInitTextureSet(true)
+  }, [referenceSets, textureSets, initialTextureSetId, initialProductImageCount, initialTextureImageCount, didInitTextureSet])
 
   // Poll job status
   useEffect(() => {
