@@ -246,44 +246,29 @@ export async function generateSceneVideo(
 
 async function generateWithVeo3(
   prompt: string,
-  frameRefs: { start?: FrameRef; end?: FrameRef },
+  frameRefs: FrameRefs,
   settings: SceneVideoSettings,
   apiKeyOverride?: string | null
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
+) : Promise<VideoGenerationResult> {
   const apiKey = apiKeyOverride || process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY
   if (!apiKey) throw new Error('Google AI API key not configured')
 
-  const defaultModel = 'veo-3.1-generate-preview'
   const configuredModel = process.env.VEO_MODEL?.trim()
-  const model = configuredModel || defaultModel
+  const model = configuredModel || DEFAULT_VEO_MODEL
   const baseUrl = 'https://generativelanguage.googleapis.com/v1beta'
   const instance: Record<string, unknown> = { prompt }
   const instances: Array<Record<string, unknown>> = [instance]
   const parameters: Record<string, unknown> = {}
 
   if (frameRefs.start?.url) {
-    const imgResp = await fetch(frameRefs.start.url)
-    if (!imgResp.ok) throw new Error(`Failed to fetch start frame (${imgResp.status})`)
-    const imgBuf = Buffer.from(await imgResp.arrayBuffer())
-    const mimeType = frameRefs.start.mimeType || imgResp.headers.get('content-type') || 'image/png'
-    instance.image = {
-      mimeType,
-      bytesBase64Encoded: imgBuf.toString('base64'),
-    }
+    instance.image = await fetchFrameBytes(frameRefs.start, 'start')
   }
 
   if (frameRefs.end?.url) {
     if (!frameRefs.start?.url) {
       console.warn('[Veo] Ignoring end frame because no start frame was provided.')
     } else {
-      const imgResp = await fetch(frameRefs.end.url)
-      if (!imgResp.ok) throw new Error(`Failed to fetch end frame (${imgResp.status})`)
-      const imgBuf = Buffer.from(await imgResp.arrayBuffer())
-      const mimeType = frameRefs.end.mimeType || imgResp.headers.get('content-type') || 'image/png'
-      instance.lastFrame = {
-        mimeType,
-        bytesBase64Encoded: imgBuf.toString('base64'),
-      }
+      instance.lastFrame = await fetchFrameBytes(frameRefs.end, 'end')
     }
   }
 
@@ -372,7 +357,7 @@ async function generateWithVeo3(
   })
   if (!videoResp.ok) throw new Error(`Failed to download video (${videoResp.status})`)
   const videoBuffer = Buffer.from(await videoResp.arrayBuffer())
-  const mimeType = (videoResp.headers.get('content-type') || 'video/mp4').split(';')[0]
+  const mimeType = getResponseMimeType(videoResp, 'video/mp4')
   const extension = mimeType.includes('/') ? mimeType.split('/')[1] : 'mp4'
 
   return {
@@ -427,7 +412,7 @@ async function generateWithLtx(
   }
 
   const videoBuffer = Buffer.from(await response.arrayBuffer())
-  const mimeType = (response.headers.get('content-type') || 'video/mp4').split(';')[0]
+  const mimeType = getResponseMimeType(response, 'video/mp4')
   const extension = mimeType.includes('/') ? mimeType.split('/')[1] : 'mp4'
 
   return { buffer: videoBuffer, mimeType, extension: extension || 'mp4' }
