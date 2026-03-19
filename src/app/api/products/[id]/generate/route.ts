@@ -4,6 +4,7 @@ import { buildFullPrompt } from '@/lib/prompt-builder'
 import type { Product, Project, ReferenceSet, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
+import { logError } from '@/lib/error-logger'
 import { processGenerationJob } from '@/lib/generation-worker'
 
 export const runtime = 'nodejs'
@@ -55,6 +56,11 @@ export async function POST(
       batch_override,
       time_budget_ms_override,
       source_image_id = null,
+      lens: overrideLens,
+      camera_height: overrideCameraHeight,
+      lighting: overrideLighting,
+      color_grading: overrideColorGrading,
+      style: overrideStyle,
     } = body
 
     if (!prompt_text) {
@@ -215,6 +221,13 @@ export async function POST(
     }
     const mergedSettings = mergeStyles(projectStyles, typedProduct.global_style_settings)
 
+    // Apply per-generation photographic overrides
+    if (overrideLens) mergedSettings.lens = overrideLens
+    if (overrideCameraHeight) mergedSettings.camera_height = overrideCameraHeight
+    if (overrideLighting) mergedSettings.lighting = overrideLighting
+    if (overrideColorGrading) mergedSettings.color_grading = overrideColorGrading
+    if (overrideStyle) mergedSettings.style = overrideStyle
+
     // Build final prompt
     let userPrompt = prompt_text
     if (source_image_id) {
@@ -311,6 +324,11 @@ export async function POST(
     return NextResponse.json({ job }, { status: 201 })
   } catch (err) {
     console.error('[Generate] Error:', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/products/generate',
+    })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal server error' },
       { status: 500 }

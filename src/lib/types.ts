@@ -145,6 +145,16 @@ export interface Storyboard {
   updated_at: string
 }
 
+export interface ErrorLog {
+  id: string
+  project_id: string | null
+  product_id: string | null
+  error_message: string
+  error_source: string | null
+  error_context: Record<string, unknown> | null
+  created_at: string
+}
+
 export interface StoryboardScene {
   id: string
   product_id: string

@@ -5,10 +5,14 @@ import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import type { Product, Project } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
+import { logError } from '@/lib/error-logger'
 
 export async function POST(request: NextRequest) {
+  let product_id: string | undefined
   try {
-    const { product_id, user_prompt } = await request.json()
+    const body = await request.json()
+    product_id = body.product_id
+    const user_prompt = body.user_prompt
 
     if (!product_id || !user_prompt) {
       return NextResponse.json(
@@ -67,6 +71,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ refined_prompt: text.trim() })
   } catch (err) {
     console.error('[BuildPrompt] Error:', err)
+    await logError({
+      productId: product_id,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/ai/build-prompt',
+    })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal server error' },
       { status: 500 }

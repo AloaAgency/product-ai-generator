@@ -503,19 +503,12 @@ Use this format to generate a settings template via LLM. Save as \`.md\` or \`.j
           id="style"
           icon={Palette}
           title="Style Settings"
-          description="Photography and visual style configuration"
+          description="Product rules and constraints"
           expanded={expandedSections.style}
           onToggle={() => toggleSection('style')}
         >
           <div className="grid gap-4">
             {textArea('Subject Rule', 'subject_rule', 'How the product should be framed...')}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {textInput('Lens', 'lens', 'e.g., 85mm f/1.4')}
-              {textInput('Camera Height', 'camera_height', 'e.g., Eye level')}
-            </div>
-            {textArea('Color Grading', 'color_grading', 'Color treatment and mood...')}
-            {textInput('Lighting', 'lighting', 'e.g., Soft key light with rim accent')}
-            {textArea('Style', 'style', 'Overall visual style...')}
             {textArea('Constraints', 'constraints', 'Things to avoid in generation...')}
             {textArea('Reference Rule', 'reference_rule', 'How reference images should be used...')}
             {textArea('Custom Suffix', 'custom_suffix', 'Text appended to every prompt...')}

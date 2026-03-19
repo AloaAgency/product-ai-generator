@@ -17,6 +17,9 @@ import {
   X,
   Upload,
   Trash2,
+  CheckSquare,
+  Square,
+  Check,
 } from 'lucide-react'
 import Link from 'next/link'
 
@@ -64,6 +67,8 @@ export default function GalleryPage({
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [signedUrlsById, setSignedUrlsById] = useState<Record<string, SignedImageUrls>>({})
   const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const signedUrlsRef = useRef(signedUrlsById)
 
   const [uploadingGallery, setUploadingGallery] = useState(false)
@@ -266,6 +271,36 @@ export default function GalleryPage({
     }
   }
 
+  const toggleSelectMode = () => {
+    setSelectMode((v) => {
+      if (v) setSelectedIds(new Set())
+      return !v
+    })
+  }
+
+  const toggleImageSelection = (imageId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(imageId)) next.delete(imageId)
+      else next.add(imageId)
+      return next
+    })
+  }
+
+  const handleBulkDeleteSelected = async () => {
+    if (selectedIds.size === 0) return
+    if (!window.confirm(`Permanently delete ${selectedIds.size} image${selectedIds.size !== 1 ? 's' : ''}? This cannot be undone.`)) return
+    setBulkDeleting(true)
+    try {
+      await bulkDeleteImages(Array.from(selectedIds))
+      await fetchGallery(id)
+      setSelectedIds(new Set())
+      setSelectMode(false)
+    } finally {
+      setBulkDeleting(false)
+    }
+  }
+
   const handleBulkDelete = async () => {
     const rejectedIds = galleryImages
       .filter((img) => img.approval_status === 'rejected')
@@ -338,6 +373,12 @@ export default function GalleryPage({
       clearInterval(interval)
     }
   }, [id, fetchGallery, fetchGenerationJobs])
+
+  // Clear selection when filters change
+  useEffect(() => {
+    setSelectedIds(new Set())
+    setSelectMode(false)
+  }, [statusFilter, mediaFilter, jobFilter])
 
   useEffect(() => {
     if (lightboxIndex === null) return
@@ -499,6 +540,18 @@ export default function GalleryPage({
             Group by Scene
           </button>
 
+          <button
+            onClick={toggleSelectMode}
+            className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+              selectMode
+                ? 'bg-blue-600 text-white'
+                : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+            }`}
+          >
+            <CheckSquare className="h-3.5 w-3.5" />
+            Select
+          </button>
+
           {jobIds.length > 1 && (
             <select
               value={jobFilter}
@@ -564,18 +617,25 @@ export default function GalleryPage({
                     const globalIndex = imageOnly.findIndex((item) => item.id === img.id)
                     const isRejected = img.approval_status === 'rejected'
                     const isChanges = img.approval_status === 'request_changes'
+                    const isSelected = selectedIds.has(img.id)
                     return (
                       <button
                         key={img.id}
                         onClick={() => {
-                          if (globalIndex !== -1) setLightboxIndex(globalIndex)
+                          if (selectMode) {
+                            toggleImageSelection(img.id)
+                          } else if (globalIndex !== -1) {
+                            setLightboxIndex(globalIndex)
+                          }
                         }}
                         className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
-                          isRejected
-                            ? 'border-red-600/60 hover:border-red-500'
-                            : isChanges
-                              ? 'border-orange-600/60 hover:border-orange-500'
-                              : 'border-zinc-800 hover:border-zinc-600'
+                          isSelected
+                            ? 'border-blue-500 ring-2 ring-blue-500'
+                            : isRejected
+                              ? 'border-red-600/60 hover:border-red-500'
+                              : isChanges
+                                ? 'border-orange-600/60 hover:border-orange-500'
+                                : 'border-zinc-800 hover:border-zinc-600'
                         }`}
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -584,6 +644,17 @@ export default function GalleryPage({
                           alt={`Variation ${img.variation_number}`}
                           className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
                         />
+                        {selectMode && (
+                          <div className="absolute top-2 left-2 z-10">
+                            {isSelected ? (
+                              <div className="flex h-5 w-5 items-center justify-center rounded bg-blue-500">
+                                <Check className="h-3.5 w-3.5 text-white" />
+                              </div>
+                            ) : (
+                              <Square className="h-5 w-5 text-white drop-shadow" />
+                            )}
+                          </div>
+                        )}
                         {statusBadge(img.approval_status)}
                         {isRejected && img.notes && (
                           <div className="absolute bottom-0 inset-x-0 bg-black/70 px-2 py-1">
@@ -609,22 +680,27 @@ export default function GalleryPage({
               const isRejected = img.approval_status === 'rejected'
               const isChanges = img.approval_status === 'request_changes'
               const imageIndex = imageOnly.findIndex((item) => item.id === img.id)
+              const isSelected = selectedIds.has(img.id)
               return (
                 <button
                   key={img.id}
                   onClick={() => {
-                    if (isVideo && img.public_url) {
+                    if (selectMode) {
+                      toggleImageSelection(img.id)
+                    } else if (isVideo && img.public_url) {
                       setPlayingVideoUrl(img.public_url)
                     } else {
                       if (imageIndex !== -1) setLightboxIndex(imageIndex)
                     }
                   }}
                   className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
-                    isRejected
-                      ? 'border-red-600/60 hover:border-red-500'
-                      : isChanges
-                        ? 'border-orange-600/60 hover:border-orange-500'
-                        : 'border-zinc-800 hover:border-zinc-600'
+                    isSelected
+                      ? 'border-blue-500 ring-2 ring-blue-500'
+                      : isRejected
+                        ? 'border-red-600/60 hover:border-red-500'
+                        : isChanges
+                          ? 'border-orange-600/60 hover:border-orange-500'
+                          : 'border-zinc-800 hover:border-zinc-600'
                   }`}
                 >
                   {isVideo ? (
@@ -659,6 +735,17 @@ export default function GalleryPage({
                       className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
                     />
                   )}
+                  {selectMode && (
+                    <div className="absolute top-2 left-2 z-10">
+                      {isSelected ? (
+                        <div className="flex h-5 w-5 items-center justify-center rounded bg-blue-500">
+                          <Check className="h-3.5 w-3.5 text-white" />
+                        </div>
+                      ) : (
+                        <Square className="h-5 w-5 text-white drop-shadow" />
+                      )}
+                    </div>
+                  )}
                   {isVideo && (
                     <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded bg-purple-600/80 px-1.5 py-0.5 text-[10px] font-medium text-white">
                       <Video className="h-3 w-3" /> Video
@@ -681,6 +768,42 @@ export default function GalleryPage({
           </div>
         )
       }
+
+      {/* Selection action bar */}
+      {selectMode && selectedIds.size > 0 && (
+        <div className="sticky bottom-0 z-40 border-t border-zinc-700 bg-zinc-800/95 backdrop-blur px-4 sm:px-6 py-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-zinc-200">
+              {selectedIds.size} selected
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const allIds = new Set(filteredImages.map((img) => img.id))
+                  setSelectedIds(allIds)
+                }}
+                className="rounded-lg border border-zinc-600 px-3 py-1.5 text-sm font-medium text-zinc-200 hover:bg-zinc-700 transition-colors"
+              >
+                Select All
+              </button>
+              <button
+                onClick={handleBulkDeleteSelected}
+                disabled={bulkDeleting}
+                className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-40 transition-colors"
+              >
+                {bulkDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Delete Selected
+              </button>
+              <button
+                onClick={() => { setSelectMode(false); setSelectedIds(new Set()) }}
+                className="rounded-lg border border-zinc-600 px-3 py-1.5 text-sm font-medium text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Video playback overlay */}
       {playingVideoUrl && (

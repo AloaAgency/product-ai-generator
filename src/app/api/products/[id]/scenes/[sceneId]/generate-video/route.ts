@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processGenerationJob } from '@/lib/generation-worker'
+import { logError } from '@/lib/error-logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 600
@@ -11,8 +12,8 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; sceneId: string }> }
 ) {
+  const { id: productId, sceneId } = await params
   try {
-    const { id: productId, sceneId } = await params
     const body = await request.json()
     const supabase = createServiceClient()
 
@@ -101,6 +102,14 @@ export async function POST(
       : message === 'Scene has no motion prompt' ? 400
       : message.startsWith('Unsupported model') ? 400
       : 500
+    if (status === 500) {
+      await logError({
+        productId,
+        errorMessage: message,
+        errorSource: 'api/products/scenes/generate-video',
+        errorContext: { sceneId },
+      })
+    }
     return NextResponse.json({ error: message }, { status })
   }
 }

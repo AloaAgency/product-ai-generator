@@ -12,6 +12,7 @@ import {
   Play,
   ChevronDown,
   Settings,
+  Camera,
   Save,
   X,
 } from 'lucide-react'
@@ -78,6 +79,14 @@ export function ImageGenerateTab({
   const signedUrlsRef = useRef(signedUrlsById)
   useEffect(() => { signedUrlsRef.current = signedUrlsById }, [signedUrlsById])
 
+  // Photographic settings overrides
+  const [photoLens, setPhotoLens] = useState('')
+  const [photoCameraHeight, setPhotoCameraHeight] = useState('')
+  const [photoLighting, setPhotoLighting] = useState('')
+  const [photoColorGrading, setPhotoColorGrading] = useState('')
+  const [photoStyle, setPhotoStyle] = useState('')
+  const [photoSettingsExpanded, setPhotoSettingsExpanded] = useState(false)
+
   // Prompt enhancements
   const [enhancements, setEnhancements] = useState<PromptEnhancementValues>(DEFAULT_ENHANCEMENTS)
 
@@ -127,6 +136,11 @@ export function ImageGenerateTab({
     if (defaults.default_variation_count) {
       setVariationCountInput(String(defaults.default_variation_count))
     }
+    if (defaults.lens) setPhotoLens(defaults.lens)
+    if (defaults.camera_height) setPhotoCameraHeight(defaults.camera_height)
+    if (defaults.lighting) setPhotoLighting(defaults.lighting)
+    if (defaults.color_grading) setPhotoColorGrading(defaults.color_grading)
+    if (defaults.style) setPhotoStyle(defaults.style)
     setDidInitDefaults(true)
   }, [currentProduct, productId, didInitDefaults])
 
@@ -223,6 +237,11 @@ export function ImageGenerateTab({
         texture_set_id: selectedTextureSetId || undefined,
         product_image_count: selectedTextureSetId ? productImageCountValue ?? undefined : undefined,
         texture_image_count: selectedTextureSetId ? textureImageCountValue ?? undefined : undefined,
+        lens: photoLens || undefined,
+        camera_height: photoCameraHeight || undefined,
+        lighting: photoLighting || undefined,
+        color_grading: photoColorGrading || undefined,
+        style: photoStyle || undefined,
       })
       setActiveJobId(job.id)
     } catch {
@@ -562,6 +581,80 @@ export function ImageGenerateTab({
 
       {/* Prompt Enhancements */}
       <PromptEnhancements values={enhancements} onChange={setEnhancements} />
+
+      {/* Photographic Settings */}
+      <section className="space-y-3">
+        <button
+          onClick={() => setPhotoSettingsExpanded((prev) => !prev)}
+          className="flex w-full items-center justify-between text-left"
+        >
+          <h2 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
+            <Camera className="h-4 w-4 text-zinc-400" />
+            Photographic Settings
+          </h2>
+          <ChevronDown
+            className={`h-4 w-4 text-zinc-500 transition-transform ${
+              photoSettingsExpanded ? 'rotate-180' : ''
+            }`}
+          />
+        </button>
+        {photoSettingsExpanded && (
+          <div className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-800/30 p-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-400">Lens</label>
+                <input
+                  type="text"
+                  value={photoLens}
+                  onChange={(e) => setPhotoLens(e.target.value)}
+                  placeholder="e.g., 85mm f/1.4"
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-400">Camera Height</label>
+                <input
+                  type="text"
+                  value={photoCameraHeight}
+                  onChange={(e) => setPhotoCameraHeight(e.target.value)}
+                  placeholder="e.g., Eye level"
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-zinc-400">Lighting</label>
+              <input
+                type="text"
+                value={photoLighting}
+                onChange={(e) => setPhotoLighting(e.target.value)}
+                placeholder="e.g., Soft key light with rim accent"
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-zinc-400">Color Grading</label>
+              <input
+                type="text"
+                value={photoColorGrading}
+                onChange={(e) => setPhotoColorGrading(e.target.value)}
+                placeholder="Color treatment and mood..."
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-zinc-400">Style</label>
+              <input
+                type="text"
+                value={photoStyle}
+                onChange={(e) => setPhotoStyle(e.target.value)}
+                placeholder="Overall visual style..."
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+              />
+            </div>
+          </div>
+        )}
+      </section>
 
       {/* Reference Image */}
       <section className="space-y-3">

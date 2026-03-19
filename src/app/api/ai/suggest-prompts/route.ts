@@ -9,10 +9,14 @@ import {
 import type { Product, Project } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
+import { logError } from '@/lib/error-logger'
 
 export async function POST(request: NextRequest) {
+  let product_id: string | undefined
   try {
-    const { product_id, count = 5 } = await request.json()
+    const body = await request.json()
+    product_id = body.product_id
+    const count = body.count ?? 5
 
     if (!product_id) {
       return NextResponse.json(
@@ -77,6 +81,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ prompts })
   } catch (err) {
     console.error('[SuggestPrompts] Error:', err)
+    await logError({
+      productId: product_id,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/ai/suggest-prompts',
+    })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal server error' },
       { status: 500 }
