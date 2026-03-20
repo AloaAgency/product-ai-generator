@@ -227,9 +227,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchProject: async (id) => {
     const requestKey = 'currentProject'
     const requestVersion = beginTrackedRequest(requestKey)
-    const data = await api(`/api/projects/${buildApiPath(id)}`)
-    if (!isLatestRequest(requestKey, requestVersion)) return
-    set({ currentProject: data })
+    try {
+      const data = await api(`/api/projects/${buildApiPath(id)}`)
+      if (!isLatestRequest(requestKey, requestVersion)) return
+      set({ currentProject: data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ currentProject: null })
+      }
+      throw error
+    }
   },
   createProject: async (data) => {
     const project = await api('/api/projects', {
@@ -291,9 +298,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchProduct: async (id) => {
     const requestKey = 'currentProduct'
     const requestVersion = beginTrackedRequest(requestKey)
-    const data = await api(`/api/products/${buildApiPath(id)}`)
-    if (!isLatestRequest(requestKey, requestVersion)) return
-    set({ currentProduct: data })
+    try {
+      const data = await api(`/api/products/${buildApiPath(id)}`)
+      if (!isLatestRequest(requestKey, requestVersion)) return
+      set({ currentProduct: data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ currentProduct: null })
+      }
+      throw error
+    }
   },
   createProduct: async (data) => {
     const product = await api('/api/products', {
@@ -549,9 +563,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchPromptTemplates: async (productId) => {
     const requestKey = 'promptTemplates'
     const requestVersion = beginTrackedRequest(requestKey)
-    const data = await api(`/api/products/${buildApiPath(productId)}/prompts`)
-    if (!isLatestRequest(requestKey, requestVersion)) return
-    set({ promptTemplates: data })
+    try {
+      const data = await api(`/api/products/${buildApiPath(productId)}/prompts`)
+      if (!isLatestRequest(requestKey, requestVersion)) return
+      set({ promptTemplates: data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ promptTemplates: [] })
+      }
+      throw error
+    }
   },
   createPromptTemplate: async (productId, data) => {
     const tmpl = await api(`/api/products/${buildApiPath(productId)}/prompts`, {
@@ -627,9 +648,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchJobStatus: async (productId, jobId) => {
     const requestKey = 'currentJob'
     const requestVersion = beginTrackedRequest(requestKey)
-    const data = await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`)
-    if (!isLatestRequest(requestKey, requestVersion)) return
-    set({ currentJob: { ...data.job, images: data.images } })
+    try {
+      const data = await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`)
+      if (!isLatestRequest(requestKey, requestVersion)) return
+      set({ currentJob: { ...data.job, images: data.images } })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ currentJob: null })
+      }
+      throw error
+    }
   },
   retryGenerationJob: async (productId, jobId) => {
     const data = await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}/retry`, {
@@ -812,14 +840,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   errorLogs: [],
   loadingErrorLogs: false,
   fetchErrorLogs: async (projectId) => {
+    const requestKey = 'errorLogs'
+    const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingErrorLogs: true })
     try {
       const data = await api(`/api/error-logs?project_id=${projectId}`)
+      if (!isLatestRequest(requestKey, requestVersion)) return
       set({ errorLogs: data })
-    } catch (err) {
-      console.error('[ErrorLogs] Failed to fetch', err)
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ errorLogs: [] })
+      }
+      console.error('[ErrorLogs] Failed to fetch', error)
     } finally {
-      set({ loadingErrorLogs: false })
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ loadingErrorLogs: false })
+      }
     }
   },
   clearErrorLogs: async (projectId) => {
