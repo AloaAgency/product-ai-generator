@@ -345,6 +345,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       products: s.products.filter((p) => p.id !== id),
       currentProduct: s.currentProduct?.id === id ? null : s.currentProduct,
+      referenceSets: s.currentProduct?.id === id ? [] : s.referenceSets,
+      referenceImages: s.currentProduct?.id === id ? {} : s.referenceImages,
+      promptTemplates: s.currentProduct?.id === id ? [] : s.promptTemplates,
+      generationJobs: s.currentProduct?.id === id ? [] : s.generationJobs,
+      currentJob: s.currentProduct?.id === id ? null : s.currentJob,
+      galleryImages: s.currentProduct?.id === id ? [] : s.galleryImages,
+      settingsTemplates: s.currentProduct?.id === id ? [] : s.settingsTemplates,
     }))
   },
 
@@ -397,7 +404,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   deleteReferenceSet: async (productId, setId) => {
     await api(`/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}`, { method: 'DELETE' })
-    set((s) => ({ referenceSets: s.referenceSets.filter((r) => r.id !== setId) }))
+    set((s) => {
+      const nextReferenceImages = { ...s.referenceImages }
+      delete nextReferenceImages[setId]
+      return {
+        referenceSets: s.referenceSets.filter((r) => r.id !== setId),
+        referenceImages: nextReferenceImages,
+      }
+    })
   },
 
   // Reference Images
@@ -680,12 +694,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   deleteGenerationJob: async (productId, jobId) => {
     await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`, { method: 'DELETE' })
-    set((s) => ({ generationJobs: s.generationJobs.filter((j) => j.id !== jobId) }))
+    set((s) => ({
+      generationJobs: s.generationJobs.filter((j) => j.id !== jobId),
+      currentJob: s.currentJob?.id === jobId ? null : s.currentJob,
+    }))
   },
   clearGenerationLog: async (productId) => {
     await api(`/api/products/${buildApiPath(productId)}/generate?scope=log`, { method: 'DELETE' })
     set((s) => ({
       generationJobs: s.generationJobs.filter((j) => j.status === 'pending' || j.status === 'running'),
+      currentJob:
+        s.currentJob && (s.currentJob.status === 'completed' || s.currentJob.status === 'failed')
+          ? null
+          : s.currentJob,
     }))
   },
 
