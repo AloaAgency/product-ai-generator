@@ -27,6 +27,11 @@ const buildApiPath = (...segments: string[]) =>
 
 const normalizeLabelInput = (value: string) => value.trim().replace(/\s+/g, ' ')
 const trimTextInput = (value: string) => value.trim()
+const buildProjectScopedQuery = (projectId: string) => {
+  const params = new URLSearchParams()
+  params.set('project_id', projectId.trim())
+  return params.toString()
+}
 
 const sanitizeStringArray = (values: string[]) =>
   Array.from(
@@ -66,6 +71,10 @@ const safeParseResponse = async (res: Response) => {
 
   const text = await res.text().catch(() => '')
   return text ? { error: text } : null
+}
+
+const logStoreError = (scope: string, error: unknown) => {
+  console.error(`[Store:${scope}]`, error)
 }
 
 interface AppState {
@@ -425,8 +434,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       )
       if (!isLatestRequest(requestKey, requestVersion)) return
       set((s) => ({ referenceImages: { ...s.referenceImages, [setId]: data } }))
-    } catch {
-      console.error('[ReferenceImages] Failed to fetch images')
+    } catch (error) {
+      logStoreError('ReferenceImages', error)
     }
   },
   uploadReferenceImages: async (productId, setId, files) => {
@@ -634,8 +643,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await api(`/api/products/${buildApiPath(productId)}/generate`)
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ generationJobs: data })
-    } catch {
-      console.error('[GenerationJobs] Failed to fetch jobs')
+    } catch (error) {
+      logStoreError('GenerationJobs', error)
     } finally {
       if (shouldShowLoading && isLatestRequest(requestKey, requestVersion)) {
         set({ loadingJobs: false })
@@ -865,14 +874,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingErrorLogs: true })
     try {
-      const data = await api(`/api/error-logs?project_id=${projectId}`)
+      const qs = buildProjectScopedQuery(projectId)
+      const data = await api(`/api/error-logs?${qs}`)
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ errorLogs: data })
     } catch (error) {
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ errorLogs: [] })
       }
-      console.error('[ErrorLogs] Failed to fetch', error)
+      logStoreError('ErrorLogs', error)
     } finally {
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ loadingErrorLogs: false })
@@ -880,7 +890,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   clearErrorLogs: async (projectId) => {
-    await api(`/api/error-logs?project_id=${projectId}`, { method: 'DELETE' })
+    const qs = buildProjectScopedQuery(projectId)
+    await api(`/api/error-logs?${qs}`, { method: 'DELETE' })
     set({ errorLogs: [] })
   },
 
