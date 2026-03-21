@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useAppStore } from '@/lib/store'
 import { AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Trash2 } from 'lucide-react'
+import { getSafeErrorContext, getSafeErrorMessage } from './errorDisplay.helpers'
 
 export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
   const { errorLogs, loadingErrorLogs, fetchErrorLogs, clearErrorLogs } = useAppStore()
@@ -38,8 +39,10 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
   return (
     <div className="mb-4 rounded-lg border border-red-900/40 bg-red-950/20">
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-400 hover:bg-red-950/30 transition-colors rounded-lg"
+        aria-expanded={expanded}
       >
         <AlertTriangle className="h-4 w-4 flex-shrink-0" />
         <span className="flex-1">
@@ -57,6 +60,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
         <div className="border-t border-red-900/40 px-4 py-3">
           <div className="mb-3 flex items-center gap-2">
             <button
+              type="button"
               onClick={() => fetchErrorLogs(projectId)}
               disabled={loadingErrorLogs}
               className="inline-flex items-center gap-1.5 rounded-md bg-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 transition-colors"
@@ -65,6 +69,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
               Refresh
             </button>
             <button
+              type="button"
               onClick={handleClear}
               disabled={clearing || errorLogs.length === 0}
               className="inline-flex items-center gap-1.5 rounded-md bg-red-900/40 px-2.5 py-1.5 text-xs font-medium text-red-300 hover:bg-red-900/60 disabled:opacity-50 transition-colors"
@@ -93,7 +98,9 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
                         </span>
                       )}
                     </div>
-                    <p className="mt-1 text-red-300 break-words">{log.error_message}</p>
+                    <p className="mt-1 text-red-300 break-words">
+                      {getSafeErrorMessage(log.error_message)}
+                    </p>
                   </div>
                   {log.error_context && (
                     <ChevronDown
@@ -103,9 +110,9 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
                     />
                   )}
                 </div>
-                {expandedEntries.has(log.id) && log.error_context && (
+                {expandedEntries.has(log.id) && getSafeErrorContext(log.error_context) && (
                   <pre className="mt-2 max-h-40 overflow-auto rounded bg-zinc-900/80 p-2 text-zinc-400">
-                    {JSON.stringify(log.error_context, null, 2)}
+                    {getSafeErrorContext(log.error_context)}
                   </pre>
                 )}
               </div>

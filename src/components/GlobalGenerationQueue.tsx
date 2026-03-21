@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/lib/store'
 import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
 import {
@@ -9,6 +9,7 @@ import {
   getGenerationJobProgress,
   POLL_MS,
 } from './globalGenerationQueue.helpers'
+import { getSafeQueueErrorMessage } from './errorDisplay.helpers'
 
 export default function GlobalGenerationQueue({
   productId,
@@ -27,14 +28,37 @@ export default function GlobalGenerationQueue({
   const [expanded, setExpanded] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearingFailures, setClearingFailures] = useState(false)
+  const isPollingRef = useRef(false)
 
   useEffect(() => {
-    fetchGenerationJobs(productId)
-    const interval = setInterval(() => {
-      fetchGenerationJobs(productId)
-    }, POLL_MS)
+    let cancelled = false
 
-    return () => clearInterval(interval)
+    const runPoll = async () => {
+      if (cancelled || document.visibilityState === 'hidden' || isPollingRef.current) return
+      isPollingRef.current = true
+      try {
+        await fetchGenerationJobs(productId)
+      } finally {
+        isPollingRef.current = false
+      }
+    }
+
+    void runPoll()
+    const interval = window.setInterval(() => {
+      void runPoll()
+    }, POLL_MS)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void runPoll()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.clearInterval(interval)
+    }
   }, [productId, fetchGenerationJobs])
 
   const {
@@ -49,7 +73,10 @@ export default function GlobalGenerationQueue({
   } = useMemo(() => deriveGenerationQueueState(generationJobs), [generationJobs])
 
   return (
-    <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/70 backdrop-blur">
+    <section
+      className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/70 backdrop-blur"
+      aria-label="Generation queue"
+    >
       <div className="flex w-full flex-col gap-3 px-3 py-3 sm:px-4 sm:flex-row sm:items-center sm:justify-between">
         <button
           type="button"
@@ -66,7 +93,7 @@ export default function GlobalGenerationQueue({
           </div>
           <div className="min-w-0">
             <p className="text-sm font-medium text-zinc-100">Generation queue</p>
-            <p className="break-words text-xs text-zinc-500">
+            <p className="break-words text-xs text-zinc-500" aria-live="polite">
               {loadingJobs && generationJobs.length === 0
                 ? 'Checking queue...'
                 : hasActiveJobs
@@ -132,7 +159,7 @@ export default function GlobalGenerationQueue({
               {clearingFailures ? 'Clearing failures…' : 'Clear failures'}
             </button>
           )}
-          <span className="min-h-11 min-w-0 content-center break-words text-left sm:text-right">
+          <span className="min-h-11 min-w-0 content-center break-words text-left sm:text-right" aria-live="polite">
             {hasActiveJobs
               ? `${totals.totalCompleted}/${totals.totalVariations} outputs`
               : failedCount
@@ -191,7 +218,7 @@ export default function GlobalGenerationQueue({
                     </div>
                     {job.error_message && (
                       <p className="mt-1 break-words text-xs leading-5 text-red-400 sm:line-clamp-2">
-                        {job.error_message}
+                        {getSafeQueueErrorMessage(job.error_message)}
                       </p>
                     )}
                     <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
@@ -220,7 +247,7 @@ export default function GlobalGenerationQueue({
                       </p>
                       {job.error_message && (
                         <p className="mt-1 break-words text-xs leading-5 text-red-300/80 sm:line-clamp-3">
-                          {job.error_message}
+                          {getSafeQueueErrorMessage(job.error_message)}
                         </p>
                       )}
                     </div>
@@ -231,6 +258,6 @@ export default function GlobalGenerationQueue({
           </div>
         )}
       </div>
-    </div>
+    </section>
   )
 }
