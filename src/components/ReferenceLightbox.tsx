@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect } from 'react'
 import { X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 
 export interface ReferenceLightboxImage {
   id: string
@@ -34,12 +35,14 @@ export default function ReferenceLightbox({
     if (hasNext) onNavigate(currentIndex + 1)
   }, [currentIndex, hasNext, onNavigate])
 
+  useModalShortcuts({
+    isOpen: true,
+    onClose,
+  })
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       switch (e.key) {
-        case 'Escape':
-          onClose()
-          break
         case 'ArrowLeft':
           handlePrev()
           break
@@ -58,6 +61,9 @@ export default function ReferenceLightbox({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Reference image lightbox"
     >
       <div
         className="relative flex h-full max-h-[90vh] w-full max-w-5xl flex-col"
@@ -73,9 +79,11 @@ export default function ReferenceLightbox({
             </span>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
             title="Close (Esc)"
+            aria-label="Close lightbox"
           >
             <X className="h-5 w-5" />
           </button>
@@ -84,18 +92,22 @@ export default function ReferenceLightbox({
         <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-zinc-950">
           {hasPrev && (
             <button
+              type="button"
               onClick={handlePrev}
               className="absolute left-4 z-10 rounded-full bg-black/50 p-3 text-white transition-colors hover:bg-black/70"
               title="Previous (←)"
+              aria-label="Previous reference image"
             >
               <ChevronLeft className="h-6 w-6" />
             </button>
           )}
           {hasNext && (
             <button
+              type="button"
               onClick={handleNext}
               className="absolute right-4 z-10 rounded-full bg-black/50 p-3 text-white transition-colors hover:bg-black/70"
               title="Next (→)"
+              aria-label="Next reference image"
             >
               <ChevronRight className="h-6 w-6" />
             </button>

@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   buildBugReportSubmission,
+  clampBugReportText,
+  MAX_BUG_REPORT_CAPTION_LENGTH,
   MAX_BUG_REPORT_FILE_SIZE,
   parseBugReportResponse,
   validateBugReportFiles,
@@ -69,4 +71,12 @@ test('parseBugReportResponse tolerates non-JSON error bodies', () => {
     message: 'ok',
   })
   assert.equal(parseBugReportResponse('gateway timeout'), null)
+})
+
+test('clampBugReportText enforces per-field limits before submission', () => {
+  assert.equal(clampBugReportText('short', MAX_BUG_REPORT_CAPTION_LENGTH), 'short')
+  assert.equal(
+    clampBugReportText('x'.repeat(MAX_BUG_REPORT_CAPTION_LENGTH + 10), MAX_BUG_REPORT_CAPTION_LENGTH).length,
+    MAX_BUG_REPORT_CAPTION_LENGTH
+  )
 })
