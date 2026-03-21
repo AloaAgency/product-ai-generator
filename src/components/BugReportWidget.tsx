@@ -1,13 +1,19 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect } from 'react'
+import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import {
   buildBugReportSubmission,
+  clampBugReportText,
   MAX_BUG_REPORT_IMAGES,
+  MAX_BUG_REPORT_CAPTION_LENGTH,
+  MAX_BUG_REPORT_DESCRIPTION_LENGTH,
+  MAX_BUG_REPORT_TITLE_LENGTH,
   parseBugReportResponse,
   type SelectedBugReportImage,
   validateBugReportFiles,
 } from './bugReportWidget.helpers'
+import { getSafeErrorMessage } from './errorDisplay.helpers'
 
 export function BugReportWidget() {
   const [isOpen, setIsOpen] = useState(false)
@@ -18,6 +24,8 @@ export function BugReportWidget() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const [images, setImages] = useState<SelectedBugReportImage[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const formRef = useRef<HTMLFormElement>(null)
+  const imagesRef = useRef<SelectedBugReportImage[]>([])
 
   // Auto-dismiss toast
   useEffect(() => {
@@ -26,16 +34,23 @@ export function BugReportWidget() {
     return () => clearTimeout(t)
   }, [toast])
 
-  // Close on Escape
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === 'Escape' && !isSubmitting) setIsOpen(false)
-  }, [isSubmitting])
+  useModalShortcuts({
+    isOpen,
+    onClose: () => {
+      if (!isSubmitting) setIsOpen(false)
+    },
+    onSubmit: isSubmitting ? null : () => formRef.current?.requestSubmit(),
+  })
 
   useEffect(() => {
-    if (!isOpen) return
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, handleKeyDown])
+    imagesRef.current = images
+  }, [images])
+
+  useEffect(() => {
+    return () => {
+      imagesRef.current.forEach((img) => URL.revokeObjectURL(img.preview))
+    }
+  }, [])
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
@@ -68,7 +83,7 @@ export function BugReportWidget() {
   const updateImageCaption = (index: number, caption: string) => {
     setImages(prev => {
       const updated = [...prev]
-      updated[index] = { ...updated[index], caption }
+      updated[index] = { ...updated[index], caption: clampBugReportText(caption, MAX_BUG_REPORT_CAPTION_LENGTH) }
       return updated
     })
   }
@@ -115,10 +130,16 @@ export function BugReportWidget() {
         setImages([])
         setIsOpen(false)
       } else {
-        throw new Error(data?.message || `Failed to submit ${type} report`)
+        throw new Error(getSafeErrorMessage(data?.message, `Failed to submit ${type} report. Please try again.`))
       }
     } catch (error) {
-      setToast({ message: error instanceof Error ? error.message : 'Failed to submit. Please try again.', type: 'error' })
+      setToast({
+        message: getSafeErrorMessage(
+          error instanceof Error ? error.message : null,
+          'Failed to submit. Please try again.'
+        ),
+        type: 'error',
+      })
     } finally {
       setIsSubmitting(false)
     }
@@ -146,21 +167,32 @@ export function BugReportWidget() {
 
       {/* Modal */}
       {isOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => !isSubmitting && setIsOpen(false)} />
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center"
+          onClick={() => !isSubmitting && setIsOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Submit feedback"
+        >
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" />
 
-          <div className="relative z-10 w-full max-w-lg mx-4 bg-white dark:bg-gray-800 rounded-lg shadow-xl max-h-[90vh] overflow-y-auto">
+          <div
+            className="relative z-10 w-full max-w-lg mx-4 bg-white dark:bg-gray-800 rounded-lg shadow-xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between p-5 border-b border-gray-200 dark:border-gray-700">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Submit Feedback</h2>
               <button
+                type="button"
                 onClick={() => setIsOpen(false)}
                 className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                aria-label="Close feedback form"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-500 dark:text-gray-400"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-5">
+            <form ref={formRef} onSubmit={handleSubmit} className="p-5">
               {/* Type Selection */}
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Type</label>
@@ -197,9 +229,10 @@ export function BugReportWidget() {
                   id="bug-title"
                   type="text"
                   value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  onChange={(e) => setTitle(clampBugReportText(e.target.value, MAX_BUG_REPORT_TITLE_LENGTH))}
                   placeholder={type === 'bug' ? 'Brief description of the issue' : 'Brief description of the feature'}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  maxLength={MAX_BUG_REPORT_TITLE_LENGTH}
                   required
                 />
               </div>
@@ -210,13 +243,14 @@ export function BugReportWidget() {
                 <textarea
                   id="bug-desc"
                   value={description}
-                  onChange={(e) => setDescription(e.target.value)}
+                  onChange={(e) => setDescription(clampBugReportText(e.target.value, MAX_BUG_REPORT_DESCRIPTION_LENGTH))}
                   placeholder={type === 'bug'
                     ? 'What happened? What did you expect? Steps to reproduce?'
                     : 'What feature would you like? Why would it be helpful?'
                   }
                   rows={4}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  maxLength={MAX_BUG_REPORT_DESCRIPTION_LENGTH}
                   required
                 />
               </div>
@@ -246,6 +280,7 @@ export function BugReportWidget() {
                             onChange={(e) => updateImageCaption(index, e.target.value)}
                             placeholder="Add a caption (optional)"
                             className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                            maxLength={MAX_BUG_REPORT_CAPTION_LENGTH}
                           />
                         </div>
                         <button type="button" onClick={() => removeImage(index)} className="p-1 text-gray-400 hover:text-red-500 transition-colors">
