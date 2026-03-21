@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useCallback, useState, useRef } from 'react'
+import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import {
   X,
   ChevronLeft,
@@ -23,6 +24,7 @@ import {
   getNextApprovalStatus,
   shouldRequestSignedUrls,
 } from './imageLightbox.helpers'
+import { getSafeDownloadErrorMessage } from './errorDisplay.helpers'
 
 export type ApprovalStatus = 'approved' | 'rejected' | 'pending' | 'request_changes' | null
 
@@ -176,6 +178,7 @@ export function ImageLightbox({
     try {
       const fileName = currentImage.file_name || `product-gen-${currentImage.variation_number || 0}.png`
       const resp = await fetch(url)
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const blob = await resp.blob()
       const blobUrl = URL.createObjectURL(blob)
       const link = document.createElement('a')
@@ -186,7 +189,7 @@ export function ImageLightbox({
       document.body.removeChild(link)
       URL.revokeObjectURL(blobUrl)
     } catch (error) {
-      console.error('Download failed:', error)
+      window.alert(getSafeDownloadErrorMessage(error instanceof Error ? error.message : null))
     }
   }, [currentImage, onRequestSignedUrls])
 
@@ -206,6 +209,11 @@ export function ImageLightbox({
   const isRequestChanges = currentImage?.approval_status === 'request_changes'
   const showNotesInput = isRejected || isRequestChanges
 
+  useModalShortcuts({
+    isOpen: true,
+    onClose,
+  })
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const { action, preventDefault } = getKeyboardAction({
@@ -221,7 +229,6 @@ export function ImageLightbox({
           notesInputRef.current?.blur()
           break
         case 'close':
-          onClose()
           break
         case 'prev':
           handlePrev()
@@ -253,7 +260,7 @@ export function ImageLightbox({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, handlePrev, handleNext, handleApprove, handleReject, handleDownload, handleCopyPrompt, handleRequestChanges, handlePermanentDelete, isRejected, onDelete])
+  }, [handlePrev, handleNext, handleApprove, handleReject, handleDownload, handleCopyPrompt, handleRequestChanges, handlePermanentDelete, isRejected, onDelete])
 
   // Fetch signed URLs when the current image changes and has no displayable URL
   useEffect(() => {
@@ -271,6 +278,9 @@ export function ImageLightbox({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-2 sm:p-4"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Generated image lightbox"
     >
       <div
         className="relative flex flex-col w-full max-w-6xl h-full max-h-[90vh]"
@@ -292,9 +302,11 @@ export function ImageLightbox({
             </span>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-2 text-gray-400 hover:text-white transition-colors rounded-lg hover:bg-gray-700"
             title="Close (Esc)"
+            aria-label="Close lightbox"
           >
             <X className="w-5 h-5" />
           </button>
@@ -303,19 +315,22 @@ export function ImageLightbox({
         {/* Prompt section – collapsed by default, capped height when expanded */}
         {currentImage.prompt && (
           <div className="shrink-0 px-4 py-2 bg-gray-900/60 border-b border-gray-800 flex items-start gap-3">
-            <div
+            <button
+              type="button"
               onClick={() => setPromptExpanded(!promptExpanded)}
-              role="button"
-              tabIndex={0}
               className={`flex-1 text-left text-sm text-gray-300 cursor-pointer ${promptExpanded ? 'max-h-20 overflow-y-auto' : 'overflow-hidden whitespace-nowrap text-ellipsis'}`}
+              aria-expanded={promptExpanded}
+              aria-label={promptExpanded ? 'Collapse prompt' : 'Expand prompt'}
             >
               {currentImage.prompt}
-            </div>
+            </button>
             <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
               <button
+                type="button"
                 onClick={handleCopyPrompt}
                 className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
                 title="Copy Prompt (P)"
+                aria-label="Copy prompt"
               >
                 {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
               </button>
@@ -336,16 +351,20 @@ export function ImageLightbox({
         <div className="relative flex-1 min-h-0 flex items-center justify-center bg-gray-950 overflow-hidden">
           {hasPrev && (
             <button
+              type="button"
               onClick={handlePrev}
               className="absolute left-2 sm:left-4 z-10 p-2 sm:p-3 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
+              aria-label="Previous image"
             >
               <ChevronLeft className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
           )}
           {hasNext && (
             <button
+              type="button"
               onClick={handleNext}
               className="absolute right-2 sm:right-4 z-10 p-2 sm:p-3 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
+              aria-label="Next image"
             >
               <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
@@ -390,6 +409,7 @@ export function ImageLightbox({
               value={notesValue}
               onChange={(e) => setNotesValue(e.target.value)}
               onBlur={() => void handleSaveNotes()}
+              maxLength={300}
               placeholder={isRequestChanges ? 'Describe changes needed...' : 'Optional rejection reason...'}
               className={`flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder:text-gray-500 focus:outline-none ${
                 isRequestChanges ? 'focus:border-orange-500' : 'focus:border-red-500'
@@ -419,6 +439,7 @@ export function ImageLightbox({
               const thumbChanges = img.approval_status === 'request_changes'
               return (
                 <button
+                  type="button"
                   key={img.id}
                   onClick={() => onNavigate(index)}
                   className={`relative flex-shrink-0 w-12 h-12 rounded-md overflow-hidden border-2 transition-all ${
@@ -459,6 +480,7 @@ export function ImageLightbox({
           {/* Action buttons */}
           <div className="flex items-center gap-2 justify-end">
             <button
+              type="button"
               onClick={handleApprove}
               disabled={isUpdating}
               className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors ${
@@ -472,6 +494,7 @@ export function ImageLightbox({
               <span className="hidden sm:inline">Approve</span>
             </button>
             <button
+              type="button"
               onClick={handleReject}
               disabled={isUpdating}
               className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors ${
@@ -485,6 +508,7 @@ export function ImageLightbox({
               <span className="hidden sm:inline">Reject</span>
             </button>
             <button
+              type="button"
               onClick={handleRequestChanges}
               disabled={isUpdating}
               className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors ${
@@ -499,6 +523,7 @@ export function ImageLightbox({
             </button>
             {isRejected && onDelete && (
               <button
+                type="button"
                 onClick={handlePermanentDelete}
                 disabled={isUpdating}
                 className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors bg-gray-700 text-gray-200 hover:bg-red-800 hover:text-white"
