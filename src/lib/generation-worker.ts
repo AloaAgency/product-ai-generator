@@ -346,34 +346,35 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
   const allReferenceImages = [...limitedProductImages, ...textureImages]
   const refImagesBase64: { mimeType: string; base64: string }[] = []
 
-  // If this is a Fix Image job, fetch the source image and prepend it
-  if ((job as GenerationJobRecord).source_image_id) {
-    const { data: sourceImg } = await supabase
-      .from(T.generated_images)
-      .select('storage_path, mime_type')
-      .eq('id', (job as GenerationJobRecord).source_image_id!)
-      .single()
-    if (sourceImg) {
-      const { data: sourceFileData } = await supabase.storage
-        .from('generated-images')
-        .download(sourceImg.storage_path)
-      if (sourceFileData) {
-        const arrayBuffer = await sourceFileData.arrayBuffer()
-        const base64 = Buffer.from(arrayBuffer).toString('base64')
-        refImagesBase64.push({ mimeType: sourceImg.mime_type, base64 })
-      }
+  if (sourceImg) {
+    const { data: sourceFileData } = await supabase.storage
+      .from('generated-images')
+      .download(sourceImg.storage_path)
+    if (sourceFileData) {
+      const arrayBuffer = await sourceFileData.arrayBuffer()
+      const base64 = Buffer.from(arrayBuffer).toString('base64')
+      refImagesBase64.push({ mimeType: sourceImg.mime_type, base64 })
     }
   }
 
-  for (const refImg of allReferenceImages) {
-    const { data: fileData } = await supabase.storage
-      .from('reference-images')
-      .download(refImg.storage_path)
-    if (!fileData) continue
-    const arrayBuffer = await fileData.arrayBuffer()
-    const base64 = Buffer.from(arrayBuffer).toString('base64')
-    refImagesBase64.push({ mimeType: refImg.mime_type, base64 })
-  }
+  const downloadedReferenceImages = await Promise.all(
+    allReferenceImages.map(async (refImg) => {
+      const { data: fileData } = await supabase.storage
+        .from('reference-images')
+        .download(refImg.storage_path)
+      if (!fileData) return null
+      const arrayBuffer = await fileData.arrayBuffer()
+      return {
+        mimeType: refImg.mime_type,
+        base64: Buffer.from(arrayBuffer).toString('base64'),
+      }
+    })
+  )
+  refImagesBase64.push(
+    ...downloadedReferenceImages.filter(
+      (image): image is { mimeType: string; base64: string } => image !== null
+    )
+  )
 
   const promptSlug = slugify(job.final_prompt, 30)
   const startingCompleted = job.completed_count || 0
