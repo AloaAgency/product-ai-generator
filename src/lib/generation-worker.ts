@@ -427,15 +427,17 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
       const thumbPath = buildThumbnailPath(storagePath, thumb.extension)
       const previewPath = buildPreviewPath(storagePath, preview.extension)
 
-      await supabase.storage
-        .from('generated-images')
-        .upload(storagePath, imageBuffer, { contentType: result.mimeType })
-      await supabase.storage
-        .from('generated-images')
-        .upload(thumbPath, thumb.buffer, { contentType: thumb.mimeType })
-      await supabase.storage
-        .from('generated-images')
-        .upload(previewPath, preview.buffer, { contentType: preview.mimeType })
+      await Promise.all([
+        supabase.storage
+          .from('generated-images')
+          .upload(storagePath, imageBuffer, { contentType: result.mimeType }),
+        supabase.storage
+          .from('generated-images')
+          .upload(thumbPath, thumb.buffer, { contentType: thumb.mimeType }),
+        supabase.storage
+          .from('generated-images')
+          .upload(previewPath, preview.buffer, { contentType: preview.mimeType }),
+      ])
 
       await supabase.from(T.generated_images).insert({
         job_id: job.id,
