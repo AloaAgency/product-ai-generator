@@ -83,55 +83,46 @@ export async function POST(
 
     const supabase = createServiceClient()
 
-    // Validate source_image_id if provided
-    if (source_image_id) {
-      const { data: sourceImg, error: sourceErr } = await supabase
-        .from(T.generated_images)
-        .select('id')
-        .eq('id', source_image_id)
-        .single()
-      if (sourceErr || !sourceImg) {
-        return NextResponse.json({ error: 'Source image not found' }, { status: 400 })
-      }
-    }
+    // Fetch product and validate source image in parallel (independent queries)
+    const refSetQuery = reference_set_id
+      ? supabase
+          .from(T.reference_sets)
+          .select('*')
+          .eq('id', reference_set_id)
+          .eq('product_id', productId)
+          .single()
+      : supabase
+          .from(T.reference_sets)
+          .select('*')
+          .eq('product_id', productId)
+          .eq('is_active', true)
+          .single()
 
-    // Fetch product
-    const { data: product, error: productError } = await supabase
-      .from(T.products)
-      .select('*')
-      .eq('id', productId)
-      .single()
+    const [productResult, refSetResult, sourceImgResult] = await Promise.all([
+      supabase.from(T.products).select('*').eq('id', productId).single(),
+      refSetQuery,
+      source_image_id
+        ? supabase.from(T.generated_images).select('id').eq('id', source_image_id).single()
+        : Promise.resolve({ data: null, error: null }),
+    ])
 
-    if (productError || !product) {
+    if (productResult.error || !productResult.data) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
 
+    if (source_image_id && (sourceImgResult.error || !sourceImgResult.data)) {
+      return NextResponse.json({ error: 'Source image not found' }, { status: 400 })
+    }
+
+    const product = productResult.data
+
     // Find reference set: use provided ID or fall back to active set
     let refSet: ReferenceSet | null = null
-    if (reference_set_id) {
-      const { data, error } = await supabase
-        .from(T.reference_sets)
-        .select('*')
-        .eq('id', reference_set_id)
-        .eq('product_id', productId)
-        .single()
+    {
+      const { data, error } = refSetResult
       if (error || !data) {
         return NextResponse.json(
-          { error: 'Reference set not found' },
-          { status: 400 }
-        )
-      }
-      refSet = data as ReferenceSet
-    } else {
-      const { data, error } = await supabase
-        .from(T.reference_sets)
-        .select('*')
-        .eq('product_id', productId)
-        .eq('is_active', true)
-        .single()
-      if (error || !data) {
-        return NextResponse.json(
-          { error: 'No active reference set found for this product' },
+          { error: reference_set_id ? 'Reference set not found' : 'No active reference set found for this product' },
           { status: 400 }
         )
       }
@@ -145,39 +136,47 @@ export async function POST(
       )
     }
 
-    // Fetch reference images
-    const { data: refImages } = await supabase
-      .from(T.reference_images)
-      .select('*')
-      .eq('reference_set_id', refSet.id)
-      .order('display_order', { ascending: true })
+    // Fetch reference images, texture set, and project styles in parallel
+    const typedProduct = product as Product
+    const [refImagesResult, textureSetResult, projectResult] = await Promise.all([
+      supabase
+        .from(T.reference_images)
+        .select('*')
+        .eq('reference_set_id', refSet.id)
+        .order('display_order', { ascending: true }),
+      texture_set_id
+        ? supabase
+            .from(T.reference_sets)
+            .select('*')
+            .eq('id', texture_set_id)
+            .eq('product_id', productId)
+            .single()
+        : Promise.resolve({ data: null, error: null }),
+      typedProduct.project_id
+        ? supabase
+            .from(T.projects)
+            .select('global_style_settings')
+            .eq('id', typedProduct.project_id)
+            .single()
+        : Promise.resolve({ data: null }),
+    ])
 
-    const referenceImages: ReferenceImage[] = refImages || []
+    const referenceImages: ReferenceImage[] = refImagesResult.data || []
 
-    // Fetch texture set and images if provided
+    // Validate and resolve texture set
     let textureSet: ReferenceSet | null = null
     let textureImages: ReferenceImage[] = []
     if (texture_set_id) {
-      const { data: texSet, error: texSetError } = await supabase
-        .from(T.reference_sets)
-        .select('*')
-        .eq('id', texture_set_id)
-        .eq('product_id', productId)
-        .single()
-      if (texSetError || !texSet) {
-        return NextResponse.json(
-          { error: 'Texture set not found' },
-          { status: 400 }
-        )
+      if (textureSetResult.error || !textureSetResult.data) {
+        return NextResponse.json({ error: 'Texture set not found' }, { status: 400 })
       }
-      textureSet = texSet as ReferenceSet
+      textureSet = textureSetResult.data as ReferenceSet
       if (textureSet.type && textureSet.type !== 'texture') {
         return NextResponse.json(
           { error: 'texture_set_id must be a texture reference set' },
           { status: 400 }
         )
       }
-
       const { data: texImages } = await supabase
         .from(T.reference_images)
         .select('*')
@@ -206,19 +205,7 @@ export async function POST(
       )
     }
 
-    // Fetch parent project and merge styles
-    const typedProduct = product as Product
-    let projectStyles = {}
-    if (typedProduct.project_id) {
-      const { data: project } = await supabase
-        .from(T.projects)
-        .select('*')
-        .eq('id', typedProduct.project_id)
-        .single()
-      if (project) {
-        projectStyles = (project as Project).global_style_settings ?? {}
-      }
-    }
+    const projectStyles = (projectResult.data as Project | null)?.global_style_settings ?? {}
     const mergedSettings = mergeStyles(projectStyles, typedProduct.global_style_settings)
 
     // Apply per-generation photographic overrides
