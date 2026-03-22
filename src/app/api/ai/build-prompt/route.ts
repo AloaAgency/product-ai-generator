@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
 
     const { data: product, error: productError } = await supabase
       .from(T.products)
-      .select('*')
+      .select('id,name,description,project_id,global_style_settings')
       .eq('id', product_id)
       .single()
 
@@ -35,12 +35,12 @@ export async function POST(request: NextRequest) {
 
     const typedProduct = product as Product
 
-    // Fetch parent project and merge styles
+    // Fetch parent project in parallel if project_id is known
     let projectStyles = {}
     if (typedProduct.project_id) {
       const { data: project } = await supabase
         .from(T.projects)
-        .select('*')
+        .select('global_style_settings')
         .eq('id', typedProduct.project_id)
         .single()
       if (project) {
