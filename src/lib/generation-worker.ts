@@ -526,17 +526,6 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
   const completedCount = startingCompleted + successCount
   const failedCount = startingFailed + failCount
 
-  await supabase
-    .from(T.generation_jobs)
-    .update({
-      completed_count: completedCount,
-      failed_count: failedCount,
-      status: 'pending',
-      ...(lastError ? { error_message: lastError } : {}),
-    })
-    .eq('id', job.id)
-    .in('status', ['pending', 'running'])
-
   if (cancelled) {
     return {
       jobId,
@@ -548,34 +537,34 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
   }
 
   const finalCompleted = completedCount + failedCount >= job.variation_count
-  if (finalCompleted) {
-    const allFailed = completedCount === 0 && failedCount > 0
-    const finalStatus = allFailed ? 'failed' : 'completed'
-    const failureMessage = lastError || 'All variations failed'
-    const updates: Record<string, unknown> = {
-      status: finalStatus,
-      completed_at: new Date().toISOString(),
-    }
-    if (allFailed) updates.error_message = failureMessage
-    await supabase
-      .from(T.generation_jobs)
-      .update(updates)
-      .eq('id', job.id)
-      .in('status', ['pending', 'running'])
-    return {
-      jobId,
-      processed,
-      completed: completedCount,
-      failed: failedCount,
-      status: finalStatus,
-    }
+  const allFailed = finalCompleted && completedCount === 0 && failedCount > 0
+  const finalStatus = finalCompleted
+    ? allFailed ? 'failed' : 'completed'
+    : 'pending'
+  const failureMessage = lastError || 'All variations failed'
+  const updates: Record<string, unknown> = {
+    completed_count: completedCount,
+    failed_count: failedCount,
+    status: finalStatus,
+    ...(lastError ? { error_message: lastError } : {}),
   }
+
+  if (finalCompleted) {
+    updates.completed_at = new Date().toISOString()
+    if (allFailed) updates.error_message = failureMessage
+  }
+
+  await supabase
+    .from(T.generation_jobs)
+    .update(updates)
+    .eq('id', job.id)
+    .in('status', ['pending', 'running'])
 
   return {
     jobId,
     processed,
     completed: completedCount,
     failed: failedCount,
-    status: 'pending',
+    status: finalStatus,
   }
 }
