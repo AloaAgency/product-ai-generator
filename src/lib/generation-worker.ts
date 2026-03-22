@@ -50,6 +50,38 @@ type GenerationJobRecord = {
   source_image_id?: string | null
 }
 
+type WorkerReferenceImage = Pick<ReferenceImage, 'id' | 'reference_set_id' | 'storage_path' | 'mime_type' | 'display_order'>
+
+const GENERATION_JOB_SELECT = [
+  'id',
+  'product_id',
+  'prompt_template_id',
+  'reference_set_id',
+  'texture_set_id',
+  'product_image_count',
+  'texture_image_count',
+  'final_prompt',
+  'variation_count',
+  'resolution',
+  'aspect_ratio',
+  'status',
+  'completed_count',
+  'failed_count',
+  'error_message',
+  'generation_model',
+  'job_type',
+  'scene_id',
+  'source_image_id',
+].join(', ')
+
+const REFERENCE_IMAGE_SELECT = [
+  'id',
+  'reference_set_id',
+  'storage_path',
+  'mime_type',
+  'display_order',
+].join(', ')
+
 const normalizeJobType = (job: GenerationJobRecord) => (job.job_type === 'video' ? 'video' : 'image')
 
 async function processVideoJob(
@@ -168,7 +200,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
 
   const { data: initialJob, error: jobError } = await supabase
     .from(T.generation_jobs)
-    .select('*')
+    .select(GENERATION_JOB_SELECT)
     .eq('id', jobId)
     .single()
 
@@ -176,7 +208,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     throw new Error('Generation job not found')
   }
 
-  let job = initialJob as GenerationJobRecord
+  let job = initialJob as unknown as GenerationJobRecord
 
   if (job.status === 'completed' || job.status === 'cancelled') {
     return {
@@ -214,7 +246,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     .update({ status: 'running', started_at: new Date().toISOString() })
     .eq('id', job.id)
     .eq('status', 'pending')
-    .select('*')
+    .select(GENERATION_JOB_SELECT)
     .maybeSingle()
 
   if (claimError) {
@@ -237,7 +269,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     }
   }
 
-  job = claimedJob as GenerationJobRecord
+  job = claimedJob as unknown as GenerationJobRecord
 
   const jobType = normalizeJobType(job)
   if (jobType === 'video') {
