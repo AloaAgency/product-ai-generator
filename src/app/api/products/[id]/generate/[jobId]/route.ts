@@ -45,33 +45,25 @@ export async function GET(
       .map((img) => img.storage_path)
       .filter(Boolean) as string[]
 
-    let signedImagesMap = new Map<string, string>()
-    if (imagePaths.length > 0) {
-      const { data: signed } = await supabase.storage
-        .from('generated-images')
-        .createSignedUrls(imagePaths, SIGNED_URL_TTL_SECONDS)
-      if (signed) {
-        signedImagesMap = new Map(
-          signed
-            .filter((item) => item?.signedUrl && item?.path)
-            .map((item) => [item.path!, item.signedUrl])
-        )
-      }
-    }
+    const [signedImagesResult, signedVideosResult] = await Promise.all([
+      imagePaths.length > 0
+        ? supabase.storage.from('generated-images').createSignedUrls(imagePaths, SIGNED_URL_TTL_SECONDS)
+        : Promise.resolve({ data: null }),
+      videoPaths.length > 0
+        ? supabase.storage.from('generated-videos').createSignedUrls(videoPaths, SIGNED_URL_TTL_SECONDS)
+        : Promise.resolve({ data: null }),
+    ])
 
-    let signedVideosMap = new Map<string, string>()
-    if (videoPaths.length > 0) {
-      const { data: signed } = await supabase.storage
-        .from('generated-videos')
-        .createSignedUrls(videoPaths, SIGNED_URL_TTL_SECONDS)
-      if (signed) {
-        signedVideosMap = new Map(
-          signed
-            .filter((item) => item?.signedUrl && item?.path)
-            .map((item) => [item.path!, item.signedUrl])
-        )
-      }
-    }
+    const signedImagesMap = new Map<string, string>(
+      (signedImagesResult.data || [])
+        .filter((item) => item?.signedUrl && item?.path)
+        .map((item) => [item.path!, item.signedUrl])
+    )
+    const signedVideosMap = new Map<string, string>(
+      (signedVideosResult.data || [])
+        .filter((item) => item?.signedUrl && item?.path)
+        .map((item) => [item.path!, item.signedUrl])
+    )
 
     const signedImages = (images || []).map((img) => ({
       ...img,

@@ -116,7 +116,7 @@ export async function GET(
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
     }
 
-    // Sign thumbnail + full-size URLs for images
+    // Sign thumbnail + full-size URLs for images and video URLs in parallel
     const imageItems = (images || []).filter((img) => img.media_type !== 'video')
     const thumbPaths = imageItems
       .map((img) => img.thumb_storage_path)
@@ -125,22 +125,6 @@ export async function GET(
       .map((img) => img.storage_path)
       .filter(Boolean) as string[]
 
-    let signedImageBucket = new Map<string, string>()
-    const allImageBucketPaths = [...new Set([...thumbPaths, ...imagePaths])]
-    if (allImageBucketPaths.length > 0) {
-      const { data: signed } = await supabase.storage
-        .from('generated-images')
-        .createSignedUrls(allImageBucketPaths, SIGNED_URL_TTL_SECONDS)
-      if (signed) {
-        signedImageBucket = new Map(
-          signed
-            .filter((item) => item?.signedUrl && item?.path)
-            .map((item) => [item.path!, item.signedUrl])
-        )
-      }
-    }
-
-    // Sign video URLs + video thumbnail URLs
     const videoItems = (images || []).filter((img) => img.media_type === 'video')
     const videoPaths = videoItems
       .map((v) => v.storage_path)
@@ -149,20 +133,28 @@ export async function GET(
       .map((v) => v.thumb_storage_path)
       .filter(Boolean) as string[]
 
-    let signedVideos = new Map<string, string>()
+    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...imagePaths]))
     const allVideoBucketPaths = [...videoPaths, ...videoThumbPaths]
-    if (allVideoBucketPaths.length > 0) {
-      const { data: signed } = await supabase.storage
-        .from('generated-videos')
-        .createSignedUrls(allVideoBucketPaths, SIGNED_URL_TTL_SECONDS)
-      if (signed) {
-        signedVideos = new Map(
-          signed
-            .filter((item) => item?.signedUrl && item?.path)
-            .map((item) => [item.path!, item.signedUrl])
-        )
-      }
-    }
+
+    const [signedImageResult, signedVideoResult] = await Promise.all([
+      allImageBucketPaths.length > 0
+        ? supabase.storage.from('generated-images').createSignedUrls(allImageBucketPaths, SIGNED_URL_TTL_SECONDS)
+        : Promise.resolve({ data: null }),
+      allVideoBucketPaths.length > 0
+        ? supabase.storage.from('generated-videos').createSignedUrls(allVideoBucketPaths, SIGNED_URL_TTL_SECONDS)
+        : Promise.resolve({ data: null }),
+    ])
+
+    const signedImageBucket = new Map<string, string>(
+      (signedImageResult.data || [])
+        .filter((item) => item?.signedUrl && item?.path)
+        .map((item) => [item.path!, item.signedUrl])
+    )
+    const signedVideos = new Map<string, string>(
+      (signedVideoResult.data || [])
+        .filter((item) => item?.signedUrl && item?.path)
+        .map((item) => [item.path!, item.signedUrl])
+    )
 
     const signedImages = (images || []).map((img) => ({
       ...img,
