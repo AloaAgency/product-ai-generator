@@ -280,11 +280,45 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     throw new Error('Image generation job missing reference_set_id')
   }
 
-  const { data: product } = await supabase
+  const productPromise = supabase
     .from(T.products)
     .select('project_id, global_style_settings')
     .eq('id', job.product_id)
     .single()
+
+  const productReferenceImagesPromise = supabase
+    .from(T.reference_images)
+    .select(REFERENCE_IMAGE_SELECT)
+    .eq('reference_set_id', job.reference_set_id)
+    .order('display_order', { ascending: true })
+
+  const textureReferenceImagesPromise = job.texture_set_id
+    ? supabase
+      .from(T.reference_images)
+      .select(REFERENCE_IMAGE_SELECT)
+      .eq('reference_set_id', job.texture_set_id)
+      .order('display_order', { ascending: true })
+    : Promise.resolve({ data: null })
+
+  const sourceImagePromise = job.source_image_id
+    ? supabase
+      .from(T.generated_images)
+      .select('storage_path, mime_type')
+      .eq('id', job.source_image_id)
+      .maybeSingle()
+    : Promise.resolve({ data: null })
+
+  const [
+    { data: product },
+    { data: refImages },
+    { data: texImages },
+    { data: sourceImg },
+  ] = await Promise.all([
+    productPromise,
+    productReferenceImagesPromise,
+    textureReferenceImagesPromise,
+    sourceImagePromise,
+  ])
 
   let geminiApiKey = resolveGoogleApiKey(product?.global_style_settings as GlobalStyleSettings | null)
 
@@ -297,26 +331,13 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     geminiApiKey = resolveGoogleApiKey(project?.global_style_settings as GlobalStyleSettings | null)
   }
 
-  // Fetch product reference images
-  const { data: refImages } = await supabase
-    .from(T.reference_images)
-    .select('*')
-    .eq('reference_set_id', job.reference_set_id)
-    .order('display_order', { ascending: true })
-
-  const referenceImages: ReferenceImage[] = refImages || []
+  const referenceImages = (refImages || []) as unknown as WorkerReferenceImage[]
   const productImageLimit = job.product_image_count ?? referenceImages.length
   const limitedProductImages = referenceImages.slice(0, productImageLimit)
 
-  // Fetch texture reference images if texture_set_id is present
-  let textureImages: ReferenceImage[] = []
-  if (job.texture_set_id) {
-    const { data: texImages } = await supabase
-      .from(T.reference_images)
-      .select('*')
-      .eq('reference_set_id', job.texture_set_id)
-      .order('display_order', { ascending: true })
-    textureImages = texImages || []
+  let textureImages: WorkerReferenceImage[] = []
+  if (job.texture_set_id && texImages) {
+    textureImages = (texImages || []) as unknown as WorkerReferenceImage[]
     const textureImageLimit = job.texture_image_count ?? textureImages.length
     textureImages = textureImages.slice(0, textureImageLimit)
   }
