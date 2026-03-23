@@ -26,6 +26,31 @@ type SceneVideoSettings = {
 type VideoGenerationResult = { buffer: Buffer; mimeType: string; extension: string }
 type FrameRefs = { start?: FrameRef; end?: FrameRef }
 type GeneratedImageFrame = { storage_path: string | null; mime_type: string | null }
+type SceneRecord = {
+  id: string
+  title: string | null
+  motion_prompt: string | null
+  generation_model: string | null
+  start_frame_image_id: string | null
+  end_frame_image_id: string | null
+  video_resolution: string | null
+  video_aspect_ratio: string | null
+  video_duration_seconds: number | null
+  video_fps: number | null
+  video_generate_audio: boolean | null
+}
+type ProductRecord = {
+  project_id: string | null
+  global_style_settings: GlobalStyleSettings | null
+}
+type ProjectRecord = { global_style_settings: GlobalStyleSettings | null }
+type SceneGenerationContext = {
+  scene: SceneRecord
+  resolvedModel: string
+  geminiApiKey?: string
+  frameRefs: FrameRefs
+  videoSettings: SceneVideoSettings
+}
 
 const isVeoModel = (model: string) => model.toLowerCase().startsWith('veo')
 
@@ -109,6 +134,103 @@ async function pollVeoOperation(
   return operation
 }
 
+async function loadSceneOrThrow(
+  supabase: ReturnType<typeof createServiceClient>,
+  sceneId: string
+): Promise<SceneRecord> {
+  const { data: scene, error: sceneErr } = await supabase
+    .from(T.storyboard_scenes)
+    .select('*')
+    .eq('id', sceneId)
+    .single<SceneRecord>()
+
+  if (sceneErr || !scene) throw new Error('Scene not found')
+  if (!scene.motion_prompt) throw new Error('Scene has no motion prompt')
+
+  return scene
+}
+
+async function resolveSceneGeminiApiKey(
+  supabase: ReturnType<typeof createServiceClient>,
+  productId: string
+) {
+  const { data: product } = await supabase
+    .from(T.products)
+    .select('project_id, global_style_settings')
+    .eq('id', productId)
+    .single<ProductRecord>()
+
+  let geminiApiKey = resolveGoogleApiKey(product?.global_style_settings ?? null)
+  if (geminiApiKey || !product?.project_id) return geminiApiKey
+
+  const { data: project } = await supabase
+    .from(T.projects)
+    .select('global_style_settings')
+    .eq('id', product.project_id)
+    .single<ProjectRecord>()
+
+  return resolveGoogleApiKey(project?.global_style_settings ?? null)
+}
+
+function buildSceneVideoSettings(scene: SceneRecord, model: string): SceneVideoSettings {
+  return {
+    resolution: scene.video_resolution,
+    aspectRatio: scene.video_aspect_ratio,
+    durationSeconds: normalizeDurationValue(
+      model,
+      scene.video_duration_seconds,
+      scene.video_resolution,
+      !!scene.start_frame_image_id,
+      !!scene.end_frame_image_id
+    ),
+    fps: scene.video_fps,
+    generateAudio: scene.video_generate_audio,
+  }
+}
+
+async function resolveFrameRefs(
+  supabase: ReturnType<typeof createServiceClient>,
+  scene: SceneRecord,
+  model: string
+): Promise<FrameRefs> {
+  const [startFrameRef, endFrameRef] = await Promise.all([
+    scene.start_frame_image_id
+      ? createFrameRef(supabase, scene.start_frame_image_id)
+      : Promise.resolve(undefined),
+    scene.end_frame_image_id && !isLtxModel(model)
+      ? createFrameRef(supabase, scene.end_frame_image_id)
+      : Promise.resolve(undefined),
+  ])
+
+  return {
+    ...(startFrameRef ? { start: startFrameRef } : {}),
+    ...(endFrameRef ? { end: endFrameRef } : {}),
+  }
+}
+
+async function loadSceneGenerationContext(
+  supabase: ReturnType<typeof createServiceClient>,
+  productId: string,
+  sceneId: string,
+  model?: string
+): Promise<SceneGenerationContext> {
+  const scene = await loadSceneOrThrow(supabase, sceneId)
+  const resolvedModel = model || scene.generation_model || 'veo3'
+
+  const [geminiApiKey, frameRefs] = await Promise.all([
+    resolveSceneGeminiApiKey(supabase, productId),
+    resolveFrameRefs(supabase, scene, resolvedModel),
+  ])
+
+  return {
+    scene,
+    resolvedModel,
+    geminiApiKey,
+    frameRefs,
+    videoSettings: buildSceneVideoSettings(scene, resolvedModel),
+  }
+}
+
 export async function generateSceneVideo(
   productId: string,
   sceneId: string,
@@ -116,65 +238,11 @@ export async function generateSceneVideo(
   jobId?: string | null
 ) {
   const supabase = createServiceClient()
+  const { scene, resolvedModel, geminiApiKey, frameRefs, videoSettings } =
+    await loadSceneGenerationContext(supabase, productId, sceneId, model)
 
-  // Fetch the scene
-  const { data: scene, error: sceneErr } = await supabase
-    .from(T.storyboard_scenes)
-    .select('*')
-    .eq('id', sceneId)
-    .single()
-
-  if (sceneErr || !scene) throw new Error('Scene not found')
-  if (!scene.motion_prompt) throw new Error('Scene has no motion prompt')
-
-  const { data: product } = await supabase
-    .from(T.products)
-    .select('project_id, global_style_settings')
-    .eq('id', productId)
-    .single()
-
-  let geminiApiKey = resolveGoogleApiKey(product?.global_style_settings as GlobalStyleSettings | null)
-
-  if (!geminiApiKey && product?.project_id) {
-    const { data: project } = await supabase
-      .from(T.projects)
-      .select('global_style_settings')
-      .eq('id', product.project_id)
-      .single()
-    geminiApiKey = resolveGoogleApiKey(project?.global_style_settings as GlobalStyleSettings | null)
-  }
-
-  const resolvedModel = model || scene.generation_model || 'veo3'
   const isLtx = isLtxModel(resolvedModel)
   const isVeo = isVeoModel(resolvedModel)
-
-  // Get signed URLs for start/end frame images
-  const frameRefs: FrameRefs = {}
-  const videoSettings: SceneVideoSettings = {
-    resolution: scene.video_resolution,
-    aspectRatio: scene.video_aspect_ratio,
-    durationSeconds: scene.video_duration_seconds,
-    fps: scene.video_fps,
-    generateAudio: scene.video_generate_audio,
-  }
-
-  videoSettings.durationSeconds = normalizeDurationValue(
-    resolvedModel,
-    videoSettings.durationSeconds,
-    videoSettings.resolution,
-    !!scene.start_frame_image_id,
-    !!scene.end_frame_image_id
-  )
-
-  const [startFrameRef, endFrameRef] = await Promise.all([
-    scene.start_frame_image_id ? createFrameRef(supabase, scene.start_frame_image_id) : Promise.resolve(undefined),
-    scene.end_frame_image_id && !isLtx
-      ? createFrameRef(supabase, scene.end_frame_image_id)
-      : Promise.resolve(undefined),
-  ])
-
-  if (startFrameRef) frameRefs.start = startFrameRef
-  if (endFrameRef) frameRefs.end = endFrameRef
 
   // Generate video
   let result: VideoGenerationResult
