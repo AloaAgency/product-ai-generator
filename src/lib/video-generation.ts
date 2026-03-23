@@ -56,6 +56,13 @@ type VeoRequestParts = {
   instance: Record<string, unknown>
   parameters: Record<string, unknown>
 }
+type LtxConfig = {
+  apiKey: string
+  baseUrl: string
+  model: string
+  resolution: string
+  durationSeconds: number
+}
 type SceneGenerationContext = {
   scene: SceneRecord
   resolvedModel: string
@@ -386,6 +393,78 @@ async function loadSceneGenerationContext(
   }
 }
 
+async function uploadGeneratedVideo(
+  supabase: ReturnType<typeof createServiceClient>,
+  productId: string,
+  sceneId: string,
+  prompt: string,
+  result: VideoGenerationResult
+) {
+  const fileName = `video-${slugify(prompt)}-${Date.now()}.${result.extension}`
+  const storagePath = `products/${productId}/scenes/${sceneId}/${fileName}`
+
+  const { error: uploadErr } = await supabase.storage
+    .from('generated-videos')
+    .upload(storagePath, result.buffer, { contentType: result.mimeType })
+
+  if (uploadErr) throw new Error(`Upload failed: ${uploadErr.message}`)
+  return storagePath
+}
+
+async function uploadVideoThumbnail(
+  supabase: ReturnType<typeof createServiceClient>,
+  storagePath: string,
+  videoBuffer: Buffer
+) {
+  try {
+    const thumb = await extractVideoThumbnail(videoBuffer)
+    const thumbStoragePath = buildThumbnailPath(storagePath, thumb.extension)
+
+    const { error: thumbUploadErr } = await supabase.storage
+      .from('generated-videos')
+      .upload(thumbStoragePath, thumb.buffer, { contentType: thumb.mimeType })
+
+    if (thumbUploadErr) {
+      console.warn(`Video thumbnail upload failed: ${thumbUploadErr.message}`)
+      return null
+    }
+
+    return thumbStoragePath
+  } catch (err) {
+    console.warn('Video thumbnail extraction failed:', err)
+    return null
+  }
+}
+
+async function createGeneratedVideoRecord(
+  supabase: ReturnType<typeof createServiceClient>,
+  scene: SceneRecord,
+  jobId: string | null | undefined,
+  storagePath: string,
+  thumbStoragePath: string | null,
+  result: VideoGenerationResult
+) {
+  const { data: record, error: insertErr } = await supabase
+    .from(T.generated_images)
+    .insert({
+      job_id: jobId || null,
+      variation_number: 1,
+      storage_path: storagePath,
+      thumb_storage_path: thumbStoragePath,
+      mime_type: result.mimeType,
+      file_size: result.buffer.length,
+      media_type: 'video',
+      scene_id: scene.id,
+      scene_name: scene.title || null,
+      approval_status: 'pending',
+    })
+    .select()
+    .single()
+
+  if (insertErr) throw new Error(insertErr.message)
+  return record
+}
+
 export async function generateSceneVideo(
   productId: string,
   sceneId: string,
@@ -410,57 +489,16 @@ export async function generateSceneVideo(
     throw new Error(`Unsupported model: ${resolvedModel}`)
   }
 
-  // Upload to storage
-  const slug = slugify(scene.motion_prompt)
-  const timestamp = Date.now()
-  const fileName = `video-${slug}-${timestamp}.${result.extension}`
-  const storagePath = `products/${productId}/scenes/${sceneId}/${fileName}`
+  const storagePath = await uploadGeneratedVideo(
+    supabase,
+    productId,
+    sceneId,
+    scene.motion_prompt,
+    result
+  )
+  const thumbStoragePath = await uploadVideoThumbnail(supabase, storagePath, result.buffer)
 
-  const { error: uploadErr } = await supabase.storage
-    .from('generated-videos')
-    .upload(storagePath, result.buffer, { contentType: result.mimeType })
-
-  if (uploadErr) throw new Error(`Upload failed: ${uploadErr.message}`)
-
-  // Extract and upload thumbnail
-  let thumbStoragePath: string | null = null
-  try {
-    const thumb = await extractVideoThumbnail(result.buffer)
-    thumbStoragePath = buildThumbnailPath(storagePath, thumb.extension)
-
-    const { error: thumbUploadErr } = await supabase.storage
-      .from('generated-videos')
-      .upload(thumbStoragePath, thumb.buffer, { contentType: thumb.mimeType })
-
-    if (thumbUploadErr) {
-      console.warn(`Video thumbnail upload failed: ${thumbUploadErr.message}`)
-      thumbStoragePath = null
-    }
-  } catch (err) {
-    console.warn('Video thumbnail extraction failed:', err)
-    thumbStoragePath = null
-  }
-
-  // Insert record
-  const { data: record, error: insertErr } = await supabase
-    .from(T.generated_images)
-    .insert({
-      job_id: jobId || null,
-      variation_number: 1,
-      storage_path: storagePath,
-      thumb_storage_path: thumbStoragePath,
-      mime_type: result.mimeType,
-      file_size: result.buffer.length,
-      media_type: 'video',
-      scene_id: sceneId,
-      scene_name: scene.title || null,
-      approval_status: 'pending',
-    })
-    .select()
-    .single()
-
-  if (insertErr) throw new Error(insertErr.message)
-  return record
+  return createGeneratedVideoRecord(supabase, scene, jobId, storagePath, thumbStoragePath, result)
 }
 
 // ---------------------------------------------------------------------------
@@ -491,41 +529,60 @@ async function generateWithVeo3(
   return downloadVeoVideo(getVeoVideoUri(operation), config.apiKey)
 }
 
-async function generateWithLtx(
-  prompt: string,
-  frameRefs: FrameRefs,
-  settings: SceneVideoSettings
-): Promise<VideoGenerationResult> {
+function getLtxConfig(settings: SceneVideoSettings): LtxConfig {
   const apiKey = process.env.LTX_API_KEY
   if (!apiKey) throw new Error('LTX_API_KEY not configured')
 
-  const baseUrl = (process.env.LTX_API_BASE_URL || DEFAULT_LTX_API_BASE_URL).replace(/\/$/, '')
-  const model = process.env.LTX_MODEL || DEFAULT_LTX_MODEL
-  const safeDuration = getPositiveNumberOrDefault(
-    settings.durationSeconds ?? process.env.LTX_DURATION,
-    DEFAULT_LTX_DURATION_SECONDS
-  )
-  const resolution = settings.resolution || process.env.LTX_RESOLUTION || DEFAULT_LTX_RESOLUTION
-  const fps = typeof settings.fps === 'number' && settings.fps > 0 ? settings.fps : null
-  const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
+  return {
+    apiKey,
+    baseUrl: (process.env.LTX_API_BASE_URL || DEFAULT_LTX_API_BASE_URL).replace(/\/$/, ''),
+    model: process.env.LTX_MODEL || DEFAULT_LTX_MODEL,
+    resolution: settings.resolution || process.env.LTX_RESOLUTION || DEFAULT_LTX_RESOLUTION,
+    durationSeconds: getPositiveNumberOrDefault(
+      settings.durationSeconds ?? process.env.LTX_DURATION,
+      DEFAULT_LTX_DURATION_SECONDS
+    ),
+  }
+}
 
+function buildLtxPayload(
+  prompt: string,
+  frameRefs: FrameRefs,
+  settings: SceneVideoSettings,
+  config: LtxConfig
+) {
   const payload: Record<string, unknown> = {
     prompt,
-    model,
-    duration: safeDuration,
-    resolution,
+    model: config.model,
+    duration: config.durationSeconds,
+    resolution: config.resolution,
   }
+
+  const fps = typeof settings.fps === 'number' && settings.fps > 0 ? settings.fps : null
   if (fps) payload.fps = fps
+
+  const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
   if (generateAudio !== null) payload.generate_audio = generateAudio
 
   const endpoint = frameRefs.start?.url ? 'image-to-video' : 'text-to-video'
   if (frameRefs.start?.url) payload.image_uri = frameRefs.start.url
 
-  const response = await fetch(`${baseUrl}/${endpoint}`, {
+  return { endpoint, payload }
+}
+
+async function generateWithLtx(
+  prompt: string,
+  frameRefs: FrameRefs,
+  settings: SceneVideoSettings
+): Promise<VideoGenerationResult> {
+  const config = getLtxConfig(settings)
+  const { endpoint, payload } = buildLtxPayload(prompt, frameRefs, settings, config)
+
+  const response = await fetch(`${config.baseUrl}/${endpoint}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${config.apiKey}`,
     },
     body: JSON.stringify(payload),
   })
@@ -536,8 +593,5 @@ async function generateWithLtx(
   }
 
   const videoBuffer = Buffer.from(await response.arrayBuffer())
-  const mimeType = getResponseMimeType(response, 'video/mp4')
-  const extension = mimeType.includes('/') ? mimeType.split('/')[1] : 'mp4'
-
-  return { buffer: videoBuffer, mimeType, extension: extension || 'mp4' }
+  return getBufferResult(videoBuffer, getResponseMimeType(response, 'video/mp4'))
 }
