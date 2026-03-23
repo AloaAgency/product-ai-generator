@@ -44,6 +44,18 @@ type ProductRecord = {
   global_style_settings: GlobalStyleSettings | null
 }
 type ProjectRecord = { global_style_settings: GlobalStyleSettings | null }
+type VeoConfig = {
+  apiKey: string
+  baseUrl: string
+  model: string
+  pollIntervalMs: number
+  timeoutMs: number
+  shouldLog: boolean
+}
+type VeoRequestParts = {
+  instance: Record<string, unknown>
+  parameters: Record<string, unknown>
+}
 type SceneGenerationContext = {
   scene: SceneRecord
   resolvedModel: string
@@ -65,6 +77,15 @@ async function getResponseErrorMessage(response: Response) {
 
 function getPositiveNumberOrDefault(value: unknown, fallback: number) {
   return parsePositiveNumber(value) ?? fallback
+}
+
+function getBufferResult(buffer: Buffer, mimeType: string): VideoGenerationResult {
+  const extension = mimeType.includes('/') ? mimeType.split('/')[1] : 'mp4'
+  return {
+    buffer,
+    mimeType,
+    extension: extension || 'mp4',
+  }
 }
 
 async function createFrameRef(supabase: ReturnType<typeof createServiceClient>, imageId: string) {
@@ -132,6 +153,140 @@ async function pollVeoOperation(
   }
 
   return operation
+}
+
+function getVeoConfig(apiKeyOverride?: string | null): VeoConfig {
+  const apiKey = apiKeyOverride || process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY
+  if (!apiKey) throw new Error('Google AI API key not configured')
+
+  return {
+    apiKey,
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    model: process.env.VEO_MODEL?.trim() || DEFAULT_VEO_MODEL,
+    pollIntervalMs: getPositiveNumberOrDefault(
+      process.env.VEO_POLL_INTERVAL_MS,
+      DEFAULT_VEO_POLL_INTERVAL_MS
+    ),
+    timeoutMs: getPositiveNumberOrDefault(
+      process.env.VEO_POLL_TIMEOUT_MS,
+      DEFAULT_VEO_POLL_TIMEOUT_MS
+    ),
+    shouldLog: process.env.VEO_DEBUG === 'true' || process.env.NODE_ENV !== 'production',
+  }
+}
+
+async function buildVeoRequestParts(
+  prompt: string,
+  frameRefs: FrameRefs,
+  settings: SceneVideoSettings,
+  model: string
+): Promise<VeoRequestParts> {
+  const instance: Record<string, unknown> = { prompt }
+  const parameters: Record<string, unknown> = {}
+
+  if (frameRefs.start?.url) {
+    instance.image = await fetchFrameBytes(frameRefs.start, 'start')
+  }
+
+  if (frameRefs.end?.url) {
+    if (!frameRefs.start?.url) {
+      console.warn('[Veo] Ignoring end frame because no start frame was provided.')
+    } else {
+      instance.lastFrame = await fetchFrameBytes(frameRefs.end, 'end')
+    }
+  }
+
+  const aspectRatio = settings.aspectRatio || process.env.VEO_ASPECT_RATIO
+  if (aspectRatio) parameters.aspectRatio = aspectRatio
+
+  const resolution = settings.resolution || process.env.VEO_RESOLUTION
+  if (resolution) parameters.resolution = resolution
+
+  const durationSeconds = normalizeDurationValue(
+    model,
+    settings.durationSeconds ?? process.env.VEO_DURATION_SECONDS,
+    resolution,
+    !!frameRefs.start,
+    !!frameRefs.end
+  )
+  if (durationSeconds) parameters.durationSeconds = durationSeconds
+
+  const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
+  if (process.env.VEO_SUPPORTS_AUDIO === 'true' && generateAudio !== null) {
+    parameters.generateAudio = generateAudio
+  }
+
+  return { instance, parameters }
+}
+
+function logVeoParameters(config: VeoConfig, parameters: Record<string, unknown>) {
+  if (!config.shouldLog) return
+
+  console.log('[Veo] parameters', {
+    model: config.model,
+    durationSeconds: parameters.durationSeconds,
+    resolution: parameters.resolution,
+    aspectRatio: parameters.aspectRatio,
+    generateAudio: parameters.generateAudio,
+  })
+}
+
+async function startVeoOperation(
+  config: VeoConfig,
+  payload: Record<string, unknown>
+): Promise<string> {
+  const response = await fetch(
+    `${config.baseUrl}/models/${config.model}:predictLongRunning`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
+      body: JSON.stringify(payload),
+    }
+  )
+
+  if (!response.ok) {
+    const message = await getResponseErrorMessage(response)
+    throw new Error(`Veo API error: ${response.status} ${message}`)
+  }
+
+  const operation = await response.json()
+  const operationName = operation?.name
+  if (!operationName) throw new Error('No operation name in Veo response')
+
+  return operationName
+}
+
+function getVeoOperationErrorMessage(error: unknown) {
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return error.message
+  }
+  return JSON.stringify(error)
+}
+
+function getVeoVideoUri(operation: Record<string, unknown>) {
+  if (operation?.error) {
+    throw new Error(`Veo operation error: ${getVeoOperationErrorMessage(operation.error)}`)
+  }
+
+  const response = operation.response as
+    | { generateVideoResponse?: { generatedSamples?: Array<{ video?: { uri?: string } }> } }
+    | undefined
+  const videoUri = response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri
+  if (!videoUri) throw new Error('No video URI in Veo response')
+
+  return videoUri
+}
+
+async function downloadVeoVideo(videoUri: string, apiKey: string) {
+  const videoResp = await fetch(videoUri, {
+    headers: { 'x-goog-api-key': apiKey },
+    redirect: 'follow',
+  })
+  if (!videoResp.ok) throw new Error(`Failed to download video (${videoResp.status})`)
+
+  const videoBuffer = Buffer.from(await videoResp.arrayBuffer())
+  return getBufferResult(videoBuffer, getResponseMimeType(videoResp, 'video/mp4'))
 }
 
 async function loadSceneOrThrow(
@@ -318,111 +473,22 @@ async function generateWithVeo3(
   settings: SceneVideoSettings,
   apiKeyOverride?: string | null
 ) : Promise<VideoGenerationResult> {
-  const apiKey = apiKeyOverride || process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY
-  if (!apiKey) throw new Error('Google AI API key not configured')
+  const config = getVeoConfig(apiKeyOverride)
+  const { instance, parameters } = await buildVeoRequestParts(prompt, frameRefs, settings, config.model)
+  logVeoParameters(config, parameters)
 
-  const configuredModel = process.env.VEO_MODEL?.trim()
-  const model = configuredModel || DEFAULT_VEO_MODEL
-  const baseUrl = 'https://generativelanguage.googleapis.com/v1beta'
-  const instance: Record<string, unknown> = { prompt }
-  const instances: Array<Record<string, unknown>> = [instance]
-  const parameters: Record<string, unknown> = {}
-
-  if (frameRefs.start?.url) {
-    instance.image = await fetchFrameBytes(frameRefs.start, 'start')
-  }
-
-  if (frameRefs.end?.url) {
-    if (!frameRefs.start?.url) {
-      console.warn('[Veo] Ignoring end frame because no start frame was provided.')
-    } else {
-      instance.lastFrame = await fetchFrameBytes(frameRefs.end, 'end')
-    }
-  }
-
-  const aspectRatio = settings.aspectRatio || process.env.VEO_ASPECT_RATIO
-  if (aspectRatio) parameters.aspectRatio = aspectRatio
-  const resolution = settings.resolution || process.env.VEO_RESOLUTION
-  if (resolution) parameters.resolution = resolution
-  const durationSource = settings.durationSeconds ?? process.env.VEO_DURATION_SECONDS
-  const durationSeconds = normalizeDurationValue(
-    model,
-    durationSource,
-    resolution,
-    !!frameRefs.start,
-    !!frameRefs.end
-  )
-  const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
-  const veoSupportsAudio = process.env.VEO_SUPPORTS_AUDIO === 'true'
-  if (veoSupportsAudio && generateAudio !== null) parameters.generateAudio = generateAudio
-  if (durationSeconds) parameters.durationSeconds = durationSeconds
-  const shouldLog = process.env.VEO_DEBUG === 'true' || process.env.NODE_ENV !== 'production'
-  if (shouldLog) {
-    console.log('[Veo] parameters', {
-      model,
-      durationSeconds,
-      resolution: parameters.resolution,
-      aspectRatio: parameters.aspectRatio,
-      generateAudio: parameters.generateAudio,
-    })
-  }
-
-  const payload: Record<string, unknown> = { instances }
+  const payload: Record<string, unknown> = { instances: [instance] }
   if (Object.keys(parameters).length) payload.parameters = parameters
-
-  const response = await fetch(
-    `${baseUrl}/models/${model}:predictLongRunning`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify(payload),
-    }
+  const operationName = await startVeoOperation(config, payload)
+  const operation = await pollVeoOperation(
+    config.baseUrl,
+    operationName,
+    config.apiKey,
+    config.pollIntervalMs,
+    config.timeoutMs
   )
 
-  if (!response.ok) {
-    const message = await getResponseErrorMessage(response)
-    throw new Error(`Veo API error: ${response.status} ${message}`)
-  }
-
-  let operation = await response.json()
-  const operationName = operation?.name
-  if (!operationName) throw new Error('No operation name in Veo response')
-
-  const pollIntervalMs = getPositiveNumberOrDefault(
-    process.env.VEO_POLL_INTERVAL_MS,
-    DEFAULT_VEO_POLL_INTERVAL_MS
-  )
-  const timeoutMs = getPositiveNumberOrDefault(
-    process.env.VEO_POLL_TIMEOUT_MS,
-    DEFAULT_VEO_POLL_TIMEOUT_MS
-  )
-  operation = await pollVeoOperation(baseUrl, operationName, apiKey, pollIntervalMs, timeoutMs)
-
-  if (operation?.error) {
-    const message =
-      operation.error?.message ||
-      (typeof operation.error === 'string' ? operation.error : JSON.stringify(operation.error))
-    throw new Error(`Veo operation error: ${message}`)
-  }
-
-  const videoUri =
-    operation?.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri
-  if (!videoUri) throw new Error('No video URI in Veo response')
-
-  const videoResp = await fetch(videoUri, {
-    headers: { 'x-goog-api-key': apiKey },
-    redirect: 'follow',
-  })
-  if (!videoResp.ok) throw new Error(`Failed to download video (${videoResp.status})`)
-  const videoBuffer = Buffer.from(await videoResp.arrayBuffer())
-  const mimeType = getResponseMimeType(videoResp, 'video/mp4')
-  const extension = mimeType.includes('/') ? mimeType.split('/')[1] : 'mp4'
-
-  return {
-    buffer: videoBuffer,
-    mimeType,
-    extension: extension || 'mp4',
-  }
+  return downloadVeoVideo(getVeoVideoUri(operation), config.apiKey)
 }
 
 async function generateWithLtx(
