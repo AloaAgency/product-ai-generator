@@ -39,6 +39,7 @@ type SceneRecord = {
   video_fps: number | null
   video_generate_audio: boolean | null
 }
+type SceneWithMotionPrompt = SceneRecord & { motion_prompt: string }
 type ProductRecord = {
   project_id: string | null
   global_style_settings: GlobalStyleSettings | null
@@ -64,7 +65,7 @@ type LtxConfig = {
   durationSeconds: number
 }
 type SceneGenerationContext = {
-  scene: SceneRecord
+  scene: SceneWithMotionPrompt
   resolvedModel: string
   geminiApiKey?: string
   frameRefs: FrameRefs
@@ -299,7 +300,7 @@ async function downloadVeoVideo(videoUri: string, apiKey: string) {
 async function loadSceneOrThrow(
   supabase: ReturnType<typeof createServiceClient>,
   sceneId: string
-): Promise<SceneRecord> {
+): Promise<SceneWithMotionPrompt> {
   const { data: scene, error: sceneErr } = await supabase
     .from(T.storyboard_scenes)
     .select('*')
@@ -309,7 +310,7 @@ async function loadSceneOrThrow(
   if (sceneErr || !scene) throw new Error('Scene not found')
   if (!scene.motion_prompt) throw new Error('Scene has no motion prompt')
 
-  return scene
+  return scene as SceneWithMotionPrompt
 }
 
 async function resolveSceneGeminiApiKey(
@@ -322,7 +323,7 @@ async function resolveSceneGeminiApiKey(
     .eq('id', productId)
     .single<ProductRecord>()
 
-  let geminiApiKey = resolveGoogleApiKey(product?.global_style_settings ?? null)
+  const geminiApiKey = resolveGoogleApiKey(product?.global_style_settings ?? null)
   if (geminiApiKey || !product?.project_id) return geminiApiKey
 
   const { data: project } = await supabase
