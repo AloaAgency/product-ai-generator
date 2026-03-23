@@ -6,7 +6,7 @@ import sharp from 'sharp'
 import ffmpeg from 'fluent-ffmpeg'
 import { execSync } from 'child_process'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, dirname, basename } from 'path'
 import { randomUUID } from 'crypto'
 import { writeFile, readFile, unlink, access } from 'fs/promises'
 
@@ -28,12 +28,16 @@ async function resolveFfmpegPath(): Promise<string | null> {
   return null
 }
 
-let ffmpegPathResolved = false
-async function ensureFfmpegPath() {
-  if (ffmpegPathResolved) return
-  const p = await resolveFfmpegPath()
-  if (p) ffmpeg.setFfmpegPath(p)
-  ffmpegPathResolved = true
+// Cache the resolution promise so concurrent callers share the same in-flight
+// work rather than racing to call setFfmpegPath multiple times.
+let ffmpegPathPromise: Promise<void> | null = null
+function ensureFfmpegPath(): Promise<void> {
+  if (!ffmpegPathPromise) {
+    ffmpegPathPromise = resolveFfmpegPath().then((p) => {
+      if (p) ffmpeg.setFfmpegPath(p)
+    })
+  }
+  return ffmpegPathPromise
 }
 
 /**
@@ -88,50 +92,58 @@ export const buildImageStoragePath = (
 }
 
 /**
+ * Build a sibling-folder path for derived assets (e.g. thumbnails, previews).
+ * Given `products/123/jobs/456/gen-01.png` and subfolder `thumbs`, returns
+ * `products/123/jobs/456/thumbs/gen-01.webp`.
+ */
+const buildDerivedPath = (storagePath: string, subfolder: string, extension: string): string => {
+  const dir = dirname(storagePath)
+  const baseName = basename(storagePath).replace(/\.[^/.]+$/, '')
+  const fileName = `${baseName}.${extension}`
+  return dir === '.' ? `${subfolder}/${fileName}` : `${dir}/${subfolder}/${fileName}`
+}
+
+/**
  * Build thumbnail storage path
  */
-export const buildThumbnailPath = (storagePath: string, extension: string): string => {
-  const lastSlash = storagePath.lastIndexOf('/')
-  const dir = lastSlash === -1 ? '' : storagePath.slice(0, lastSlash)
-  const fileName = lastSlash === -1 ? storagePath : storagePath.slice(lastSlash + 1)
-  const baseName = fileName.replace(/\.[^/.]+$/, '')
-  const suffix = `${baseName}.${extension}`
-  return dir ? `${dir}/thumbs/${suffix}` : `thumbs/${suffix}`
-}
+export const buildThumbnailPath = (storagePath: string, extension: string): string =>
+  buildDerivedPath(storagePath, 'thumbs', extension)
 
 /**
  * Build preview storage path
  */
-export const buildPreviewPath = (storagePath: string, extension: string): string => {
-  const lastSlash = storagePath.lastIndexOf('/')
-  const dir = lastSlash === -1 ? '' : storagePath.slice(0, lastSlash)
-  const fileName = lastSlash === -1 ? storagePath : storagePath.slice(lastSlash + 1)
-  const baseName = fileName.replace(/\.[^/.]+$/, '')
-  const suffix = `${baseName}.${extension}`
-  return dir ? `${dir}/previews/${suffix}` : `previews/${suffix}`
+export const buildPreviewPath = (storagePath: string, extension: string): string =>
+  buildDerivedPath(storagePath, 'previews', extension)
+
+/** Resize an image buffer to a WebP of the given width and quality. */
+async function resizeToWebP(
+  buffer: Buffer,
+  width: number,
+  quality: number
+): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
+  const outBuffer = await sharp(buffer)
+    .rotate()
+    .resize({ width, withoutEnlargement: true })
+    .webp({ quality })
+    .toBuffer()
+  return { buffer: outBuffer, mimeType: 'image/webp', extension: 'webp' }
 }
 
 /**
  * Generate a resized thumbnail buffer (480px WebP)
  */
-export const createThumbnail = async (
+export const createThumbnail = (
   buffer: Buffer,
   width = 480
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => {
-  const pipeline = sharp(buffer).rotate().resize({ width, withoutEnlargement: true }).webp({ quality: 72 })
-  return { buffer: await pipeline.toBuffer(), mimeType: 'image/webp', extension: 'webp' }
-}
+): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => resizeToWebP(buffer, width, 72)
 
 /**
  * Generate a resized preview buffer (1600px WebP)
  */
-export const createPreview = async (
+export const createPreview = (
   buffer: Buffer,
   width = 1600
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => {
-  const pipeline = sharp(buffer).rotate().resize({ width, withoutEnlargement: true }).webp({ quality: 82 })
-  return { buffer: await pipeline.toBuffer(), mimeType: 'image/webp', extension: 'webp' }
-}
+): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => resizeToWebP(buffer, width, 82)
 
 /** Thresholds for reference image compression */
 const REF_MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
@@ -170,16 +182,13 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
     }
   }
 
-  let pipeline = sharp(buffer).rotate()
-  if (needsResize) {
-    pipeline = pipeline.resize({
-      width: REF_MAX_DIMENSION,
-      height: REF_MAX_DIMENSION,
-      fit: 'inside',
-      withoutEnlargement: true,
-    })
-  }
-  const compressed = await pipeline.webp({ quality: 90 }).toBuffer()
+  // Build the Sharp pipeline step-by-step so each transformation is explicit.
+  // Always rotate first to honour EXIF orientation before any resize operation.
+  const base = sharp(buffer).rotate()
+  const resized = needsResize
+    ? base.resize({ width: REF_MAX_DIMENSION, height: REF_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
+    : base
+  const compressed = await resized.webp({ quality: 90 }).toBuffer()
 
   return {
     buffer: compressed,
