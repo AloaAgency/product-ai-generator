@@ -26,6 +26,51 @@ type SceneVideoSettings = {
 type VideoGenerationResult = { buffer: Buffer; mimeType: string; extension: string }
 type FrameRefs = { start?: FrameRef; end?: FrameRef }
 type GeneratedImageFrame = { storage_path: string | null; mime_type: string | null }
+type SceneRecord = {
+  id: string
+  title: string | null
+  motion_prompt: string | null
+  generation_model: string | null
+  start_frame_image_id: string | null
+  end_frame_image_id: string | null
+  video_resolution: string | null
+  video_aspect_ratio: string | null
+  video_duration_seconds: number | null
+  video_fps: number | null
+  video_generate_audio: boolean | null
+}
+type SceneWithMotionPrompt = SceneRecord & { motion_prompt: string }
+type ProductRecord = {
+  project_id: string | null
+  global_style_settings: GlobalStyleSettings | null
+}
+type ProjectRecord = { global_style_settings: GlobalStyleSettings | null }
+type VeoConfig = {
+  apiKey: string
+  baseUrl: string
+  model: string
+  pollIntervalMs: number
+  timeoutMs: number
+  shouldLog: boolean
+}
+type VeoRequestParts = {
+  instance: Record<string, unknown>
+  parameters: Record<string, unknown>
+}
+type LtxConfig = {
+  apiKey: string
+  baseUrl: string
+  model: string
+  resolution: string
+  durationSeconds: number
+}
+type SceneGenerationContext = {
+  scene: SceneWithMotionPrompt
+  resolvedModel: string
+  geminiApiKey?: string
+  frameRefs: FrameRefs
+  videoSettings: SceneVideoSettings
+}
 
 const isVeoModel = (model: string) => model.toLowerCase().startsWith('veo')
 
@@ -40,6 +85,15 @@ async function getResponseErrorMessage(response: Response) {
 
 function getPositiveNumberOrDefault(value: unknown, fallback: number) {
   return parsePositiveNumber(value) ?? fallback
+}
+
+function getBufferResult(buffer: Buffer, mimeType: string): VideoGenerationResult {
+  const extension = mimeType.includes('/') ? mimeType.split('/')[1] : 'mp4'
+  return {
+    buffer,
+    mimeType,
+    extension: extension || 'mp4',
+  }
 }
 
 async function createFrameRef(supabase: ReturnType<typeof createServiceClient>, imageId: string) {
@@ -109,155 +163,33 @@ async function pollVeoOperation(
   return operation
 }
 
-export async function generateSceneVideo(
-  productId: string,
-  sceneId: string,
-  model?: string,
-  jobId?: string | null
-) {
-  const supabase = createServiceClient()
-
-  // Fetch the scene
-  const { data: scene, error: sceneErr } = await supabase
-    .from(T.storyboard_scenes)
-    .select('*')
-    .eq('id', sceneId)
-    .single()
-
-  if (sceneErr || !scene) throw new Error('Scene not found')
-  if (!scene.motion_prompt) throw new Error('Scene has no motion prompt')
-
-  const { data: product } = await supabase
-    .from(T.products)
-    .select('project_id, global_style_settings')
-    .eq('id', productId)
-    .single()
-
-  let geminiApiKey = resolveGoogleApiKey(product?.global_style_settings as GlobalStyleSettings | null)
-
-  if (!geminiApiKey && product?.project_id) {
-    const { data: project } = await supabase
-      .from(T.projects)
-      .select('global_style_settings')
-      .eq('id', product.project_id)
-      .single()
-    geminiApiKey = resolveGoogleApiKey(project?.global_style_settings as GlobalStyleSettings | null)
-  }
-
-  const resolvedModel = model || scene.generation_model || 'veo3'
-  const isLtx = isLtxModel(resolvedModel)
-  const isVeo = isVeoModel(resolvedModel)
-
-  // Get signed URLs for start/end frame images
-  const frameRefs: FrameRefs = {}
-  const videoSettings: SceneVideoSettings = {
-    resolution: scene.video_resolution,
-    aspectRatio: scene.video_aspect_ratio,
-    durationSeconds: scene.video_duration_seconds,
-    fps: scene.video_fps,
-    generateAudio: scene.video_generate_audio,
-  }
-
-  videoSettings.durationSeconds = normalizeDurationValue(
-    resolvedModel,
-    videoSettings.durationSeconds,
-    videoSettings.resolution,
-    !!scene.start_frame_image_id,
-    !!scene.end_frame_image_id
-  )
-
-  const [startFrameRef, endFrameRef] = await Promise.all([
-    scene.start_frame_image_id ? createFrameRef(supabase, scene.start_frame_image_id) : Promise.resolve(undefined),
-    scene.end_frame_image_id && !isLtx
-      ? createFrameRef(supabase, scene.end_frame_image_id)
-      : Promise.resolve(undefined),
-  ])
-
-  if (startFrameRef) frameRefs.start = startFrameRef
-  if (endFrameRef) frameRefs.end = endFrameRef
-
-  // Generate video
-  let result: VideoGenerationResult
-
-  if (isVeo) {
-    result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings, geminiApiKey)
-  } else if (isLtx) {
-    result = await generateWithLtx(scene.motion_prompt, frameRefs, videoSettings)
-  } else {
-    throw new Error(`Unsupported model: ${resolvedModel}`)
-  }
-
-  // Upload to storage
-  const slug = slugify(scene.motion_prompt)
-  const timestamp = Date.now()
-  const fileName = `video-${slug}-${timestamp}.${result.extension}`
-  const storagePath = `products/${productId}/scenes/${sceneId}/${fileName}`
-
-  const { error: uploadErr } = await supabase.storage
-    .from('generated-videos')
-    .upload(storagePath, result.buffer, { contentType: result.mimeType })
-
-  if (uploadErr) throw new Error(`Upload failed: ${uploadErr.message}`)
-
-  // Extract and upload thumbnail
-  let thumbStoragePath: string | null = null
-  try {
-    const thumb = await extractVideoThumbnail(result.buffer)
-    thumbStoragePath = buildThumbnailPath(storagePath, thumb.extension)
-
-    const { error: thumbUploadErr } = await supabase.storage
-      .from('generated-videos')
-      .upload(thumbStoragePath, thumb.buffer, { contentType: thumb.mimeType })
-
-    if (thumbUploadErr) {
-      console.warn(`Video thumbnail upload failed: ${thumbUploadErr.message}`)
-      thumbStoragePath = null
-    }
-  } catch (err) {
-    console.warn('Video thumbnail extraction failed:', err)
-    thumbStoragePath = null
-  }
-
-  // Insert record
-  const { data: record, error: insertErr } = await supabase
-    .from(T.generated_images)
-    .insert({
-      job_id: jobId || null,
-      variation_number: 1,
-      storage_path: storagePath,
-      thumb_storage_path: thumbStoragePath,
-      mime_type: result.mimeType,
-      file_size: result.buffer.length,
-      media_type: 'video',
-      scene_id: sceneId,
-      scene_name: scene.title || null,
-      approval_status: 'pending',
-    })
-    .select()
-    .single()
-
-  if (insertErr) throw new Error(insertErr.message)
-  return record
-}
-
-// ---------------------------------------------------------------------------
-// Video generation integrations
-// ---------------------------------------------------------------------------
-
-async function generateWithVeo3(
-  prompt: string,
-  frameRefs: FrameRefs,
-  settings: SceneVideoSettings,
-  apiKeyOverride?: string | null
-) : Promise<VideoGenerationResult> {
+function getVeoConfig(apiKeyOverride?: string | null): VeoConfig {
   const apiKey = apiKeyOverride || process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY
   if (!apiKey) throw new Error('Google AI API key not configured')
 
-  const configuredModel = process.env.VEO_MODEL?.trim()
-  const model = configuredModel || DEFAULT_VEO_MODEL
-  const baseUrl = 'https://generativelanguage.googleapis.com/v1beta'
+  return {
+    apiKey,
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    model: process.env.VEO_MODEL?.trim() || DEFAULT_VEO_MODEL,
+    pollIntervalMs: getPositiveNumberOrDefault(
+      process.env.VEO_POLL_INTERVAL_MS,
+      DEFAULT_VEO_POLL_INTERVAL_MS
+    ),
+    timeoutMs: getPositiveNumberOrDefault(
+      process.env.VEO_POLL_TIMEOUT_MS,
+      DEFAULT_VEO_POLL_TIMEOUT_MS
+    ),
+    shouldLog: process.env.VEO_DEBUG === 'true' || process.env.NODE_ENV !== 'production',
+  }
+}
+
+async function buildVeoRequestParts(
+  prompt: string,
+  frameRefs: FrameRefs,
+  settings: SceneVideoSettings,
+  model: string
+): Promise<VeoRequestParts> {
   const instance: Record<string, unknown> = { prompt }
-  const instances: Array<Record<string, unknown>> = [instance]
   const parameters: Record<string, unknown> = {}
 
   if (frameRefs.start?.url) {
@@ -274,39 +206,48 @@ async function generateWithVeo3(
 
   const aspectRatio = settings.aspectRatio || process.env.VEO_ASPECT_RATIO
   if (aspectRatio) parameters.aspectRatio = aspectRatio
+
   const resolution = settings.resolution || process.env.VEO_RESOLUTION
   if (resolution) parameters.resolution = resolution
-  const durationSource = settings.durationSeconds ?? process.env.VEO_DURATION_SECONDS
+
   const durationSeconds = normalizeDurationValue(
     model,
-    durationSource,
+    settings.durationSeconds ?? process.env.VEO_DURATION_SECONDS,
     resolution,
     !!frameRefs.start,
     !!frameRefs.end
   )
-  const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
-  const veoSupportsAudio = process.env.VEO_SUPPORTS_AUDIO === 'true'
-  if (veoSupportsAudio && generateAudio !== null) parameters.generateAudio = generateAudio
   if (durationSeconds) parameters.durationSeconds = durationSeconds
-  const shouldLog = process.env.VEO_DEBUG === 'true' || process.env.NODE_ENV !== 'production'
-  if (shouldLog) {
-    console.log('[Veo] parameters', {
-      model,
-      durationSeconds,
-      resolution: parameters.resolution,
-      aspectRatio: parameters.aspectRatio,
-      generateAudio: parameters.generateAudio,
-    })
+
+  const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
+  if (process.env.VEO_SUPPORTS_AUDIO === 'true' && generateAudio !== null) {
+    parameters.generateAudio = generateAudio
   }
 
-  const payload: Record<string, unknown> = { instances }
-  if (Object.keys(parameters).length) payload.parameters = parameters
+  return { instance, parameters }
+}
 
+function logVeoParameters(config: VeoConfig, parameters: Record<string, unknown>) {
+  if (!config.shouldLog) return
+
+  console.log('[Veo] parameters', {
+    model: config.model,
+    durationSeconds: parameters.durationSeconds,
+    resolution: parameters.resolution,
+    aspectRatio: parameters.aspectRatio,
+    generateAudio: parameters.generateAudio,
+  })
+}
+
+async function startVeoOperation(
+  config: VeoConfig,
+  payload: Record<string, unknown>
+): Promise<string> {
   const response = await fetch(
-    `${baseUrl}/models/${model}:predictLongRunning`,
+    `${config.baseUrl}/models/${config.model}:predictLongRunning`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
       body: JSON.stringify(payload),
     }
   )
@@ -316,45 +257,318 @@ async function generateWithVeo3(
     throw new Error(`Veo API error: ${response.status} ${message}`)
   }
 
-  let operation = await response.json()
+  const operation = await response.json()
   const operationName = operation?.name
   if (!operationName) throw new Error('No operation name in Veo response')
 
-  const pollIntervalMs = getPositiveNumberOrDefault(
-    process.env.VEO_POLL_INTERVAL_MS,
-    DEFAULT_VEO_POLL_INTERVAL_MS
-  )
-  const timeoutMs = getPositiveNumberOrDefault(
-    process.env.VEO_POLL_TIMEOUT_MS,
-    DEFAULT_VEO_POLL_TIMEOUT_MS
-  )
-  operation = await pollVeoOperation(baseUrl, operationName, apiKey, pollIntervalMs, timeoutMs)
+  return operationName
+}
 
+function getVeoOperationErrorMessage(error: unknown) {
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return error.message
+  }
+  return JSON.stringify(error)
+}
+
+function getVeoVideoUri(operation: Record<string, unknown>) {
   if (operation?.error) {
-    const message =
-      operation.error?.message ||
-      (typeof operation.error === 'string' ? operation.error : JSON.stringify(operation.error))
-    throw new Error(`Veo operation error: ${message}`)
+    throw new Error(`Veo operation error: ${getVeoOperationErrorMessage(operation.error)}`)
   }
 
-  const videoUri =
-    operation?.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri
+  const response = operation.response as
+    | { generateVideoResponse?: { generatedSamples?: Array<{ video?: { uri?: string } }> } }
+    | undefined
+  const videoUri = response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri
   if (!videoUri) throw new Error('No video URI in Veo response')
 
+  return videoUri
+}
+
+async function downloadVeoVideo(videoUri: string, apiKey: string) {
   const videoResp = await fetch(videoUri, {
     headers: { 'x-goog-api-key': apiKey },
     redirect: 'follow',
   })
   if (!videoResp.ok) throw new Error(`Failed to download video (${videoResp.status})`)
+
   const videoBuffer = Buffer.from(await videoResp.arrayBuffer())
-  const mimeType = getResponseMimeType(videoResp, 'video/mp4')
-  const extension = mimeType.includes('/') ? mimeType.split('/')[1] : 'mp4'
+  return getBufferResult(videoBuffer, getResponseMimeType(videoResp, 'video/mp4'))
+}
+
+async function loadSceneOrThrow(
+  supabase: ReturnType<typeof createServiceClient>,
+  sceneId: string
+): Promise<SceneWithMotionPrompt> {
+  const { data: scene, error: sceneErr } = await supabase
+    .from(T.storyboard_scenes)
+    .select('*')
+    .eq('id', sceneId)
+    .single<SceneRecord>()
+
+  if (sceneErr || !scene) throw new Error('Scene not found')
+  if (!scene.motion_prompt) throw new Error('Scene has no motion prompt')
+
+  return scene as SceneWithMotionPrompt
+}
+
+async function resolveSceneGeminiApiKey(
+  supabase: ReturnType<typeof createServiceClient>,
+  productId: string
+) {
+  const { data: product } = await supabase
+    .from(T.products)
+    .select('project_id, global_style_settings')
+    .eq('id', productId)
+    .single<ProductRecord>()
+
+  const geminiApiKey = resolveGoogleApiKey(product?.global_style_settings ?? null)
+  if (geminiApiKey || !product?.project_id) return geminiApiKey
+
+  const { data: project } = await supabase
+    .from(T.projects)
+    .select('global_style_settings')
+    .eq('id', product.project_id)
+    .single<ProjectRecord>()
+
+  return resolveGoogleApiKey(project?.global_style_settings ?? null)
+}
+
+function buildSceneVideoSettings(scene: SceneRecord, model: string): SceneVideoSettings {
+  return {
+    resolution: scene.video_resolution,
+    aspectRatio: scene.video_aspect_ratio,
+    durationSeconds: normalizeDurationValue(
+      model,
+      scene.video_duration_seconds,
+      scene.video_resolution,
+      !!scene.start_frame_image_id,
+      !!scene.end_frame_image_id
+    ),
+    fps: scene.video_fps,
+    generateAudio: scene.video_generate_audio,
+  }
+}
+
+async function resolveFrameRefs(
+  supabase: ReturnType<typeof createServiceClient>,
+  scene: SceneRecord,
+  model: string
+): Promise<FrameRefs> {
+  const [startFrameRef, endFrameRef] = await Promise.all([
+    scene.start_frame_image_id
+      ? createFrameRef(supabase, scene.start_frame_image_id)
+      : Promise.resolve(undefined),
+    scene.end_frame_image_id && !isLtxModel(model)
+      ? createFrameRef(supabase, scene.end_frame_image_id)
+      : Promise.resolve(undefined),
+  ])
 
   return {
-    buffer: videoBuffer,
-    mimeType,
-    extension: extension || 'mp4',
+    ...(startFrameRef ? { start: startFrameRef } : {}),
+    ...(endFrameRef ? { end: endFrameRef } : {}),
   }
+}
+
+async function loadSceneGenerationContext(
+  supabase: ReturnType<typeof createServiceClient>,
+  productId: string,
+  sceneId: string,
+  model?: string
+): Promise<SceneGenerationContext> {
+  const scene = await loadSceneOrThrow(supabase, sceneId)
+  const resolvedModel = model || scene.generation_model || 'veo3'
+
+  const [geminiApiKey, frameRefs] = await Promise.all([
+    resolveSceneGeminiApiKey(supabase, productId),
+    resolveFrameRefs(supabase, scene, resolvedModel),
+  ])
+
+  return {
+    scene,
+    resolvedModel,
+    geminiApiKey,
+    frameRefs,
+    videoSettings: buildSceneVideoSettings(scene, resolvedModel),
+  }
+}
+
+async function uploadGeneratedVideo(
+  supabase: ReturnType<typeof createServiceClient>,
+  productId: string,
+  sceneId: string,
+  prompt: string,
+  result: VideoGenerationResult
+) {
+  const fileName = `video-${slugify(prompt)}-${Date.now()}.${result.extension}`
+  const storagePath = `products/${productId}/scenes/${sceneId}/${fileName}`
+
+  const { error: uploadErr } = await supabase.storage
+    .from('generated-videos')
+    .upload(storagePath, result.buffer, { contentType: result.mimeType })
+
+  if (uploadErr) throw new Error(`Upload failed: ${uploadErr.message}`)
+  return storagePath
+}
+
+async function uploadVideoThumbnail(
+  supabase: ReturnType<typeof createServiceClient>,
+  storagePath: string,
+  videoBuffer: Buffer
+) {
+  try {
+    const thumb = await extractVideoThumbnail(videoBuffer)
+    const thumbStoragePath = buildThumbnailPath(storagePath, thumb.extension)
+
+    const { error: thumbUploadErr } = await supabase.storage
+      .from('generated-videos')
+      .upload(thumbStoragePath, thumb.buffer, { contentType: thumb.mimeType })
+
+    if (thumbUploadErr) {
+      console.warn(`Video thumbnail upload failed: ${thumbUploadErr.message}`)
+      return null
+    }
+
+    return thumbStoragePath
+  } catch (err) {
+    console.warn('Video thumbnail extraction failed:', err)
+    return null
+  }
+}
+
+async function createGeneratedVideoRecord(
+  supabase: ReturnType<typeof createServiceClient>,
+  scene: SceneRecord,
+  jobId: string | null | undefined,
+  storagePath: string,
+  thumbStoragePath: string | null,
+  result: VideoGenerationResult
+) {
+  const { data: record, error: insertErr } = await supabase
+    .from(T.generated_images)
+    .insert({
+      job_id: jobId || null,
+      variation_number: 1,
+      storage_path: storagePath,
+      thumb_storage_path: thumbStoragePath,
+      mime_type: result.mimeType,
+      file_size: result.buffer.length,
+      media_type: 'video',
+      scene_id: scene.id,
+      scene_name: scene.title || null,
+      approval_status: 'pending',
+    })
+    .select()
+    .single()
+
+  if (insertErr) throw new Error(insertErr.message)
+  return record
+}
+
+export async function generateSceneVideo(
+  productId: string,
+  sceneId: string,
+  model?: string,
+  jobId?: string | null
+) {
+  const supabase = createServiceClient()
+  const { scene, resolvedModel, geminiApiKey, frameRefs, videoSettings } =
+    await loadSceneGenerationContext(supabase, productId, sceneId, model)
+
+  const isLtx = isLtxModel(resolvedModel)
+  const isVeo = isVeoModel(resolvedModel)
+
+  // Generate video
+  let result: VideoGenerationResult
+
+  if (isVeo) {
+    result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings, geminiApiKey)
+  } else if (isLtx) {
+    result = await generateWithLtx(scene.motion_prompt, frameRefs, videoSettings)
+  } else {
+    throw new Error(`Unsupported model: ${resolvedModel}`)
+  }
+
+  const storagePath = await uploadGeneratedVideo(
+    supabase,
+    productId,
+    sceneId,
+    scene.motion_prompt,
+    result
+  )
+  const thumbStoragePath = await uploadVideoThumbnail(supabase, storagePath, result.buffer)
+
+  return createGeneratedVideoRecord(supabase, scene, jobId, storagePath, thumbStoragePath, result)
+}
+
+// ---------------------------------------------------------------------------
+// Video generation integrations
+// ---------------------------------------------------------------------------
+
+async function generateWithVeo3(
+  prompt: string,
+  frameRefs: FrameRefs,
+  settings: SceneVideoSettings,
+  apiKeyOverride?: string | null
+) : Promise<VideoGenerationResult> {
+  const config = getVeoConfig(apiKeyOverride)
+  const { instance, parameters } = await buildVeoRequestParts(prompt, frameRefs, settings, config.model)
+  logVeoParameters(config, parameters)
+
+  const payload: Record<string, unknown> = { instances: [instance] }
+  if (Object.keys(parameters).length) payload.parameters = parameters
+  const operationName = await startVeoOperation(config, payload)
+  const operation = await pollVeoOperation(
+    config.baseUrl,
+    operationName,
+    config.apiKey,
+    config.pollIntervalMs,
+    config.timeoutMs
+  )
+
+  return downloadVeoVideo(getVeoVideoUri(operation), config.apiKey)
+}
+
+function getLtxConfig(settings: SceneVideoSettings): LtxConfig {
+  const apiKey = process.env.LTX_API_KEY
+  if (!apiKey) throw new Error('LTX_API_KEY not configured')
+
+  return {
+    apiKey,
+    baseUrl: (process.env.LTX_API_BASE_URL || DEFAULT_LTX_API_BASE_URL).replace(/\/$/, ''),
+    model: process.env.LTX_MODEL || DEFAULT_LTX_MODEL,
+    resolution: settings.resolution || process.env.LTX_RESOLUTION || DEFAULT_LTX_RESOLUTION,
+    durationSeconds: getPositiveNumberOrDefault(
+      settings.durationSeconds ?? process.env.LTX_DURATION,
+      DEFAULT_LTX_DURATION_SECONDS
+    ),
+  }
+}
+
+function buildLtxPayload(
+  prompt: string,
+  frameRefs: FrameRefs,
+  settings: SceneVideoSettings,
+  config: LtxConfig
+) {
+  const payload: Record<string, unknown> = {
+    prompt,
+    model: config.model,
+    duration: config.durationSeconds,
+    resolution: config.resolution,
+  }
+
+  const fps = typeof settings.fps === 'number' && settings.fps > 0 ? settings.fps : null
+  if (fps) payload.fps = fps
+
+  const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
+  if (generateAudio !== null) payload.generate_audio = generateAudio
+
+  const endpoint = frameRefs.start?.url ? 'image-to-video' : 'text-to-video'
+  if (frameRefs.start?.url) payload.image_uri = frameRefs.start.url
+
+  return { endpoint, payload }
 }
 
 async function generateWithLtx(
@@ -362,36 +576,14 @@ async function generateWithLtx(
   frameRefs: FrameRefs,
   settings: SceneVideoSettings
 ): Promise<VideoGenerationResult> {
-  const apiKey = process.env.LTX_API_KEY
-  if (!apiKey) throw new Error('LTX_API_KEY not configured')
+  const config = getLtxConfig(settings)
+  const { endpoint, payload } = buildLtxPayload(prompt, frameRefs, settings, config)
 
-  const baseUrl = (process.env.LTX_API_BASE_URL || DEFAULT_LTX_API_BASE_URL).replace(/\/$/, '')
-  const model = process.env.LTX_MODEL || DEFAULT_LTX_MODEL
-  const safeDuration = getPositiveNumberOrDefault(
-    settings.durationSeconds ?? process.env.LTX_DURATION,
-    DEFAULT_LTX_DURATION_SECONDS
-  )
-  const resolution = settings.resolution || process.env.LTX_RESOLUTION || DEFAULT_LTX_RESOLUTION
-  const fps = typeof settings.fps === 'number' && settings.fps > 0 ? settings.fps : null
-  const generateAudio = typeof settings.generateAudio === 'boolean' ? settings.generateAudio : null
-
-  const payload: Record<string, unknown> = {
-    prompt,
-    model,
-    duration: safeDuration,
-    resolution,
-  }
-  if (fps) payload.fps = fps
-  if (generateAudio !== null) payload.generate_audio = generateAudio
-
-  const endpoint = frameRefs.start?.url ? 'image-to-video' : 'text-to-video'
-  if (frameRefs.start?.url) payload.image_uri = frameRefs.start.url
-
-  const response = await fetch(`${baseUrl}/${endpoint}`, {
+  const response = await fetch(`${config.baseUrl}/${endpoint}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${config.apiKey}`,
     },
     body: JSON.stringify(payload),
   })
@@ -402,8 +594,5 @@ async function generateWithLtx(
   }
 
   const videoBuffer = Buffer.from(await response.arrayBuffer())
-  const mimeType = getResponseMimeType(response, 'video/mp4')
-  const extension = mimeType.includes('/') ? mimeType.split('/')[1] : 'mp4'
-
-  return { buffer: videoBuffer, mimeType, extension: extension || 'mp4' }
+  return getBufferResult(videoBuffer, getResponseMimeType(response, 'video/mp4'))
 }
