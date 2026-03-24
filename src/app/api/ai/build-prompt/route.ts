@@ -9,8 +9,15 @@ import { logError } from '@/lib/error-logger'
 
 export async function POST(request: NextRequest) {
   let product_id: string | undefined
+
+  let body: { product_id?: string; user_prompt?: string }
   try {
-    const body = await request.json()
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 })
+  }
+
+  try {
     product_id = body.product_id
     const user_prompt = body.user_prompt
 
