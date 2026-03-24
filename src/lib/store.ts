@@ -27,6 +27,10 @@ const buildApiPath = (...segments: string[]) =>
 
 const normalizeLabelInput = (value: string) => value.trim().replace(/\s+/g, ' ')
 const trimTextInput = (value: string) => value.trim()
+
+const buildRequestKey = (scope: string, ...parts: Array<string | undefined | null>) =>
+  [scope, ...parts.map((part) => (part ?? '').trim() || '_')].join(':')
+
 const buildProjectScopedQuery = (projectId: string) => {
   const params = new URLSearchParams()
   params.set('project_id', projectId.trim())
@@ -220,7 +224,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentProject: null,
   loadingProjects: false,
   fetchProjects: async () => {
-    const requestKey = 'projects'
+    const requestKey = buildRequestKey('projects')
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingProjects: true })
     try {
@@ -234,7 +238,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   fetchProject: async (id) => {
-    const requestKey = 'currentProject'
+    const requestKey = buildRequestKey('currentProject', id)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await api(`/api/projects/${buildApiPath(id)}`)
@@ -288,7 +292,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentProduct: null,
   loadingProducts: false,
   fetchProducts: async (projectId) => {
-    const requestKey = 'products'
+    const requestKey = buildRequestKey('products', projectId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingProducts: true })
     try {
@@ -305,7 +309,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   fetchProduct: async (id) => {
-    const requestKey = 'currentProduct'
+    const requestKey = buildRequestKey('currentProduct', id)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await api(`/api/products/${buildApiPath(id)}`)
@@ -368,7 +372,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   referenceSets: [],
   loadingRefSets: false,
   fetchReferenceSets: async (productId) => {
-    const requestKey = 'referenceSets'
+    const requestKey = buildRequestKey('referenceSets', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingRefSets: true })
     try {
@@ -584,7 +588,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Prompt Templates
   promptTemplates: [],
   fetchPromptTemplates: async (productId) => {
-    const requestKey = 'promptTemplates'
+    const requestKey = buildRequestKey('promptTemplates', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/prompts`)
@@ -635,7 +639,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentJob: null,
   loadingJobs: false,
   fetchGenerationJobs: async (productId) => {
-    const requestKey = 'generationJobs'
+    const requestKey = buildRequestKey('generationJobs', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     const shouldShowLoading = get().generationJobs.length === 0
     if (shouldShowLoading) set({ loadingJobs: true })
@@ -669,7 +673,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     return job
   },
   fetchJobStatus: async (productId, jobId) => {
-    const requestKey = 'currentJob'
+    const requestKey = buildRequestKey('currentJob', productId, jobId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`)
@@ -729,7 +733,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (filters?.media_type) params.set('media_type', filters.media_type.trim())
     if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
     const qs = params.toString()
-    const requestKey = 'gallery'
+    const requestKey = buildRequestKey('gallery', productId, qs)
     const requestVersion = beginTrackedRequest(requestKey)
     const shouldShowLoading = get().galleryImages.length === 0
     if (shouldShowLoading) set({ loadingGallery: true })
@@ -803,7 +807,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsTemplates: [],
   loadingSettingsTemplates: false,
   fetchSettingsTemplates: async (productId) => {
-    const requestKey = 'settingsTemplates'
+    const requestKey = buildRequestKey('settingsTemplates', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingSettingsTemplates: true })
     try {
@@ -870,7 +874,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   errorLogs: [],
   loadingErrorLogs: false,
   fetchErrorLogs: async (projectId) => {
-    const requestKey = 'errorLogs'
+    const requestKey = buildRequestKey('errorLogs', projectId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingErrorLogs: true })
     try {
