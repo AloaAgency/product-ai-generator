@@ -4,11 +4,11 @@
  */
 
 /** Maximum character lengths for AI-interpolated fields — guards against injection and oversized API payloads */
-const MAX_PRODUCT_NAME_LEN = 200
-const MAX_PRODUCT_DESC_LEN = 500
-const MAX_USER_PROMPT_LEN = 2000
-const MAX_STYLE_VALUE_LEN = 500
-const MAX_SUGGESTION_COUNT = 20
+export const MAX_PRODUCT_NAME_LEN = 200
+export const MAX_PRODUCT_DESC_LEN = 500
+export const MAX_USER_PROMPT_LEN = 2000
+export const MAX_STYLE_VALUE_LEN = 500
+export const MAX_SUGGESTION_COUNT = 20
 
 export interface GlobalStyleSettings {
   subject_rule?: string
