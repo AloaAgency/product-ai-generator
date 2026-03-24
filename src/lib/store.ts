@@ -17,6 +17,9 @@ import type {
 const DEFAULT_ERROR_MESSAGE = 'Request failed'
 const MAX_ERROR_MESSAGE_LENGTH = 200
 const MAX_SUGGESTED_PROMPT_COUNT = 10
+const MAX_API_RETRIES = 2
+const MAX_UPLOAD_RETRIES = 1
+const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const requestVersions = new Map<string, number>()
 let aiRequestCount = 0
 
@@ -27,6 +30,7 @@ const buildApiPath = (...segments: string[]) =>
 
 const normalizeLabelInput = (value: string) => value.trim().replace(/\s+/g, ' ')
 const trimTextInput = (value: string) => value.trim()
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const buildRequestKey = (scope: string, ...parts: Array<string | undefined | null>) =>
   [scope, ...parts.map((part) => (part ?? '').trim() || '_')].join(':')
@@ -66,6 +70,57 @@ const extractErrorMessage = (value: unknown): string | null => {
   if (!message) return null
   return message.slice(0, MAX_ERROR_MESSAGE_LENGTH)
 }
+
+const isRetryableNetworkError = (error: unknown) =>
+  error instanceof TypeError ||
+  (error instanceof Error && error.name === 'AbortError')
+
+const withRetry = async (
+  request: () => Promise<Response>,
+  options: {
+    retries: number
+    shouldRetryResponse?: (response: Response) => boolean
+    shouldRetryError?: (error: unknown) => boolean
+  }
+) => {
+  let attempt = 0
+  let response: Response | null = null
+
+  while (attempt <= options.retries) {
+    try {
+      response = await request()
+      if (!options.shouldRetryResponse?.(response) || attempt === options.retries) {
+        return response
+      }
+    } catch (error) {
+      if (!options.shouldRetryError?.(error) || attempt === options.retries) {
+        throw error
+      }
+    }
+
+    attempt += 1
+    await wait(250 * attempt)
+  }
+
+  return response as Response
+}
+
+const uploadToSignedUrl = (signedUrl: string, file: File) =>
+  withRetry(
+    () =>
+      fetch(signedUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+        },
+        body: file,
+      }),
+    {
+      retries: MAX_UPLOAD_RETRIES,
+      shouldRetryResponse: (response) => !response.ok && RETRYABLE_RESPONSE_STATUSES.has(response.status),
+      shouldRetryError: isRetryableNetworkError,
+    }
+  )
 
 const safeParseResponse = async (res: Response) => {
   const contentType = res.headers.get('content-type') || ''
@@ -184,7 +239,24 @@ interface AppState {
 }
 
 const api = async (url: string, options?: RequestInit) => {
-  const res = await fetch(url, options)
+  const method = (options?.method ?? 'GET').toUpperCase()
+  let res: Response
+
+  try {
+    res = await withRetry(
+      () => fetch(url, options),
+      {
+        retries: method === 'GET' ? MAX_API_RETRIES : 0,
+        shouldRetryResponse: (response) => !response.ok && RETRYABLE_RESPONSE_STATUSES.has(response.status),
+        shouldRetryError: isRetryableNetworkError,
+      }
+    )
+  } catch (error) {
+    throw new Error(
+      extractErrorMessage(error instanceof Error ? error.message : null) || DEFAULT_ERROR_MESSAGE
+    )
+  }
+
   if (!res.ok) {
     const err = await safeParseResponse(res)
     const message =
@@ -526,13 +598,22 @@ export const useAppStore = create<AppState>((set, get) => ({
         continue
       }
 
-      const uploadResp = await fetch(item.signedUrl, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': file.type || 'application/octet-stream',
-        },
-        body: file,
-      })
+      let uploadResp: Response
+      try {
+        uploadResp = await uploadToSignedUrl(item.signedUrl, file)
+      } catch (error) {
+        uploadResults.push({
+          clientId: item.clientId,
+          storage_path: item.storage_path,
+          file_name: item.file_name,
+          mime_type: item.mime_type,
+          file_size: item.file_size,
+          display_order: item.display_order,
+          error:
+            extractErrorMessage(error instanceof Error ? error.message : null) || 'Upload failed',
+        })
+        continue
+      }
 
       if (!uploadResp.ok) {
         uploadResults.push({
