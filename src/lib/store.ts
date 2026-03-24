@@ -17,6 +17,9 @@ import type {
 const DEFAULT_ERROR_MESSAGE = 'Request failed'
 const MAX_ERROR_MESSAGE_LENGTH = 200
 const MAX_SUGGESTED_PROMPT_COUNT = 10
+const MAX_API_RETRIES = 2
+const MAX_UPLOAD_RETRIES = 1
+const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const requestVersions = new Map<string, number>()
 let aiRequestCount = 0
 
@@ -27,6 +30,11 @@ const buildApiPath = (...segments: string[]) =>
 
 const normalizeLabelInput = (value: string) => value.trim().replace(/\s+/g, ' ')
 const trimTextInput = (value: string) => value.trim()
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const buildRequestKey = (scope: string, ...parts: Array<string | undefined | null>) =>
+  [scope, ...parts.map((part) => (part ?? '').trim() || '_')].join(':')
+
 const buildProjectScopedQuery = (projectId: string) => {
   const params = new URLSearchParams()
   params.set('project_id', projectId.trim())
@@ -62,6 +70,57 @@ const extractErrorMessage = (value: unknown): string | null => {
   if (!message) return null
   return message.slice(0, MAX_ERROR_MESSAGE_LENGTH)
 }
+
+const isRetryableNetworkError = (error: unknown) =>
+  error instanceof TypeError ||
+  (error instanceof Error && error.name === 'AbortError')
+
+const withRetry = async (
+  request: () => Promise<Response>,
+  options: {
+    retries: number
+    shouldRetryResponse?: (response: Response) => boolean
+    shouldRetryError?: (error: unknown) => boolean
+  }
+) => {
+  let attempt = 0
+  let response: Response | null = null
+
+  while (attempt <= options.retries) {
+    try {
+      response = await request()
+      if (!options.shouldRetryResponse?.(response) || attempt === options.retries) {
+        return response
+      }
+    } catch (error) {
+      if (!options.shouldRetryError?.(error) || attempt === options.retries) {
+        throw error
+      }
+    }
+
+    attempt += 1
+    await wait(250 * attempt)
+  }
+
+  return response as Response
+}
+
+const uploadToSignedUrl = (signedUrl: string, file: File) =>
+  withRetry(
+    () =>
+      fetch(signedUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+        },
+        body: file,
+      }),
+    {
+      retries: MAX_UPLOAD_RETRIES,
+      shouldRetryResponse: (response) => !response.ok && RETRYABLE_RESPONSE_STATUSES.has(response.status),
+      shouldRetryError: isRetryableNetworkError,
+    }
+  )
 
 const safeParseResponse = async (res: Response) => {
   const contentType = res.headers.get('content-type') || ''
@@ -180,7 +239,24 @@ interface AppState {
 }
 
 const api = async (url: string, options?: RequestInit) => {
-  const res = await fetch(url, options)
+  const method = (options?.method ?? 'GET').toUpperCase()
+  let res: Response
+
+  try {
+    res = await withRetry(
+      () => fetch(url, options),
+      {
+        retries: method === 'GET' ? MAX_API_RETRIES : 0,
+        shouldRetryResponse: (response) => !response.ok && RETRYABLE_RESPONSE_STATUSES.has(response.status),
+        shouldRetryError: isRetryableNetworkError,
+      }
+    )
+  } catch (error) {
+    throw new Error(
+      extractErrorMessage(error instanceof Error ? error.message : null) || DEFAULT_ERROR_MESSAGE
+    )
+  }
+
   if (!res.ok) {
     const err = await safeParseResponse(res)
     const message =
@@ -220,13 +296,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentProject: null,
   loadingProjects: false,
   fetchProjects: async () => {
-    const requestKey = 'projects'
+    const requestKey = buildRequestKey('projects')
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingProjects: true })
     try {
       const data = await api('/api/projects')
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ projects: data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ projects: [] })
+      }
+      logStoreError('Projects', error)
     } finally {
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ loadingProjects: false })
@@ -234,7 +315,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   fetchProject: async (id) => {
-    const requestKey = 'currentProject'
+    const requestKey = buildRequestKey('currentProject', id)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await api(`/api/projects/${buildApiPath(id)}`)
@@ -244,7 +325,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ currentProject: null })
       }
-      throw error
+      logStoreError('Project', error)
     }
   },
   createProject: async (data) => {
@@ -288,7 +369,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentProduct: null,
   loadingProducts: false,
   fetchProducts: async (projectId) => {
-    const requestKey = 'products'
+    const requestKey = buildRequestKey('products', projectId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingProducts: true })
     try {
@@ -298,6 +379,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await api(`/api/products${qs ? `?${qs}` : ''}`)
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ products: data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ products: [] })
+      }
+      logStoreError('Products', error)
     } finally {
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ loadingProducts: false })
@@ -305,7 +391,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   fetchProduct: async (id) => {
-    const requestKey = 'currentProduct'
+    const requestKey = buildRequestKey('currentProduct', id)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await api(`/api/products/${buildApiPath(id)}`)
@@ -315,7 +401,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ currentProduct: null })
       }
-      throw error
+      logStoreError('Product', error)
     }
   },
   createProduct: async (data) => {
@@ -368,13 +454,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   referenceSets: [],
   loadingRefSets: false,
   fetchReferenceSets: async (productId) => {
-    const requestKey = 'referenceSets'
+    const requestKey = buildRequestKey('referenceSets', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingRefSets: true })
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/reference-sets`)
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ referenceSets: data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ referenceSets: [] })
+      }
+      logStoreError('ReferenceSets', error)
     } finally {
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ loadingRefSets: false })
@@ -507,13 +598,22 @@ export const useAppStore = create<AppState>((set, get) => ({
         continue
       }
 
-      const uploadResp = await fetch(item.signedUrl, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': file.type || 'application/octet-stream',
-        },
-        body: file,
-      })
+      let uploadResp: Response
+      try {
+        uploadResp = await uploadToSignedUrl(item.signedUrl, file)
+      } catch (error) {
+        uploadResults.push({
+          clientId: item.clientId,
+          storage_path: item.storage_path,
+          file_name: item.file_name,
+          mime_type: item.mime_type,
+          file_size: item.file_size,
+          display_order: item.display_order,
+          error:
+            extractErrorMessage(error instanceof Error ? error.message : null) || 'Upload failed',
+        })
+        continue
+      }
 
       if (!uploadResp.ok) {
         uploadResults.push({
@@ -584,7 +684,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Prompt Templates
   promptTemplates: [],
   fetchPromptTemplates: async (productId) => {
-    const requestKey = 'promptTemplates'
+    const requestKey = buildRequestKey('promptTemplates', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/prompts`)
@@ -594,7 +694,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ promptTemplates: [] })
       }
-      throw error
+      logStoreError('PromptTemplates', error)
     }
   },
   createPromptTemplate: async (productId, data) => {
@@ -635,7 +735,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentJob: null,
   loadingJobs: false,
   fetchGenerationJobs: async (productId) => {
-    const requestKey = 'generationJobs'
+    const requestKey = buildRequestKey('generationJobs', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     const shouldShowLoading = get().generationJobs.length === 0
     if (shouldShowLoading) set({ loadingJobs: true })
@@ -644,6 +744,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ generationJobs: data })
     } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ generationJobs: [] })
+      }
       logStoreError('GenerationJobs', error)
     } finally {
       if (shouldShowLoading && isLatestRequest(requestKey, requestVersion)) {
@@ -669,7 +772,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     return job
   },
   fetchJobStatus: async (productId, jobId) => {
-    const requestKey = 'currentJob'
+    const requestKey = buildRequestKey('currentJob', productId, jobId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`)
@@ -679,7 +782,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ currentJob: null })
       }
-      throw error
+      logStoreError('CurrentJob', error)
     }
   },
   retryGenerationJob: async (productId, jobId) => {
@@ -729,7 +832,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (filters?.media_type) params.set('media_type', filters.media_type.trim())
     if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
     const qs = params.toString()
-    const requestKey = 'gallery'
+    const requestKey = buildRequestKey('gallery', productId, qs)
     const requestVersion = beginTrackedRequest(requestKey)
     const shouldShowLoading = get().galleryImages.length === 0
     if (shouldShowLoading) set({ loadingGallery: true })
@@ -737,6 +840,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await api(`/api/products/${buildApiPath(productId)}/gallery${qs ? `?${qs}` : ''}`)
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ galleryImages: data.images ?? data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ galleryImages: [] })
+      }
+      logStoreError('Gallery', error)
     } finally {
       if (shouldShowLoading && isLatestRequest(requestKey, requestVersion)) {
         set({ loadingGallery: false })
@@ -803,13 +911,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsTemplates: [],
   loadingSettingsTemplates: false,
   fetchSettingsTemplates: async (productId) => {
-    const requestKey = 'settingsTemplates'
+    const requestKey = buildRequestKey('settingsTemplates', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingSettingsTemplates: true })
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/settings-templates`)
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ settingsTemplates: data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ settingsTemplates: [] })
+      }
+      logStoreError('SettingsTemplates', error)
     } finally {
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ loadingSettingsTemplates: false })
@@ -870,7 +983,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   errorLogs: [],
   loadingErrorLogs: false,
   fetchErrorLogs: async (projectId) => {
-    const requestKey = 'errorLogs'
+    const requestKey = buildRequestKey('errorLogs', projectId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingErrorLogs: true })
     try {
