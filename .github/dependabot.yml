@@ -1,4 +1,5 @@
-# Automated dependency updates — security patches + version bumps
+# Automated dependency updates — security patches + minor/patch bumps
+# Major version bumps are excluded — those should be deliberate migrations
 # Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
 version: 2
 updates:
@@ -21,6 +22,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # Block major version bumps — those require manual migration
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     # Security updates get their own ungrouped PRs (faster review)
     open-pull-requests-limit: 15
     rebase-strategy: "auto"
