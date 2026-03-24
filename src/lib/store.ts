@@ -231,6 +231,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await api('/api/projects')
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ projects: data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ projects: [] })
+      }
+      logStoreError('Projects', error)
     } finally {
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ loadingProjects: false })
@@ -248,7 +253,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ currentProject: null })
       }
-      throw error
+      logStoreError('Project', error)
     }
   },
   createProject: async (data) => {
@@ -302,6 +307,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await api(`/api/products${qs ? `?${qs}` : ''}`)
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ products: data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ products: [] })
+      }
+      logStoreError('Products', error)
     } finally {
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ loadingProducts: false })
@@ -319,7 +329,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ currentProduct: null })
       }
-      throw error
+      logStoreError('Product', error)
     }
   },
   createProduct: async (data) => {
@@ -379,6 +389,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await api(`/api/products/${buildApiPath(productId)}/reference-sets`)
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ referenceSets: data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ referenceSets: [] })
+      }
+      logStoreError('ReferenceSets', error)
     } finally {
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ loadingRefSets: false })
@@ -598,7 +613,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ promptTemplates: [] })
       }
-      throw error
+      logStoreError('PromptTemplates', error)
     }
   },
   createPromptTemplate: async (productId, data) => {
@@ -648,6 +663,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ generationJobs: data })
     } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ generationJobs: [] })
+      }
       logStoreError('GenerationJobs', error)
     } finally {
       if (shouldShowLoading && isLatestRequest(requestKey, requestVersion)) {
@@ -683,7 +701,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ currentJob: null })
       }
-      throw error
+      logStoreError('CurrentJob', error)
     }
   },
   retryGenerationJob: async (productId, jobId) => {
@@ -741,6 +759,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await api(`/api/products/${buildApiPath(productId)}/gallery${qs ? `?${qs}` : ''}`)
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ galleryImages: data.images ?? data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ galleryImages: [] })
+      }
+      logStoreError('Gallery', error)
     } finally {
       if (shouldShowLoading && isLatestRequest(requestKey, requestVersion)) {
         set({ loadingGallery: false })
@@ -814,6 +837,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await api(`/api/products/${buildApiPath(productId)}/settings-templates`)
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ settingsTemplates: data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ settingsTemplates: [] })
+      }
+      logStoreError('SettingsTemplates', error)
     } finally {
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ loadingSettingsTemplates: false })
