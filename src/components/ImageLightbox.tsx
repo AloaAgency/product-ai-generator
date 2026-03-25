@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useCallback, useState, useRef } from 'react'
+import { memo, useEffect, useCallback, useState, useRef, useMemo } from 'react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import {
   X,
@@ -77,6 +77,65 @@ function buildRegenerateUrl(projectId: string, image: LightboxImage): string {
   if (image.texture_image_count != null) params.set('texture_image_count', String(image.texture_image_count))
   return `/projects/${projectId}/products/${image.productId}/generate?${params.toString()}`
 }
+
+const LightboxThumbnailButton = memo(function LightboxThumbnailButton({
+  id,
+  thumbUrl,
+  index,
+  isActive,
+  approvalStatus,
+  onNavigate,
+}: {
+  id: string
+  thumbUrl: string | null
+  index: number
+  isActive: boolean
+  approvalStatus: ApprovalStatus | undefined
+  onNavigate: (index: number) => void
+}) {
+  const isApproved = approvalStatus === 'approved'
+  const isRejected = approvalStatus === 'rejected'
+  const isRequestChanges = approvalStatus === 'request_changes'
+
+  return (
+    <button
+      type="button"
+      onClick={() => onNavigate(index)}
+      className={`relative flex-shrink-0 w-12 h-12 rounded-md overflow-hidden border-2 transition-all ${
+        isActive
+          ? 'border-white ring-2 ring-white/50'
+          : isApproved
+            ? 'border-green-500'
+            : isRejected
+              ? 'border-red-500'
+              : isRequestChanges
+                ? 'border-orange-500'
+                : 'border-gray-600 hover:border-gray-400'
+      }`}
+      aria-label={`View image ${index + 1}`}
+      data-image-id={id}
+    >
+      {thumbUrl && (
+        <img src={thumbUrl} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+      )}
+      {isApproved && (
+        <div className="absolute inset-0 flex items-center justify-center bg-green-500/30">
+          <Check className="w-4 h-4 text-green-500" />
+        </div>
+      )}
+      {isRejected && (
+        <div className="absolute inset-0 flex items-center justify-center bg-red-500/30">
+          <XCircle className="w-4 h-4 text-red-500" />
+        </div>
+      )}
+      {isRequestChanges && (
+        <div className="absolute inset-0 flex items-center justify-center bg-orange-500/30">
+          <AlertTriangle className="w-4 h-4 text-orange-500" />
+        </div>
+      )}
+    </button>
+  )
+})
 
 export function ImageLightbox({
   images,
@@ -273,6 +332,17 @@ export function ImageLightbox({
   if (!currentImage) return null
 
   const imageUrl = getDisplayImageUrl(currentImage)
+  const thumbnailItems = useMemo(
+    () =>
+      images.map((img, index) => ({
+        id: img.id,
+        index,
+        thumbUrl: img.thumb_signed_url || img.thumb_public_url || img.signed_url || img.public_url || null,
+        approvalStatus: img.approval_status,
+        isActive: index === currentIndex,
+      })),
+    [images, currentIndex]
+  )
 
   return (
     <div
@@ -431,50 +501,17 @@ export function ImageLightbox({
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 px-3 py-2 sm:px-4 sm:py-3 bg-gray-900/80 rounded-b-xl">
           {/* Thumbnail strip */}
           <div className="flex items-center gap-2 overflow-x-auto max-w-full sm:max-w-[50%] pb-1">
-            {images.map((img, index) => {
-              const thumbUrl = img.thumb_signed_url || img.thumb_public_url || img.signed_url || img.public_url
-              const isActive = index === currentIndex
-              const thumbApproved = img.approval_status === 'approved'
-              const thumbRejected = img.approval_status === 'rejected'
-              const thumbChanges = img.approval_status === 'request_changes'
-              return (
-                <button
-                  type="button"
-                  key={img.id}
-                  onClick={() => onNavigate(index)}
-                  className={`relative flex-shrink-0 w-12 h-12 rounded-md overflow-hidden border-2 transition-all ${
-                    isActive
-                      ? 'border-white ring-2 ring-white/50'
-                      : thumbApproved
-                        ? 'border-green-500'
-                        : thumbRejected
-                          ? 'border-red-500'
-                          : thumbChanges
-                            ? 'border-orange-500'
-                            : 'border-gray-600 hover:border-gray-400'
-                  }`}
-                >
-                  {thumbUrl && (
-                    <img src={thumbUrl} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
-                  )}
-                  {thumbApproved && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-green-500/30">
-                      <Check className="w-4 h-4 text-green-500" />
-                    </div>
-                  )}
-                  {thumbRejected && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-red-500/30">
-                      <XCircle className="w-4 h-4 text-red-500" />
-                    </div>
-                  )}
-                  {thumbChanges && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-orange-500/30">
-                      <AlertTriangle className="w-4 h-4 text-orange-500" />
-                    </div>
-                  )}
-                </button>
-              )
-            })}
+            {thumbnailItems.map((item) => (
+              <LightboxThumbnailButton
+                key={item.id}
+                id={item.id}
+                thumbUrl={item.thumbUrl}
+                index={item.index}
+                isActive={item.isActive}
+                approvalStatus={item.approvalStatus}
+                onNavigate={onNavigate}
+              />
+            ))}
           </div>
 
           {/* Action buttons */}
