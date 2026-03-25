@@ -1,21 +1,42 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAppStore } from '@/lib/store'
 import { AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Trash2 } from 'lucide-react'
 import { getSafeErrorContext, getSafeErrorMessage } from './errorDisplay.helpers'
 
+const PAGE_SIZE = 20
+
 export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
-  const { errorLogs, loadingErrorLogs, fetchErrorLogs, clearErrorLogs } = useAppStore()
+  const errorLogs = useAppStore((state) => state.errorLogs)
+  const loadingErrorLogs = useAppStore((state) => state.loadingErrorLogs)
+  const fetchErrorLogs = useAppStore((state) => state.fetchErrorLogs)
+  const clearErrorLogs = useAppStore((state) => state.clearErrorLogs)
   const [expanded, setExpanded] = useState(false)
   const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set())
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   const [clearing, setClearing] = useState(false)
 
   useEffect(() => {
-    fetchErrorLogs(projectId)
+    void fetchErrorLogs(projectId)
   }, [projectId, fetchErrorLogs])
 
-  const handleClear = async () => {
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE)
+    setExpandedEntries(new Set())
+  }, [projectId, errorLogs.length])
+
+  const visibleLogs = useMemo(() => {
+    return errorLogs.slice(0, visibleCount).map((log) => ({
+      ...log,
+      safeMessage: getSafeErrorMessage(log.error_message),
+      safeContext: getSafeErrorContext(log.error_context),
+    }))
+  }, [errorLogs, visibleCount])
+
+  const hasMoreLogs = visibleCount < errorLogs.length
+
+  const handleClear = useCallback(async () => {
     if (!confirm('Clear all error logs for this project?')) return
     setClearing(true)
     try {
@@ -23,16 +44,26 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
     } finally {
       setClearing(false)
     }
-  }
+  }, [clearErrorLogs, projectId])
 
-  const toggleEntry = (id: string) => {
+  const toggleEntry = useCallback((id: string) => {
     setExpandedEntries((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
     })
-  }
+  }, [])
+
+  const handleToggleExpanded = useCallback(() => {
+    setExpanded((prev) => !prev)
+  }, [])
+
+  const handleRefresh = useCallback(() => {
+    setVisibleCount(PAGE_SIZE)
+    setExpandedEntries(new Set())
+    void fetchErrorLogs(projectId)
+  }, [fetchErrorLogs, projectId])
 
   if (errorLogs.length === 0 && !loadingErrorLogs) return null
 
@@ -40,7 +71,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
     <div className="mb-4 rounded-lg border border-red-900/40 bg-red-950/20">
       <button
         type="button"
-        onClick={() => setExpanded(!expanded)}
+        onClick={handleToggleExpanded}
         className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-400 hover:bg-red-950/30 transition-colors rounded-lg"
         aria-expanded={expanded}
       >
@@ -61,7 +92,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
           <div className="mb-3 flex items-center gap-2">
             <button
               type="button"
-              onClick={() => fetchErrorLogs(projectId)}
+              onClick={handleRefresh}
               disabled={loadingErrorLogs}
               className="inline-flex items-center gap-1.5 rounded-md bg-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 transition-colors"
             >
@@ -80,7 +111,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
           </div>
 
           <div className="max-h-64 space-y-2 overflow-y-auto">
-            {errorLogs.map((log) => (
+            {visibleLogs.map((log) => (
               <div
                 key={log.id}
                 className="rounded-md border border-red-900/30 bg-red-950/30 p-2.5 text-xs"
@@ -99,10 +130,10 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
                       )}
                     </div>
                     <p className="mt-1 text-red-300 break-words">
-                      {getSafeErrorMessage(log.error_message)}
+                      {log.safeMessage}
                     </p>
                   </div>
-                  {log.error_context && (
+                  {log.safeContext && (
                     <ChevronDown
                       className={`h-3 w-3 flex-shrink-0 text-zinc-500 transition-transform ${
                         expandedEntries.has(log.id) ? 'rotate-180' : ''
@@ -110,13 +141,22 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
                     />
                   )}
                 </div>
-                {expandedEntries.has(log.id) && getSafeErrorContext(log.error_context) && (
+                {expandedEntries.has(log.id) && log.safeContext && (
                   <pre className="mt-2 max-h-40 overflow-auto rounded bg-zinc-900/80 p-2 text-zinc-400">
-                    {getSafeErrorContext(log.error_context)}
+                    {log.safeContext}
                   </pre>
                 )}
               </div>
             ))}
+            {hasMoreLogs && (
+              <button
+                type="button"
+                onClick={() => setVisibleCount((prev) => prev + PAGE_SIZE)}
+                className="w-full rounded-md border border-red-900/30 bg-red-950/20 px-3 py-2 text-xs font-medium text-red-200 transition-colors hover:bg-red-950/30"
+              >
+                Load more ({errorLogs.length - visibleCount} remaining)
+              </button>
+            )}
           </div>
         </div>
       )}

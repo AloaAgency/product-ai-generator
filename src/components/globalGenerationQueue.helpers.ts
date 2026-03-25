@@ -3,6 +3,7 @@ import type { GenerationJob } from '../lib/types'
 export const POLL_MS = 5000
 
 export const isActiveStatus = (status: string) => status === 'pending' || status === 'running'
+const MAX_RECENT_FAILURES = 3
 
 const getSortableTimestamp = (iso?: string | null) => {
   if (!iso) return Number.NEGATIVE_INFINITY
@@ -24,30 +25,47 @@ const getJobProgress = (completedCount: number, variationCount: number) => {
 }
 
 export const deriveGenerationQueueState = (generationJobs: GenerationJob[]) => {
-  const activeJobs = generationJobs.filter((job) => isActiveStatus(job.status))
-  const failedJobs = generationJobs
-    .filter((job) => job.status === 'failed')
-    .sort((a, b) => {
-      const aTs = getSortableTimestamp(a.completed_at || a.created_at)
-      const bTs = getSortableTimestamp(b.completed_at || b.created_at)
-      return bTs - aTs
+  const activeJobs: GenerationJob[] = []
+  const recentFailedJobs: GenerationJob[] = []
+  let pendingCount = 0
+  let runningCount = 0
+  let failedCount = 0
+  let totalVariations = 0
+  let totalCompleted = 0
+
+  for (const job of generationJobs) {
+    if (isActiveStatus(job.status)) {
+      activeJobs.push(job)
+      totalVariations += job.variation_count || 0
+      totalCompleted += job.completed_count || 0
+
+      if (job.status === 'pending') pendingCount += 1
+      else runningCount += 1
+      continue
+    }
+
+    if (job.status !== 'failed') continue
+
+    failedCount += 1
+    const jobTimestamp = getSortableTimestamp(job.completed_at || job.created_at)
+    let insertAt = recentFailedJobs.findIndex((failedJob) => {
+      const failedTimestamp = getSortableTimestamp(failedJob.completed_at || failedJob.created_at)
+      return jobTimestamp > failedTimestamp
     })
 
-  const pendingCount = activeJobs.filter((job) => job.status === 'pending').length
-  const runningCount = activeJobs.filter((job) => job.status === 'running').length
-  const failedCount = failedJobs.length
-  const recentFailedJobs = failedJobs.slice(0, 3)
-  const totals = activeJobs.reduce(
-    (acc, job) => ({
-      totalVariations: acc.totalVariations + (job.variation_count || 0),
-      totalCompleted: acc.totalCompleted + (job.completed_count || 0),
-    }),
-    { totalVariations: 0, totalCompleted: 0 }
-  )
+    if (insertAt === -1) insertAt = recentFailedJobs.length
+    if (insertAt < MAX_RECENT_FAILURES) {
+      recentFailedJobs.splice(insertAt, 0, job)
+      if (recentFailedJobs.length > MAX_RECENT_FAILURES) {
+        recentFailedJobs.pop()
+      }
+    }
+  }
+
+  const totals = { totalVariations, totalCompleted }
 
   return {
     activeJobs,
-    failedJobs,
     pendingCount,
     runningCount,
     failedCount,
