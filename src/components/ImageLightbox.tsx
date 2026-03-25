@@ -327,11 +327,8 @@ export function ImageLightbox({
     if (shouldRequestSignedUrls(currentImage, !!onRequestSignedUrls)) {
       void onRequestSignedUrls(currentImage.id)
     }
-  }, [currentImage?.id, currentImage?.signed_url, currentImage?.preview_signed_url, currentImage?.preview_public_url, currentImage?.public_url, onRequestSignedUrls])
+  }, [currentImage, onRequestSignedUrls])
 
-  if (!currentImage) return null
-
-  const imageUrl = getDisplayImageUrl(currentImage)
   const thumbnailItems = useMemo(
     () =>
       images.map((img, index) => ({
@@ -343,6 +340,10 @@ export function ImageLightbox({
       })),
     [images, currentIndex]
   )
+
+  if (!currentImage) return null
+
+  const imageUrl = getDisplayImageUrl(currentImage)
 
   return (
     <div
