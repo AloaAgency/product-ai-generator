@@ -1,32 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const PASSWORD = process.env.SITE_PASSWORD || 'aloaagency@1234'
 const COOKIE_NAME = 'site-auth'
 
-export function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl
-
-  // Allow the login API route through
-  if (pathname === '/api/login' || pathname.startsWith('/api/worker/generate')) {
-    return NextResponse.next()
-  }
-
-  // Check for auth cookie
-  const auth = request.cookies.get(COOKIE_NAME)
-  if (auth?.value === 'authenticated') {
-    return NextResponse.next()
-  }
-
-  // Show login page, preserving the intended destination
-  const errorParam = request.nextUrl.searchParams.get('error') || ''
-  return new NextResponse(loginPage(errorParam, pathname), {
-    status: 401,
-    headers: { 'content-type': 'text/html' },
-  })
-}
-
-function loginPage(error: string, redirectPath: string) {
-  return `<!DOCTYPE html>
+// Pre-compute the static portion of the login page HTML once at module load
+// rather than re-building the full string on every unauthenticated request.
+const LOGIN_PAGE_PREFIX = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -48,19 +26,58 @@ function loginPage(error: string, redirectPath: string) {
 </head>
 <body>
   <div class="card">
-    <h1>Aloa AI Product Imager</h1>
-    <form method="POST" action="/api/login">
-      <input type="hidden" name="redirect" value="${redirectPath}" />
+    <h1>Aloa AI Product Imager</h1>`
+
+const LOGIN_PAGE_SUFFIX = `  </div>
+</body>
+</html>`
+
+const ERROR_HTML = '<p class="error">Incorrect password</p>'
+
+/** Minimal HTML-attribute escaping to prevent reflected XSS via the redirect path. */
+function escapeAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function loginPage(showError: boolean, redirectPath: string) {
+  const safeRedirect = escapeAttr(redirectPath)
+  return (
+    LOGIN_PAGE_PREFIX +
+    `\n    <form method="POST" action="/api/login">
+      <input type="hidden" name="redirect" value="${safeRedirect}" />
       <label for="password">Password</label>
       <input type="password" id="password" name="password" placeholder="Enter password" autofocus required />
       <button type="submit">Sign In</button>
-      ${error ? '<p class="error">Incorrect password</p>' : ''}
-    </form>
-  </div>
-</body>
-</html>`
+      ${showError ? ERROR_HTML : ''}
+    </form>\n` +
+    LOGIN_PAGE_SUFFIX
+  )
+}
+
+export function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl
+
+  // Allow the login API route through
+  if (pathname === '/api/login' || pathname.startsWith('/api/worker/generate')) {
+    return NextResponse.next()
+  }
+
+  // Check for auth cookie
+  const auth = request.cookies.get(COOKIE_NAME)
+  if (auth?.value === 'authenticated') {
+    return NextResponse.next()
+  }
+
+  // Show login page, preserving the intended destination
+  const showError = request.nextUrl.searchParams.has('error')
+  return new NextResponse(loginPage(showError, pathname), {
+    status: 401,
+    headers: { 'content-type': 'text/html' },
+  })
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  // Exclude static assets, images, and known public files from middleware
+  // to avoid cookie-check overhead on requests that never need auth.
+  matcher: ['/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?|ttf|otf|css|js|map)$).*)'],
 }
