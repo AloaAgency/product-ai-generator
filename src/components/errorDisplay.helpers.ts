@@ -27,6 +27,7 @@ export const getSafeErrorMessage = (
   fallback = GENERIC_ERROR_MESSAGE
 ) => {
   if (!raw) return fallback
+  if (/\n\s*at\s+/.test(raw)) return fallback
 
   const normalized = normalizeWhitespace(stripStackTrace(raw))
   if (!normalized || isInternalErrorMessage(normalized)) {
