@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { useAppStore } from '@/lib/store'
 import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
 import {
@@ -16,15 +16,13 @@ export default function GlobalGenerationQueue({
 }: {
   productId: string
 }) {
-  const {
-    generationJobs,
-    loadingJobs,
-    fetchGenerationJobs,
-    clearGenerationQueue,
-    clearGenerationFailures,
-    devParallelGeneration,
-    setDevParallelGeneration,
-  } = useAppStore()
+  const generationJobs = useAppStore((state) => state.generationJobs)
+  const loadingJobs = useAppStore((state) => state.loadingJobs)
+  const fetchGenerationJobs = useAppStore((state) => state.fetchGenerationJobs)
+  const clearGenerationQueue = useAppStore((state) => state.clearGenerationQueue)
+  const clearGenerationFailures = useAppStore((state) => state.clearGenerationFailures)
+  const devParallelGeneration = useAppStore((state) => state.devParallelGeneration)
+  const setDevParallelGeneration = useAppStore((state) => state.setDevParallelGeneration)
   const [expanded, setExpanded] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearingFailures, setClearingFailures] = useState(false)
@@ -72,6 +70,41 @@ export default function GlobalGenerationQueue({
     hasActiveJobs,
   } = useMemo(() => deriveGenerationQueueState(generationJobs), [generationJobs])
 
+  const handleToggleExpanded = useCallback(() => {
+    setExpanded((prev) => !prev)
+  }, [])
+
+  const handleToggleDevParallel = useCallback((event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    setDevParallelGeneration(!devParallelGeneration)
+  }, [devParallelGeneration, setDevParallelGeneration])
+
+  const handleClearQueue = useCallback(async (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    if (clearing) return
+    const confirmed = window.confirm('Clear active generation queue? This will cancel pending and running jobs.')
+    if (!confirmed) return
+    try {
+      setClearing(true)
+      await clearGenerationQueue(productId)
+    } finally {
+      setClearing(false)
+    }
+  }, [clearGenerationQueue, clearing, productId])
+
+  const handleClearFailures = useCallback(async (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    if (clearingFailures) return
+    const confirmed = window.confirm('Clear recent failed jobs from queue history?')
+    if (!confirmed) return
+    try {
+      setClearingFailures(true)
+      await clearGenerationFailures(productId)
+    } finally {
+      setClearingFailures(false)
+    }
+  }, [clearGenerationFailures, clearingFailures, productId])
+
   return (
     <section
       className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/70 backdrop-blur"
@@ -80,7 +113,7 @@ export default function GlobalGenerationQueue({
       <div className="flex w-full flex-col gap-3 px-3 py-3 sm:px-4 sm:flex-row sm:items-center sm:justify-between">
         <button
           type="button"
-          onClick={() => setExpanded((prev) => !prev)}
+          onClick={handleToggleExpanded}
           className="flex min-h-11 w-full min-w-0 flex-1 items-center gap-3 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
           aria-expanded={expanded}
         >
@@ -109,10 +142,7 @@ export default function GlobalGenerationQueue({
             <button
               type="button"
               className="min-h-11 whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100"
-              onClick={(event) => {
-                event.stopPropagation()
-                setDevParallelGeneration(!devParallelGeneration)
-              }}
+              onClick={handleToggleDevParallel}
             >
               Dev parallel: {devParallelGeneration ? 'On' : 'Off'}
             </button>
@@ -121,18 +151,7 @@ export default function GlobalGenerationQueue({
             <button
               type="button"
               className="min-h-11 whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={async (event) => {
-                event.stopPropagation()
-                if (clearing) return
-                const confirmed = window.confirm('Clear active generation queue? This will cancel pending and running jobs.')
-                if (!confirmed) return
-                try {
-                  setClearing(true)
-                  await clearGenerationQueue(productId)
-                } finally {
-                  setClearing(false)
-                }
-              }}
+              onClick={handleClearQueue}
               disabled={clearing}
             >
               {clearing ? 'Clearing…' : 'Clear'}
@@ -142,18 +161,7 @@ export default function GlobalGenerationQueue({
             <button
               type="button"
               className="min-h-11 whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={async (event) => {
-                event.stopPropagation()
-                if (clearingFailures) return
-                const confirmed = window.confirm('Clear recent failed jobs from queue history?')
-                if (!confirmed) return
-                try {
-                  setClearingFailures(true)
-                  await clearGenerationFailures(productId)
-                } finally {
-                  setClearingFailures(false)
-                }
-              }}
+              onClick={handleClearFailures}
               disabled={clearingFailures}
             >
               {clearingFailures ? 'Clearing failures…' : 'Clear failures'}
