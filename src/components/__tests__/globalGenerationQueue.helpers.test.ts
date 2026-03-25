@@ -62,6 +62,18 @@ test('deriveGenerationQueueState summarizes active and failed jobs without count
   assert.equal(state.hasActiveJobs, true)
 })
 
+test('deriveGenerationQueueState keeps only the three newest failures without sorting the full history', () => {
+  const state = deriveGenerationQueueState([
+    buildJob({ id: 'failed-1', status: 'failed', completed_at: '2024-03-01T12:00:00.000Z' }),
+    buildJob({ id: 'failed-3', status: 'failed', completed_at: '2024-03-03T12:00:00.000Z' }),
+    buildJob({ id: 'failed-2', status: 'failed', completed_at: '2024-03-02T12:00:00.000Z' }),
+    buildJob({ id: 'failed-4', status: 'failed', completed_at: '2024-03-04T12:00:00.000Z' }),
+  ])
+
+  assert.equal(state.failedCount, 4)
+  assert.deepEqual(state.recentFailedJobs.map((job) => job.id), ['failed-4', 'failed-3', 'failed-2'])
+})
+
 test('getGenerationJobProgress clamps invalid and over-complete jobs into a safe percentage range', () => {
   assert.equal(getGenerationJobProgress({ completed_count: 0, variation_count: 0 }), 0)
   assert.equal(getGenerationJobProgress({ completed_count: -1, variation_count: 4 }), 0)
