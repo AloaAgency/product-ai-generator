@@ -10,7 +10,18 @@ export const dynamic = 'force-dynamic'
 const SIZE_THRESHOLD = 5 * 1024 * 1024 // 5 MB
 const DEFAULT_LIMIT = 50
 
+function isAdminAuthorized(request: NextRequest): boolean {
+  const adminSecret = process.env.ADMIN_SECRET
+  if (!adminSecret) return false
+  const provided = request.headers.get('x-admin-secret')
+  return provided === adminSecret
+}
+
 export async function POST(request: NextRequest) {
+  if (!isAdminAuthorized(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   try {
     const body = await request.json().catch(() => ({}))
     const limit = Math.min(Math.max(Number(body?.limit) || DEFAULT_LIMIT, 1), 200)

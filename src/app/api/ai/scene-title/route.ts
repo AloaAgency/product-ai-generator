@@ -1,16 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
+import { MAX_USER_PROMPT_LEN } from '@/lib/prompt-builder'
 
 const anthropic = new Anthropic()
 
 export async function POST(request: NextRequest) {
   try {
-    const { prompt_text } = await request.json()
+    const body = await request.json()
+    const rawPrompt = body?.prompt_text
 
-    if (!prompt_text) {
+    if (!rawPrompt) {
       return NextResponse.json({ error: 'prompt_text is required' }, { status: 400 })
     }
+
+    // Truncate to prevent oversized payloads from abusing API costs
+    const prompt_text = String(rawPrompt).slice(0, MAX_USER_PROMPT_LEN)
 
     const response = await anthropic.messages.create({
       model: CLAUDE_FAST_MODEL.name,
