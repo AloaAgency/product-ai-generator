@@ -1,5 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
+import { T } from '@/lib/db-tables'
+
+async function resolveProject(supabase: ReturnType<typeof createServiceClient>, projectId: string) {
+  const { data } = await supabase
+    .from(T.projects)
+    .select('id')
+    .eq('id', projectId)
+    .single()
+  return data
+}
 
 export async function GET(req: NextRequest) {
   const projectId = req.nextUrl.searchParams.get('project_id')
@@ -9,6 +19,13 @@ export async function GET(req: NextRequest) {
 
   try {
     const supabase = createServiceClient()
+
+    // Verify the project exists before returning its logs
+    const project = await resolveProject(supabase, projectId)
+    if (!project) {
+      return NextResponse.json({ error: 'Project not found' }, { status: 404 })
+    }
+
     const { data, error } = await supabase
       .from('prodai_error_logs')
       .select('*')
@@ -18,11 +35,8 @@ export async function GET(req: NextRequest) {
 
     if (error) throw error
     return NextResponse.json(data)
-  } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+  } catch {
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
@@ -34,6 +48,13 @@ export async function DELETE(req: NextRequest) {
 
   try {
     const supabase = createServiceClient()
+
+    // Verify the project exists before allowing log deletion
+    const project = await resolveProject(supabase, projectId)
+    if (!project) {
+      return NextResponse.json({ error: 'Project not found' }, { status: 404 })
+    }
+
     const { error } = await supabase
       .from('prodai_error_logs')
       .delete()
@@ -41,10 +62,7 @@ export async function DELETE(req: NextRequest) {
 
     if (error) throw error
     return NextResponse.json({ success: true })
-  } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+  } catch {
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
