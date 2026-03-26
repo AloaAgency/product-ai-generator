@@ -9,15 +9,13 @@ export const maxDuration = 800
 export const dynamic = 'force-dynamic'
 
 function isAuthorized(request: NextRequest) {
-  const vercelCron = request.headers.get('x-vercel-cron')
-  if (vercelCron) return true
   const secret = process.env.CRON_SECRET
   if (!secret) return false
   const headerSecret = request.headers.get('x-cron-secret')
-  if (headerSecret && headerSecret === secret) return true
   const auth = request.headers.get('authorization') || ''
-  if (auth.startsWith('Bearer ') && auth.slice(7) === secret) return true
-  return false
+  const bearerSecret = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+
+  return headerSecret === secret || bearerSecret === secret
 }
 
 export async function GET(request: NextRequest) {
