@@ -13,6 +13,12 @@ import {
 import { T } from '@/lib/db-tables'
 import type { GlobalStyleSettings, ReferenceImage } from '@/lib/types'
 import { resolveGoogleApiKey } from '@/lib/google-api-keys'
+import {
+  isValidGenerationJobId,
+  MAX_GENERATION_BATCH_SIZE,
+  MAX_GENERATION_PARALLELISM,
+  parseWorkerPositiveInteger,
+} from '@/lib/generation-worker-guards'
 
 type WorkerResult = {
   jobId: string
@@ -175,16 +181,14 @@ async function processVideoJob(
 }
 
 export async function processGenerationJob(jobId: string, options: WorkerOptions = {}): Promise<WorkerResult> {
+  if (!isValidGenerationJobId(jobId)) {
+    throw new Error('Invalid generation job id')
+  }
+
   const supabase = createServiceClient()
-  const batchSize = Number.isFinite(options.batchSize) && (options.batchSize as number) > 0
-    ? (options.batchSize as number)
-    : 1
-  const parallelism = Number.isFinite(options.parallelism) && (options.parallelism as number) > 0
-    ? (options.parallelism as number)
-    : 1
-  const timeBudgetMs = Number.isFinite(options.timeBudgetMs) && (options.timeBudgetMs as number) > 0
-    ? (options.timeBudgetMs as number)
-    : 760000
+  const batchSize = parseWorkerPositiveInteger(options.batchSize, 1, { max: MAX_GENERATION_BATCH_SIZE })
+  const parallelism = parseWorkerPositiveInteger(options.parallelism, 1, { max: MAX_GENERATION_PARALLELISM })
+  const timeBudgetMs = parseWorkerPositiveInteger(options.timeBudgetMs, 760000, { max: 800000 })
   const variationTimeoutMsRaw = Number(process.env.GENERATION_VARIATION_TIMEOUT_MS)
   const variationTimeoutMs = Number.isFinite(variationTimeoutMsRaw) && variationTimeoutMsRaw > 0
     ? variationTimeoutMsRaw
