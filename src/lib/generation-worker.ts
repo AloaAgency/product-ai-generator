@@ -97,7 +97,6 @@ async function processVideoJob(
 ): Promise<WorkerResult> {
   const completed = job.completed_count || 0
   const failed = job.failed_count || 0
-  const totalProcessed = completed + failed
 
   if (job.status === 'completed' || job.status === 'cancelled') {
     return {
