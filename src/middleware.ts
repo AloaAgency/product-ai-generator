@@ -58,7 +58,7 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   // Allow the login API route through
-  if (pathname === '/api/login' || pathname.startsWith('/api/worker/generate')) {
+  if (pathname === '/api/login' || pathname === '/api/worker/generate') {
     return NextResponse.next()
   }
 
