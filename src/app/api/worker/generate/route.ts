@@ -10,6 +10,7 @@ import {
   MAX_GENERATION_JOB_CONCURRENCY,
   MAX_GENERATION_PARALLELISM,
   parseWorkerPositiveInteger,
+  sanitizeWorkerErrorMessage,
 } from '@/lib/generation-worker-guards'
 
 export const runtime = 'nodejs'
@@ -104,7 +105,9 @@ export async function GET(request: NextRequest) {
       .select('id')
 
     if (staleError) {
-      console.warn('[Worker] Failed to requeue stale jobs', { error: staleError.message })
+      console.warn('[Worker] Failed to requeue stale jobs', {
+        error: sanitizeWorkerErrorMessage(staleError, 'Failed to requeue stale jobs'),
+      })
     } else if (staleJobs && staleJobs.length > 0) {
       console.log('[Worker] Requeued stale jobs', { count: staleJobs.length })
     }
@@ -161,13 +164,14 @@ export async function GET(request: NextRequest) {
     console.log('[Worker] Completed', { processed: results.length })
     return NextResponse.json({ processed: results.length, results })
   } catch (err) {
-    console.warn('[Worker] Error', err)
+    const safeMessage = sanitizeWorkerErrorMessage(err)
+    console.warn('[Worker] Error', { error: safeMessage })
     await logError({
-      errorMessage: err instanceof Error ? err.message : 'Worker error',
+      errorMessage: safeMessage,
       errorSource: 'api/worker/generate',
     })
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Worker error' },
+      { error: safeMessage },
       { status: 500 }
     )
   }

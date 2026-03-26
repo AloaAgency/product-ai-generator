@@ -18,6 +18,7 @@ import {
   MAX_GENERATION_BATCH_SIZE,
   MAX_GENERATION_PARALLELISM,
   parseWorkerPositiveInteger,
+  sanitizeWorkerErrorMessage,
 } from '@/lib/generation-worker-guards'
 
 type WorkerResult = {
@@ -158,7 +159,7 @@ async function processVideoJob(
       status: 'completed',
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Video generation failed'
+    const message = sanitizeWorkerErrorMessage(err, 'Video generation failed')
     const nextFailed = failed + 1
     await supabase
       .from(T.generation_jobs)
@@ -507,7 +508,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
         successCount += 1
       } catch (err) {
         failCount += 1
-        lastError = err instanceof Error ? err.message : 'Variation failed'
+        lastError = sanitizeWorkerErrorMessage(err, 'Variation failed')
       } finally {
         processed += 1
         // Incremental progress update so polling clients see real progress
