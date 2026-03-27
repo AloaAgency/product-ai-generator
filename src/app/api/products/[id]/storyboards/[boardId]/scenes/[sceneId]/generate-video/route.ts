@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processGenerationJob } from '@/lib/generation-worker'
+import { buildVideoJobRequest, shouldRunVideoGenerationInline } from '@/lib/video-job-request'
 
 export const runtime = 'nodejs'
 export const maxDuration = 600
@@ -29,13 +30,7 @@ export async function POST(
       return NextResponse.json({ error: 'Scene has no motion prompt' }, { status: 400 })
     }
 
-    const model: string = body.model || scene.generation_model || 'veo3'
-    const isLtx = model.toLowerCase().startsWith('ltx')
-    const resolution = scene.video_resolution
-      || (isLtx ? process.env.LTX_RESOLUTION : process.env.VEO_RESOLUTION)
-      || (isLtx ? '1920x1080' : '1080p')
-    const aspectRatio = scene.video_aspect_ratio || process.env.VEO_ASPECT_RATIO || '16:9'
-    const finalPrompt = scene.motion_prompt || scene.title || 'Video generation'
+    const { model, resolution, aspectRatio, finalPrompt } = buildVideoJobRequest(scene, body.model)
 
     const { data: job, error: jobError } = await supabase
       .from(T.generation_jobs)
@@ -61,8 +56,7 @@ export async function POST(
       return NextResponse.json({ error: 'Failed to create video job' }, { status: 500 })
     }
 
-    const shouldRunInline =
-      process.env.INLINE_GENERATION === 'true' || process.env.NODE_ENV === 'development'
+    const shouldRunInline = shouldRunVideoGenerationInline()
 
     if (shouldRunInline) {
       void processGenerationJob(job.id)
