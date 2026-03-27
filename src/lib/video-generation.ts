@@ -129,7 +129,7 @@ async function fetchFrameBytes(frameRef: FrameRef, label: 'start' | 'end') {
   }
 }
 
-async function pollVeoOperation(
+export async function pollVeoOperation(
   baseUrl: string,
   operationName: string,
   apiKey: string,
@@ -163,7 +163,7 @@ async function pollVeoOperation(
   return operation
 }
 
-function getVeoConfig(apiKeyOverride?: string | null): VeoConfig {
+export function getVeoConfig(apiKeyOverride?: string | null): VeoConfig {
   const apiKey = apiKeyOverride || process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY
   if (!apiKey) throw new Error('Google AI API key not configured')
 
@@ -183,7 +183,7 @@ function getVeoConfig(apiKeyOverride?: string | null): VeoConfig {
   }
 }
 
-async function buildVeoRequestParts(
+export async function buildVeoRequestParts(
   prompt: string,
   frameRefs: FrameRefs,
   settings: SceneVideoSettings,
@@ -272,7 +272,7 @@ function getVeoOperationErrorMessage(error: unknown) {
   return JSON.stringify(error)
 }
 
-function getVeoVideoUri(operation: Record<string, unknown>) {
+export function getVeoVideoUri(operation: Record<string, unknown>) {
   if (operation?.error) {
     throw new Error(`Veo operation error: ${getVeoOperationErrorMessage(operation.error)}`)
   }
@@ -335,7 +335,7 @@ async function resolveSceneGeminiApiKey(
   return resolveGoogleApiKey(project?.global_style_settings ?? null)
 }
 
-function buildSceneVideoSettings(scene: SceneRecord, model: string): SceneVideoSettings {
+export function buildSceneVideoSettings(scene: SceneRecord, model: string): SceneVideoSettings {
   return {
     resolution: scene.video_resolution,
     aspectRatio: scene.video_aspect_ratio,
@@ -530,7 +530,7 @@ async function generateWithVeo3(
   return downloadVeoVideo(getVeoVideoUri(operation), config.apiKey)
 }
 
-function getLtxConfig(settings: SceneVideoSettings): LtxConfig {
+export function getLtxConfig(settings: SceneVideoSettings): LtxConfig {
   const apiKey = process.env.LTX_API_KEY
   if (!apiKey) throw new Error('LTX_API_KEY not configured')
 
@@ -546,7 +546,7 @@ function getLtxConfig(settings: SceneVideoSettings): LtxConfig {
   }
 }
 
-function buildLtxPayload(
+export function buildLtxPayload(
   prompt: string,
   frameRefs: FrameRefs,
   settings: SceneVideoSettings,
