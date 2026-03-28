@@ -21,6 +21,7 @@ const MAX_API_RETRIES = 2
 const MAX_UPLOAD_RETRIES = 1
 const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const requestVersions = new Map<string, number>()
+const successfulRequests = new Set<string>()
 let aiRequestCount = 0
 
 const sanitizePathSegment = (value: string) => encodeURIComponent(value.trim())
@@ -63,6 +64,12 @@ const beginTrackedRequest = (key: string) => {
 
 const isLatestRequest = (key: string, version: number) =>
   (requestVersions.get(key) ?? 0) === version
+
+const markRequestSuccessful = (key: string) => {
+  successfulRequests.add(key)
+}
+
+const shouldPreserveStateOnFetchError = (key: string) => successfulRequests.has(key)
 
 const extractErrorMessage = (value: unknown): string | null => {
   if (typeof value !== 'string') return null
@@ -302,9 +309,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const data = await api('/api/projects')
       if (!isLatestRequest(requestKey, requestVersion)) return
+      markRequestSuccessful(requestKey)
       set({ projects: data })
     } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
+      if (isLatestRequest(requestKey, requestVersion) && !shouldPreserveStateOnFetchError(requestKey)) {
         set({ projects: [] })
       }
       logStoreError('Projects', error)
@@ -320,9 +328,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const data = await api(`/api/projects/${buildApiPath(id)}`)
       if (!isLatestRequest(requestKey, requestVersion)) return
+      markRequestSuccessful(requestKey)
       set({ currentProject: data })
     } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
+      if (isLatestRequest(requestKey, requestVersion) && !shouldPreserveStateOnFetchError(requestKey)) {
         set({ currentProject: null })
       }
       logStoreError('Project', error)
@@ -378,9 +387,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const qs = params.toString()
       const data = await api(`/api/products${qs ? `?${qs}` : ''}`)
       if (!isLatestRequest(requestKey, requestVersion)) return
+      markRequestSuccessful(requestKey)
       set({ products: data })
     } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
+      if (isLatestRequest(requestKey, requestVersion) && !shouldPreserveStateOnFetchError(requestKey)) {
         set({ products: [] })
       }
       logStoreError('Products', error)
@@ -396,9 +406,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const data = await api(`/api/products/${buildApiPath(id)}`)
       if (!isLatestRequest(requestKey, requestVersion)) return
+      markRequestSuccessful(requestKey)
       set({ currentProduct: data })
     } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
+      if (isLatestRequest(requestKey, requestVersion) && !shouldPreserveStateOnFetchError(requestKey)) {
         set({ currentProduct: null })
       }
       logStoreError('Product', error)
@@ -460,9 +471,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/reference-sets`)
       if (!isLatestRequest(requestKey, requestVersion)) return
+      markRequestSuccessful(requestKey)
       set({ referenceSets: data })
     } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
+      if (isLatestRequest(requestKey, requestVersion) && !shouldPreserveStateOnFetchError(requestKey)) {
         set({ referenceSets: [] })
       }
       logStoreError('ReferenceSets', error)
@@ -517,13 +529,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Reference Images
   referenceImages: {},
   fetchReferenceImages: async (productId, setId) => {
-    const requestKey = `referenceImages:${productId}:${setId}`
+    const requestKey = buildRequestKey('referenceImages', productId, setId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await api(
         `/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}/images`
       )
       if (!isLatestRequest(requestKey, requestVersion)) return
+      markRequestSuccessful(requestKey)
       set((s) => ({ referenceImages: { ...s.referenceImages, [setId]: data } }))
     } catch (error) {
       logStoreError('ReferenceImages', error)
@@ -689,9 +702,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/prompts`)
       if (!isLatestRequest(requestKey, requestVersion)) return
+      markRequestSuccessful(requestKey)
       set({ promptTemplates: data })
     } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
+      if (isLatestRequest(requestKey, requestVersion) && !shouldPreserveStateOnFetchError(requestKey)) {
         set({ promptTemplates: [] })
       }
       logStoreError('PromptTemplates', error)
@@ -742,9 +756,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/generate`)
       if (!isLatestRequest(requestKey, requestVersion)) return
+      markRequestSuccessful(requestKey)
       set({ generationJobs: data })
     } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
+      if (isLatestRequest(requestKey, requestVersion) && !shouldPreserveStateOnFetchError(requestKey)) {
         set({ generationJobs: [] })
       }
       logStoreError('GenerationJobs', error)
@@ -777,9 +792,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`)
       if (!isLatestRequest(requestKey, requestVersion)) return
+      markRequestSuccessful(requestKey)
       set({ currentJob: { ...data.job, images: data.images } })
     } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
+      if (isLatestRequest(requestKey, requestVersion) && !shouldPreserveStateOnFetchError(requestKey)) {
         set({ currentJob: null })
       }
       logStoreError('CurrentJob', error)
@@ -839,9 +855,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/gallery${qs ? `?${qs}` : ''}`)
       if (!isLatestRequest(requestKey, requestVersion)) return
+      markRequestSuccessful(requestKey)
       set({ galleryImages: data.images ?? data })
     } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
+      if (isLatestRequest(requestKey, requestVersion) && !shouldPreserveStateOnFetchError(requestKey)) {
         set({ galleryImages: [] })
       }
       logStoreError('Gallery', error)
@@ -917,9 +934,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/settings-templates`)
       if (!isLatestRequest(requestKey, requestVersion)) return
+      markRequestSuccessful(requestKey)
       set({ settingsTemplates: data })
     } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
+      if (isLatestRequest(requestKey, requestVersion) && !shouldPreserveStateOnFetchError(requestKey)) {
         set({ settingsTemplates: [] })
       }
       logStoreError('SettingsTemplates', error)
@@ -990,9 +1008,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const qs = buildProjectScopedQuery(projectId)
       const data = await api(`/api/error-logs?${qs}`)
       if (!isLatestRequest(requestKey, requestVersion)) return
+      markRequestSuccessful(requestKey)
       set({ errorLogs: data })
     } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
+      if (isLatestRequest(requestKey, requestVersion) && !shouldPreserveStateOnFetchError(requestKey)) {
         set({ errorLogs: [] })
       }
       logStoreError('ErrorLogs', error)
