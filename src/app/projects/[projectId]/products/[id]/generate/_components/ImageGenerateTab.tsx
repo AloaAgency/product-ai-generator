@@ -468,7 +468,7 @@ export function ImageGenerateTab({
           <button
             onClick={handleRefine}
             disabled={aiLoading || !prompt.trim()}
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2.5 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-[44px]"
           >
             {aiLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -480,7 +480,7 @@ export function ImageGenerateTab({
           <button
             onClick={handleSuggest}
             disabled={aiLoading}
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2.5 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-[44px]"
           >
             {aiLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -492,7 +492,7 @@ export function ImageGenerateTab({
           <button
             onClick={() => setShowSaveTemplate(true)}
             disabled={!prompt.trim() || savingTemplate}
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2.5 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-[44px]"
           >
             <Save className="h-4 w-4" />
             Save as Template
@@ -501,13 +501,13 @@ export function ImageGenerateTab({
 
         {/* Save as Template inline form */}
         {showSaveTemplate && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
               type="text"
               placeholder="Template name"
               value={templateName}
               onChange={(e) => setTemplateName(e.target.value)}
-              className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+              className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && templateName.trim()) {
@@ -528,32 +528,34 @@ export function ImageGenerateTab({
                 if (e.key === 'Escape') setShowSaveTemplate(false)
               }}
             />
-            <button
-              onClick={async () => {
-                if (!templateName.trim()) return
-                setSavingTemplate(true)
-                try {
-                  await createPromptTemplate(productId, {
-                    name: templateName.trim(),
-                    prompt_text: prompt,
-                  })
-                  setTemplateName('')
-                  setShowSaveTemplate(false)
-                } finally {
-                  setSavingTemplate(false)
-                }
-              }}
-              disabled={!templateName.trim() || savingTemplate}
-              className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
-            >
-              {savingTemplate ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
-            </button>
-            <button
-              onClick={() => setShowSaveTemplate(false)}
-              className="rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 transition-colors"
-            >
-              Cancel
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={async () => {
+                  if (!templateName.trim()) return
+                  setSavingTemplate(true)
+                  try {
+                    await createPromptTemplate(productId, {
+                      name: templateName.trim(),
+                      prompt_text: prompt,
+                    })
+                    setTemplateName('')
+                    setShowSaveTemplate(false)
+                  } finally {
+                    setSavingTemplate(false)
+                  }
+                }}
+                disabled={!templateName.trim() || savingTemplate}
+                className="flex-1 sm:flex-none inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors min-h-[44px]"
+              >
+                {savingTemplate ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+              </button>
+              <button
+                onClick={() => setShowSaveTemplate(false)}
+                className="flex-1 sm:flex-none rounded-lg border border-zinc-700 px-4 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 transition-colors min-h-[44px]"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         )}
 
