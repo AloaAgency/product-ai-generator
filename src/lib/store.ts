@@ -545,7 +545,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   deleteReferenceSet: async (productId, setId) => {
     await api(`/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}`, { method: 'DELETE' })
-    invalidateRequestKeys(buildRequestKey('referenceSets', productId))
+    invalidateRequestKeys(
+      buildRequestKey('referenceSets', productId),
+      buildRequestKey('referenceImages', productId, setId)
+    )
     set((s) => {
       const nextReferenceImages = { ...s.referenceImages }
       delete nextReferenceImages[setId]
@@ -573,6 +576,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   uploadReferenceImages: async (productId, setId, files) => {
+    const referenceImagesRequestKey = buildRequestKey('referenceImages', productId, setId)
     const uploadSpecs = files.map((file, index) => ({
       name: file.name,
       type: file.type,
@@ -703,6 +707,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         [setId]: [...(s.referenceImages[setId] || []), ...uploaded],
       },
     }))
+    invalidateRequestKeys(referenceImagesRequestKey)
     if (uploaded.length === 0 && errors.length > 0) {
       const firstError =
         errors[0] && typeof errors[0] === 'object' && 'error' in errors[0]
@@ -716,6 +721,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       `/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}/images/${buildApiPath(imgId)}`,
       { method: 'DELETE' }
     )
+    invalidateRequestKeys(buildRequestKey('referenceImages', productId, setId))
     set((s) => ({
       referenceImages: {
         ...s.referenceImages,
@@ -816,6 +822,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       body: JSON.stringify(body),
     })
     const job = result.job ?? result
+    invalidateRequestKeys(buildRequestKey('generationJobs', productId))
     set((s) => ({ generationJobs: [job, ...s.generationJobs] }))
     return job
   },
@@ -839,6 +846,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       method: 'POST',
     })
     const job = data.job ?? data
+    invalidateRequestKeys(
+      buildRequestKey('generationJobs', productId),
+      buildRequestKey('currentJob', productId, jobId)
+    )
     set((s) => ({
       generationJobs: [job, ...s.generationJobs.filter((j) => j.id !== job.id)],
       currentJob: s.currentJob?.id === job.id ? { ...job, images: s.currentJob?.images } : s.currentJob,
@@ -847,14 +858,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   clearGenerationQueue: async (productId) => {
     await api(`/api/products/${buildApiPath(productId)}/generate`, { method: 'DELETE' })
+    invalidateRequestKeys(buildRequestKey('generationJobs', productId))
     await get().fetchGenerationJobs(productId)
   },
   clearGenerationFailures: async (productId) => {
     await api(`/api/products/${buildApiPath(productId)}/generate?scope=failed`, { method: 'DELETE' })
+    invalidateRequestKeys(buildRequestKey('generationJobs', productId))
     await get().fetchGenerationJobs(productId)
   },
   deleteGenerationJob: async (productId, jobId) => {
     await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`, { method: 'DELETE' })
+    invalidateRequestKeys(
+      buildRequestKey('generationJobs', productId),
+      buildRequestKey('currentJob', productId, jobId)
+    )
     set((s) => ({
       generationJobs: s.generationJobs.filter((j) => j.id !== jobId),
       currentJob: s.currentJob?.id === jobId ? null : s.currentJob,
@@ -862,6 +879,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   clearGenerationLog: async (productId) => {
     await api(`/api/products/${buildApiPath(productId)}/generate?scope=log`, { method: 'DELETE' })
+    invalidateRequestKeys(buildRequestKey('generationJobs', productId))
     set((s) => ({
       generationJobs: s.generationJobs.filter((j) => j.status === 'pending' || j.status === 'running'),
       currentJob:
@@ -1061,6 +1079,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearErrorLogs: async (projectId) => {
     const qs = buildProjectScopedQuery(projectId)
     await api(`/api/error-logs?${qs}`, { method: 'DELETE' })
+    invalidateRequestKeys(buildRequestKey('errorLogs', projectId))
     set({ errorLogs: [] })
   },
 
