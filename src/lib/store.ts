@@ -62,6 +62,12 @@ const beginTrackedRequest = (key: string) => {
   return version
 }
 
+const invalidateTrackedRequest = (key: string) => {
+  const version = (requestVersions.get(key) ?? 0) + 1
+  requestVersions.set(key, version)
+  return version
+}
+
 const isLatestRequest = (key: string, version: number) =>
   (requestVersions.get(key) ?? 0) === version
 
@@ -70,6 +76,12 @@ const markRequestSuccessful = (key: string) => {
 }
 
 const shouldPreserveStateOnFetchError = (key: string) => successfulRequests.has(key)
+
+const invalidateRequestKeys = (...keys: Array<string | undefined | null>) => {
+  for (const key of keys) {
+    if (key) invalidateTrackedRequest(key)
+  }
+}
 
 const extractErrorMessage = (value: unknown): string | null => {
   if (typeof value !== 'string') return null
@@ -346,6 +358,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         description: data.description ? trimTextInput(data.description) : undefined,
       }),
     })
+    invalidateRequestKeys(buildRequestKey('projects'))
     set((s) => ({ projects: [project, ...s.projects] }))
     return project
   },
@@ -360,6 +373,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
       }),
     })
+    invalidateRequestKeys(buildRequestKey('projects'), buildRequestKey('currentProject', id))
     set((s) => ({
       currentProject: s.currentProject?.id === id ? project : s.currentProject,
       projects: s.projects.map((p) => (p.id === id ? project : p)),
@@ -367,6 +381,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   deleteProject: async (id) => {
     await api(`/api/projects/${buildApiPath(id)}`, { method: 'DELETE' })
+    invalidateRequestKeys(buildRequestKey('projects'), buildRequestKey('currentProject', id))
     set((s) => ({
       projects: s.projects.filter((p) => p.id !== id),
       currentProject: s.currentProject?.id === id ? null : s.currentProject,
@@ -426,10 +441,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         project_id: data.project_id.trim(),
       }),
     })
+    invalidateRequestKeys(buildRequestKey('products', data.project_id))
     set((s) => ({ products: [product, ...s.products] }))
     return product
   },
   updateProduct: async (id, data) => {
+    const existingProduct = get().products.find((product) => product.id === id)
     const product = await api(`/api/products/${buildApiPath(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -441,13 +458,23 @@ export const useAppStore = create<AppState>((set, get) => ({
         project_id: data.project_id?.trim(),
       }),
     })
+    invalidateRequestKeys(
+      buildRequestKey('currentProduct', id),
+      buildRequestKey('products', existingProduct?.project_id),
+      buildRequestKey('products', data.project_id ?? existingProduct?.project_id)
+    )
     set((s) => ({
       currentProduct: s.currentProduct?.id === id ? product : s.currentProduct,
       products: s.products.map((p) => (p.id === id ? product : p)),
     }))
   },
   deleteProduct: async (id) => {
+    const existingProduct = get().products.find((product) => product.id === id)
     await api(`/api/products/${buildApiPath(id)}`, { method: 'DELETE' })
+    invalidateRequestKeys(
+      buildRequestKey('currentProduct', id),
+      buildRequestKey('products', existingProduct?.project_id)
+    )
     set((s) => ({
       products: s.products.filter((p) => p.id !== id),
       currentProduct: s.currentProduct?.id === id ? null : s.currentProduct,
@@ -494,6 +521,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         description: data.description ? trimTextInput(data.description) : undefined,
       }),
     })
+    invalidateRequestKeys(buildRequestKey('referenceSets', productId))
     set((s) => ({ referenceSets: [...s.referenceSets, refSet] }))
     return refSet
   },
@@ -508,6 +536,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
       }),
     })
+    invalidateRequestKeys(buildRequestKey('referenceSets', productId))
     set((s) => ({
       referenceSets: s.referenceSets.map((r) =>
         r.id === setId ? refSet : data.is_active ? { ...r, is_active: false } : r
@@ -516,6 +545,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   deleteReferenceSet: async (productId, setId) => {
     await api(`/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}`, { method: 'DELETE' })
+    invalidateRequestKeys(buildRequestKey('referenceSets', productId))
     set((s) => {
       const nextReferenceImages = { ...s.referenceImages }
       delete nextReferenceImages[setId]
@@ -722,6 +752,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         tags: data.tags ? sanitizeStringArray(data.tags) : undefined,
       }),
     })
+    invalidateRequestKeys(buildRequestKey('promptTemplates', productId))
     set((s) => ({ promptTemplates: [...s.promptTemplates, tmpl] }))
     return tmpl
   },
@@ -737,10 +768,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         tags: data.tags ? sanitizeStringArray(data.tags) : data.tags,
       }),
     })
+    invalidateRequestKeys(buildRequestKey('promptTemplates', productId))
     set((s) => ({ promptTemplates: s.promptTemplates.map((p) => (p.id === promptId ? tmpl : p)) }))
   },
   deletePromptTemplate: async (productId, promptId) => {
     await api(`/api/products/${buildApiPath(productId)}/prompts/${buildApiPath(promptId)}`, { method: 'DELETE' })
+    invalidateRequestKeys(buildRequestKey('promptTemplates', productId))
     set((s) => ({ promptTemplates: s.promptTemplates.filter((p) => p.id !== promptId) }))
   },
 
@@ -956,6 +989,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         name: normalizeLabelInput(data.name),
       }),
     })
+    invalidateRequestKeys(buildRequestKey('settingsTemplates', productId))
     set((s) => ({ settingsTemplates: [...s.settingsTemplates, tmpl] }))
     return tmpl
   },
@@ -969,6 +1003,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
     })
+    invalidateRequestKeys(buildRequestKey('settingsTemplates', productId))
     set((s) => ({
       settingsTemplates: s.settingsTemplates.map((t) =>
         t.id === templateId ? tmpl : data.is_active ? { ...t, is_active: false } : t
@@ -980,6 +1015,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       `/api/products/${buildApiPath(productId)}/settings-templates/${buildApiPath(templateId)}`,
       { method: 'DELETE' }
     )
+    invalidateRequestKeys(buildRequestKey('settingsTemplates', productId))
     set((s) => ({ settingsTemplates: s.settingsTemplates.filter((t) => t.id !== templateId) }))
   },
   activateSettingsTemplate: async (productId, templateId) => {
@@ -988,6 +1024,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_active: true }),
     })
+    invalidateRequestKeys(buildRequestKey('settingsTemplates', productId))
     set((s) => ({
       settingsTemplates: s.settingsTemplates.map((t) =>
         t.id === templateId ? tmpl : { ...t, is_active: false }
