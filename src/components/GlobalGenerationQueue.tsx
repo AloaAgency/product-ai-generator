@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { useAppStore } from '@/lib/store'
 import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
 import {
@@ -16,6 +16,7 @@ export default function GlobalGenerationQueue({
 }: {
   productId: string
 }) {
+  const detailsId = useId()
   const generationJobs = useAppStore((state) => state.generationJobs)
   const loadingJobs = useAppStore((state) => state.loadingJobs)
   const fetchGenerationJobs = useAppStore((state) => state.fetchGenerationJobs)
@@ -116,6 +117,7 @@ export default function GlobalGenerationQueue({
           onClick={handleToggleExpanded}
           className="flex min-h-11 w-full min-w-0 flex-1 items-center gap-3 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
           aria-expanded={expanded}
+          aria-controls={detailsId}
         >
           <div className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-500/10 text-blue-400">
             {loadingJobs ? (
@@ -182,7 +184,7 @@ export default function GlobalGenerationQueue({
         </div>
       </div>
 
-      <div className="px-3 pb-4 sm:px-4">
+      <div id={detailsId} className="px-3 pb-4 sm:px-4">
         <div className="flex flex-col gap-1 text-xs text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
           <span>{overallProgress}% overall</span>
           <span>Updates every {POLL_MS / 1000}s</span>
