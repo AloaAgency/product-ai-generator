@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import {
   buildBugReportSubmission,
@@ -26,6 +26,8 @@ export function BugReportWidget() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
   const imagesRef = useRef<SelectedBugReportImage[]>([])
+  const dialogTitleId = useId()
+  const dialogDescriptionId = useId()
 
   // Auto-dismiss toast
   useEffect(() => {
@@ -34,11 +36,14 @@ export function BugReportWidget() {
     return () => clearTimeout(t)
   }, [toast])
 
+  const handleClose = () => {
+    if (isSubmitting) return
+    setIsOpen(false)
+  }
+
   useModalShortcuts({
     isOpen,
-    onClose: () => {
-      if (!isSubmitting) setIsOpen(false)
-    },
+    onClose: handleClose,
     onSubmit: isSubmitting ? null : () => formRef.current?.requestSubmit(),
   })
 
@@ -149,18 +154,24 @@ export function BugReportWidget() {
     <>
       {/* Floating button */}
       <button
+        type="button"
         onClick={() => setIsOpen(true)}
         className="fixed bottom-6 right-6 z-40 p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg hover:scale-110 transition-all"
         title="Report Bug / Request Feature"
+        aria-label="Report a bug or request a feature"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg>
       </button>
 
       {/* Toast notification */}
       {toast && (
-        <div className={`fixed bottom-20 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-white ${
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed bottom-20 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-white ${
           toast.type === 'success' ? 'bg-green-600' : 'bg-red-600'
-        }`}>
+        }`}
+        >
           {toast.message}
         </div>
       )}
@@ -169,22 +180,23 @@ export function BugReportWidget() {
       {isOpen && (
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center"
-          onClick={() => !isSubmitting && setIsOpen(false)}
           role="dialog"
           aria-modal="true"
-          aria-label="Submit feedback"
+          aria-labelledby={dialogTitleId}
+          aria-describedby={dialogDescriptionId}
         >
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" />
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={handleClose} />
 
           <div
             className="relative z-10 w-full max-w-lg mx-4 bg-white dark:bg-gray-800 rounded-lg shadow-xl max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between p-5 border-b border-gray-200 dark:border-gray-700">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Submit Feedback</h2>
+              <h2 id={dialogTitleId} className="text-lg font-semibold text-gray-900 dark:text-gray-100">Submit Feedback</h2>
               <button
                 type="button"
-                onClick={() => setIsOpen(false)}
+                onClick={handleClose}
+                disabled={isSubmitting}
                 className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                 aria-label="Close feedback form"
               >
@@ -193,6 +205,10 @@ export function BugReportWidget() {
             </div>
 
             <form ref={formRef} onSubmit={handleSubmit} className="p-5">
+              <p id={dialogDescriptionId} className="mb-4 text-sm text-gray-500 dark:text-gray-400">
+                Submit a bug report or feature request with optional screenshots.
+              </p>
+
               {/* Type Selection */}
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Type</label>
@@ -283,7 +299,12 @@ export function BugReportWidget() {
                             maxLength={MAX_BUG_REPORT_CAPTION_LENGTH}
                           />
                         </div>
-                        <button type="button" onClick={() => removeImage(index)} className="p-1 text-gray-400 hover:text-red-500 transition-colors">
+                        <button
+                          type="button"
+                          onClick={() => removeImage(index)}
+                          className="p-1 text-gray-400 hover:text-red-500 transition-colors"
+                          aria-label={`Remove screenshot ${index + 1}`}
+                        >
                           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
                         </button>
                       </div>
@@ -307,7 +328,7 @@ export function BugReportWidget() {
               <div className="flex gap-3">
                 <button
                   type="button"
-                  onClick={() => setIsOpen(false)}
+                  onClick={handleClose}
                   disabled={isSubmitting}
                   className="flex-1 px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                 >
