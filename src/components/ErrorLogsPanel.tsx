@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useAppStore } from '@/lib/store'
 import { AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Trash2 } from 'lucide-react'
 import { getSafeErrorContext, getSafeErrorMessage } from './errorDisplay.helpers'
@@ -8,6 +8,7 @@ import { getSafeErrorContext, getSafeErrorMessage } from './errorDisplay.helpers
 const PAGE_SIZE = 20
 
 export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
+  const panelId = useId()
   const errorLogs = useAppStore((state) => state.errorLogs)
   const loadingErrorLogs = useAppStore((state) => state.loadingErrorLogs)
   const fetchErrorLogs = useAppStore((state) => state.fetchErrorLogs)
@@ -74,6 +75,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
         onClick={handleToggleExpanded}
         className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-400 hover:bg-red-950/30 transition-colors rounded-lg"
         aria-expanded={expanded}
+        aria-controls={panelId}
       >
         <AlertTriangle className="h-4 w-4 flex-shrink-0" />
         <span className="flex-1">
@@ -88,7 +90,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
       </button>
 
       {expanded && (
-        <div className="border-t border-red-900/40 px-4 py-3">
+        <div id={panelId} className="border-t border-red-900/40 px-4 py-3">
           <div className="mb-3 flex items-center gap-2">
             <button
               type="button"
@@ -116,9 +118,13 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
                 key={log.id}
                 className="rounded-md border border-red-900/30 bg-red-950/30 p-2.5 text-xs"
               >
-                <div
-                  className="flex items-start gap-2 cursor-pointer"
+                <button
+                  type="button"
+                  className="flex w-full items-start gap-2 text-left"
                   onClick={() => toggleEntry(log.id)}
+                  aria-expanded={expandedEntries.has(log.id)}
+                  aria-controls={log.safeContext ? `${panelId}-${log.id}` : undefined}
+                  disabled={!log.safeContext}
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 text-zinc-500">
@@ -140,9 +146,12 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
                       }`}
                     />
                   )}
-                </div>
+                </button>
                 {expandedEntries.has(log.id) && log.safeContext && (
-                  <pre className="mt-2 max-h-40 overflow-auto rounded bg-zinc-900/80 p-2 text-zinc-400">
+                  <pre
+                    id={`${panelId}-${log.id}`}
+                    className="mt-2 max-h-40 overflow-auto rounded bg-zinc-900/80 p-2 text-zinc-400"
+                  >
                     {log.safeContext}
                   </pre>
                 )}
