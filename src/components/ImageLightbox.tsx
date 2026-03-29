@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useEffect, useCallback, useState, useRef, useMemo } from 'react'
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import {
   X,
@@ -148,6 +148,7 @@ export function ImageLightbox({
   projectId,
   onRequestSignedUrls,
 }: ImageLightboxProps) {
+  const dialogTitleId = useId()
   const [isUpdating, setIsUpdating] = useState(false)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -347,20 +348,20 @@ export function ImageLightbox({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-2 sm:p-4"
-      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="Generated image lightbox"
+      aria-labelledby={dialogTitleId}
     >
+      <div className="fixed inset-0 bg-black/90" onClick={onClose} />
       <div
-        className="relative flex flex-col w-full max-w-6xl h-full max-h-[90vh]"
+        className="relative z-10 flex h-full max-h-[90vh] w-full max-w-6xl flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-3 py-2 sm:px-4 sm:py-3 bg-gray-900/80 rounded-t-xl">
           <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-            <span className="text-white font-medium text-sm sm:text-base whitespace-nowrap">
+            <span id={dialogTitleId} className="text-white font-medium text-sm sm:text-base whitespace-nowrap">
               Variation {currentImage.variation_number ?? currentIndex + 1}
             </span>
             {promptName && (

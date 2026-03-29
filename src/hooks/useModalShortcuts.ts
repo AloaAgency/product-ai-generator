@@ -17,6 +17,8 @@ export function useModalShortcuts({
   useEffect(() => {
     if (!isOpen) return
     const handler = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return
+
       if (e.key === 'Escape') {
         e.preventDefault()
         onClose()
