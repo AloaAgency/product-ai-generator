@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE } from '@/lib/auth-constants'
 
-const COOKIE_NAME = 'site-auth'
-
-// Pre-compute the static portion of the login page HTML once at module load
-// rather than re-building the full string on every unauthenticated request.
+// Static parts of the login page HTML, split so the form (which varies per request)
+// can be inserted between them without re-declaring the surrounding boilerplate.
 const LOGIN_PAGE_PREFIX = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -57,14 +56,19 @@ function loginPage(showError: boolean, redirectPath: string) {
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // Allow the login API route through
-  if (pathname === '/api/login' || pathname === '/api/worker/generate') {
+  // Login endpoint must be public so unauthenticated users can submit credentials.
+  if (pathname === '/api/login') {
+    return NextResponse.next()
+  }
+
+  // Worker endpoint uses its own CRON_SECRET auth — site-password auth doesn't apply.
+  if (pathname === '/api/worker/generate') {
     return NextResponse.next()
   }
 
   // Check for auth cookie
-  const auth = request.cookies.get(COOKIE_NAME)
-  if (auth?.value === 'authenticated') {
+  const auth = request.cookies.get(AUTH_COOKIE_NAME)
+  if (auth?.value === AUTH_COOKIE_VALUE) {
     return NextResponse.next()
   }
 
