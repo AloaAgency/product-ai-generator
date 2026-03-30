@@ -361,7 +361,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
         .select(REFERENCE_IMAGE_SELECT)
         .eq('reference_set_id', job.texture_set_id)
         .order('display_order', { ascending: true })
-      : Promise.resolve({ data: null })
+      : Promise.resolve({ data: null, error: null })
 
     const sourceImagePromise = job.source_image_id
       ? supabase
@@ -369,13 +369,13 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
         .select('storage_path, mime_type')
         .eq('id', job.source_image_id)
         .maybeSingle()
-      : Promise.resolve({ data: null })
+      : Promise.resolve({ data: null, error: null })
 
     const [
-      { data: product },
-      { data: refImages },
-      { data: texImages },
-      { data: sourceImg },
+      { data: product, error: productError },
+      { data: refImages, error: refImagesError },
+      { data: texImages, error: textureImagesError },
+      { data: sourceImg, error: sourceImageError },
     ] = await Promise.all([
       productPromise,
       productReferenceImagesPromise,
@@ -383,16 +383,35 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
       sourceImagePromise,
     ])
 
-  let geminiApiKey = resolveGoogleApiKey(product?.global_style_settings as GlobalStyleSettings | null)
+    if (productError || !product) {
+      throw new Error(productError?.message || 'Product not found for generation job')
+    }
 
-  if (!geminiApiKey && product?.project_id) {
-    const { data: project } = await supabase
-      .from(T.projects)
-      .select('global_style_settings')
-      .eq('id', product.project_id)
-      .single()
-    geminiApiKey = resolveGoogleApiKey(project?.global_style_settings as GlobalStyleSettings | null)
-  }
+    if (refImagesError) {
+      throw new Error(`Failed to load reference images: ${refImagesError.message}`)
+    }
+
+    if (textureImagesError) {
+      throw new Error(`Failed to load texture reference images: ${textureImagesError.message}`)
+    }
+
+    if (sourceImageError) {
+      throw new Error(`Failed to load source image: ${sourceImageError.message}`)
+    }
+
+    let geminiApiKey = resolveGoogleApiKey(product.global_style_settings as GlobalStyleSettings | null)
+
+    if (!geminiApiKey && product.project_id) {
+      const { data: project, error: projectError } = await supabase
+        .from(T.projects)
+        .select('global_style_settings')
+        .eq('id', product.project_id)
+        .single()
+      if (projectError) {
+        throw new Error(`Failed to load project settings: ${projectError.message}`)
+      }
+      geminiApiKey = resolveGoogleApiKey(project?.global_style_settings as GlobalStyleSettings | null)
+    }
 
   const referenceImages = (refImages || []) as unknown as WorkerReferenceImage[]
   const productImageLimit = job.product_image_count ?? referenceImages.length
@@ -409,35 +428,41 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
   const allReferenceImages = [...limitedProductImages, ...textureImages]
   const refImagesBase64: { mimeType: string; base64: string }[] = []
 
-  if (sourceImg) {
-    const { data: sourceFileData } = await supabase.storage
-      .from('generated-images')
-      .download(sourceImg.storage_path)
-    if (sourceFileData) {
-      const arrayBuffer = await sourceFileData.arrayBuffer()
-      const base64 = Buffer.from(arrayBuffer).toString('base64')
-      refImagesBase64.push({ mimeType: sourceImg.mime_type, base64 })
-    }
-  }
-
-  const downloadedReferenceImages = await Promise.all(
-    allReferenceImages.map(async (refImg) => {
-      const { data: fileData } = await supabase.storage
-        .from('reference-images')
-        .download(refImg.storage_path)
-      if (!fileData) return null
-      const arrayBuffer = await fileData.arrayBuffer()
-      return {
-        mimeType: refImg.mime_type,
-        base64: Buffer.from(arrayBuffer).toString('base64'),
+    if (sourceImg) {
+      const { data: sourceFileData, error: sourceDownloadError } = await supabase.storage
+        .from('generated-images')
+        .download(sourceImg.storage_path)
+      if (sourceDownloadError) {
+        throw new Error(`Failed to download source image: ${sourceDownloadError.message}`)
       }
-    })
-  )
-  refImagesBase64.push(
-    ...downloadedReferenceImages.filter(
-      (image): image is { mimeType: string; base64: string } => image !== null
+      if (sourceFileData) {
+        const arrayBuffer = await sourceFileData.arrayBuffer()
+        const base64 = Buffer.from(arrayBuffer).toString('base64')
+        refImagesBase64.push({ mimeType: sourceImg.mime_type, base64 })
+      }
+    }
+
+    const downloadedReferenceImages = await Promise.all(
+      allReferenceImages.map(async (refImg) => {
+        const { data: fileData, error: fileError } = await supabase.storage
+          .from('reference-images')
+          .download(refImg.storage_path)
+        if (fileError) {
+          throw new Error(`Failed to download reference image: ${fileError.message}`)
+        }
+        if (!fileData) return null
+        const arrayBuffer = await fileData.arrayBuffer()
+        return {
+          mimeType: refImg.mime_type,
+          base64: Buffer.from(arrayBuffer).toString('base64'),
+        }
+      })
     )
-  )
+    refImagesBase64.push(
+      ...downloadedReferenceImages.filter(
+        (image): image is { mimeType: string; base64: string } => image !== null
+      )
+    )
 
   const promptSlug = slugify(job.final_prompt, 30)
   const startingCompleted = job.completed_count || 0
@@ -490,7 +515,11 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
       const thumbPath = buildThumbnailPath(storagePath, thumb.extension)
       const previewPath = buildPreviewPath(storagePath, preview.extension)
 
-      await Promise.all([
+      const [
+        { error: imageUploadError },
+        { error: thumbUploadError },
+        { error: previewUploadError },
+      ] = await Promise.all([
         supabase.storage
           .from('generated-images')
           .upload(storagePath, imageBuffer, { contentType: result.mimeType }),
@@ -502,7 +531,17 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
           .upload(previewPath, preview.buffer, { contentType: preview.mimeType }),
       ])
 
-      await supabase.from(T.generated_images).insert({
+      if (imageUploadError) {
+        throw new Error(`Failed to upload generated image: ${imageUploadError.message}`)
+      }
+      if (thumbUploadError) {
+        throw new Error(`Failed to upload image thumbnail: ${thumbUploadError.message}`)
+      }
+      if (previewUploadError) {
+        throw new Error(`Failed to upload image preview: ${previewUploadError.message}`)
+      }
+
+      const { error: insertError } = await supabase.from(T.generated_images).insert({
         job_id: job.id,
         variation_number: variationNumber,
         storage_path: storagePath,
@@ -512,6 +551,10 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
         file_size: imageBuffer.length,
         approval_status: 'pending',
       })
+
+      if (insertError) {
+        throw new Error(`Failed to record generated image: ${insertError.message}`)
+      }
     } finally {
       clearTimeout(timeout)
     }
