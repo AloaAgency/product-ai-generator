@@ -307,4 +307,106 @@ describe('processGenerationJob', () => {
       error_message: 'Failed to upload generated image: bucket down',
     })
   })
+
+  it('does not silently ignore progress persistence failures', async () => {
+    const jobId = '33333333-3333-4333-8333-333333333333'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: {
+            id: jobId,
+            product_id: 'product-1',
+            prompt_template_id: null,
+            reference_set_id: 'refs-1',
+            texture_set_id: null,
+            product_image_count: null,
+            texture_image_count: null,
+            final_prompt: 'Prompt',
+            variation_count: 1,
+            resolution: '2K',
+            aspect_ratio: '16:9',
+            status: 'running',
+            completed_count: 0,
+            failed_count: 0,
+            error_message: null,
+            generation_model: null,
+            job_type: 'image',
+            scene_id: null,
+            source_image_id: null,
+          },
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: null, global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running' },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          error: { message: 'write conflict' },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        {
+          bucket: 'generated-images',
+          type: 'upload',
+          data: {},
+        },
+        {
+          bucket: 'generated-images',
+          type: 'upload',
+          data: {},
+        },
+        {
+          bucket: 'generated-images',
+          type: 'upload',
+          data: {},
+        },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockResolvedValue({
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-2',
+      raw: {},
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).rejects.toThrow('Failed to persist generation job progress: write conflict')
+    expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: 'Failed to persist generation job progress: write conflict',
+    })
+  })
 })

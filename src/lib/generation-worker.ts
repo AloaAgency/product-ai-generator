@@ -167,26 +167,34 @@ async function processVideoJob(
   }
 
   if (job.status === 'pending') {
-    await supabase
-      .from(T.generation_jobs)
-      .update({ status: 'running', started_at: new Date().toISOString() })
-      .eq('id', job.id)
-      .in('status', ['pending', 'running'])
+    await updateGenerationJob(
+      supabase,
+      job.id,
+      { status: 'running', started_at: new Date().toISOString() },
+      {
+        expectedStatuses: ['pending', 'running'],
+        context: 'Failed to start video generation job',
+      }
+    )
   }
 
   if (!job.scene_id) {
     const message = 'Video job missing scene_id'
     const nextFailed = failed + 1
-    await supabase
-      .from(T.generation_jobs)
-      .update({
+    await updateGenerationJob(
+      supabase,
+      job.id,
+      {
         status: 'failed',
         failed_count: nextFailed,
         error_message: message,
         completed_at: new Date().toISOString(),
-      })
-      .eq('id', job.id)
-      .in('status', ['pending', 'running'])
+      },
+      {
+        expectedStatuses: ['pending', 'running'],
+        context: 'Failed to persist missing scene_id failure',
+      }
+    )
     return {
       jobId: job.id,
       processed: 1,
@@ -199,15 +207,19 @@ async function processVideoJob(
   try {
     await generateSceneVideo(job.product_id, job.scene_id, job.generation_model || undefined, job.id)
     const nextCompleted = completed + 1
-    await supabase
-      .from(T.generation_jobs)
-      .update({
+    await updateGenerationJob(
+      supabase,
+      job.id,
+      {
         completed_count: nextCompleted,
         status: 'completed',
         completed_at: new Date().toISOString(),
-      })
-      .eq('id', job.id)
-      .in('status', ['pending', 'running'])
+      },
+      {
+        expectedStatuses: ['pending', 'running'],
+        context: 'Failed to persist completed video generation job',
+      }
+    )
     return {
       jobId: job.id,
       processed: 1,
@@ -218,16 +230,20 @@ async function processVideoJob(
   } catch (err) {
     const message = sanitizeWorkerErrorMessage(err, 'Video generation failed')
     const nextFailed = failed + 1
-    await supabase
-      .from(T.generation_jobs)
-      .update({
+    await updateGenerationJob(
+      supabase,
+      job.id,
+      {
         failed_count: nextFailed,
         status: 'failed',
         error_message: message,
         completed_at: new Date().toISOString(),
-      })
-      .eq('id', job.id)
-      .in('status', ['pending', 'running'])
+      },
+      {
+        expectedStatuses: ['pending', 'running'],
+        context: 'Failed to persist video generation failure',
+      }
+    )
     return {
       jobId: job.id,
       processed: 1,
@@ -586,11 +602,14 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     if (Date.now() - startedAt > timeBudgetMs) return true
     if (Date.now() - lastStatusCheck < 3000) return cancelled
     lastStatusCheck = Date.now()
-    const { data } = await supabase
+    const { data, error: statusError } = await supabase
       .from(T.generation_jobs)
       .select('status')
       .eq('id', job.id)
       .single()
+    if (statusError) {
+      throw new Error(`Failed to refresh generation job status: ${statusError.message}`)
+    }
     if (data?.status === 'cancelled') {
       cancelled = true
       return true
@@ -612,16 +631,21 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
         lastError = sanitizeWorkerErrorMessage(err, 'Variation failed')
       } finally {
         processed += 1
-        // Incremental progress update so polling clients see real progress
-        await supabase
-          .from(T.generation_jobs)
-          .update({
+        // Incremental progress update so polling clients see real progress.
+        await updateGenerationJob(
+          supabase,
+          job.id,
+          {
             completed_count: startingCompleted + successCount,
             failed_count: startingFailed + failCount,
             ...(lastError ? { error_message: lastError } : {}),
-          })
-          .eq('id', job.id)
-          .in('status', ['pending', 'running'])
+          },
+          {
+            expectedStatuses: ['pending', 'running'],
+            allowNoop: true,
+            context: 'Failed to persist generation job progress',
+          }
+        )
       }
     }
   }
@@ -660,11 +684,16 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     if (allFailed) updates.error_message = failureMessage
   }
 
-  await supabase
-    .from(T.generation_jobs)
-    .update(updates)
-    .eq('id', job.id)
-    .in('status', ['pending', 'running'])
+    await updateGenerationJob(
+      supabase,
+      job.id,
+      updates,
+      {
+        expectedStatuses: ['pending', 'running'],
+        allowNoop: cancelled,
+        context: 'Failed to persist final generation job state',
+      }
+    )
 
     return {
       jobId,
