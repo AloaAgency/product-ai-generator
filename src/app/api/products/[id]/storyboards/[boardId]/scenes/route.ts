@@ -28,7 +28,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string; boardId: string }> }
 ) {
   try {
-    const { boardId } = await params
+    const { id: productId, boardId } = await params
     const supabase = createServiceClient()
     const body = await request.json()
 
@@ -45,6 +45,7 @@ export async function POST(
     const { data, error } = await supabase
       .from(T.storyboard_scenes)
       .insert({
+        product_id: productId,
         storyboard_id: boardId,
         scene_order: nextOrder,
         title: body.title || null,
