@@ -105,7 +105,8 @@ function createMockSupabase(
         updates?: Record<string, unknown>
       } = { mode: null }
       const builder = {
-        select(_columns?: string) {
+        select(columns?: string) {
+          void columns
           if (state.mode !== 'update') {
             state.mode = 'select'
           }
@@ -118,6 +119,7 @@ function createMockSupabase(
           return builder
         },
         insert(values: Record<string, unknown>) {
+          void values
           state.mode = 'insert'
           return Promise.resolve(nextQuery(table, 'insert'))
         },
