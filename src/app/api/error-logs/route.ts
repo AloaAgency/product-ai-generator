@@ -35,7 +35,8 @@ export async function GET(req: NextRequest) {
 
     if (error) throw error
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    console.error('[ErrorLogs GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -62,7 +63,8 @@ export async function DELETE(req: NextRequest) {
 
     if (error) throw error
     return NextResponse.json({ success: true })
-  } catch {
+  } catch (err) {
+    console.error('[ErrorLogs DELETE] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
