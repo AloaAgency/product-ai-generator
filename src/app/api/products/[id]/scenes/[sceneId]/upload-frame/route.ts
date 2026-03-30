@@ -26,6 +26,17 @@ export async function POST(request: NextRequest, { params }: Params) {
       return NextResponse.json({ error: 'file_name and mime_type are required' }, { status: 400 })
     }
 
+    // Verify the scene exists before issuing a signed URL or creating records
+    const { data: sceneExists, error: sceneCheckError } = await supabase
+      .from(T.storyboard_scenes)
+      .select('id')
+      .eq('id', sceneId)
+      .single()
+
+    if (sceneCheckError || !sceneExists) {
+      return NextResponse.json({ error: 'Scene not found' }, { status: 404 })
+    }
+
     const extension = fileName.includes('.')
       ? `.${fileName.split('.').pop()?.toLowerCase()}`
       : ''
