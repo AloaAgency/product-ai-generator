@@ -329,8 +329,13 @@ export async function DELETE(
 ) {
   const { id: productId } = await params
   try {
-    const supabase = createServiceClient()
     const scope = new URL(request.url).searchParams.get('scope') || 'active'
+
+    if (!['active', 'failed', 'all', 'log'].includes(scope)) {
+      return NextResponse.json({ error: 'Invalid scope. Use "active", "failed", "all", or "log".' }, { status: 400 })
+    }
+
+    const supabase = createServiceClient()
     const now = new Date().toISOString()
 
     let cancelled = 0
@@ -381,10 +386,6 @@ export async function DELETE(
         return NextResponse.json({ error: error.message }, { status: 500 })
       }
       clearedLog = data?.length || 0
-    }
-
-    if (!['active', 'failed', 'all', 'log'].includes(scope)) {
-      return NextResponse.json({ error: 'Invalid scope. Use "active", "failed", "all", or "log".' }, { status: 400 })
     }
 
     return NextResponse.json({ cancelled, cleared_failed: clearedFailed, cleared_log: clearedLog })
