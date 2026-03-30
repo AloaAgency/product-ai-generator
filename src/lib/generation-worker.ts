@@ -58,6 +58,7 @@ type GenerationJobRecord = {
 }
 
 type WorkerReferenceImage = Pick<ReferenceImage, 'id' | 'reference_set_id' | 'storage_path' | 'mime_type' | 'display_order'>
+type GenerationJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 
 const GENERATION_JOB_SELECT = [
   'id',
@@ -90,6 +91,63 @@ const REFERENCE_IMAGE_SELECT = [
 ].join(', ')
 
 const normalizeJobType = (job: GenerationJobRecord) => (job.job_type === 'video' ? 'video' : 'image')
+
+async function updateGenerationJob(
+  supabase: ReturnType<typeof createServiceClient>,
+  jobId: string,
+  updates: Record<string, unknown>,
+  options: {
+    expectedStatuses?: GenerationJobStatus[]
+    allowNoop?: boolean
+    context: string
+  }
+) {
+  let query = supabase
+    .from(T.generation_jobs)
+    .update(updates)
+    .eq('id', jobId)
+
+  if (options.expectedStatuses?.length) {
+    query = options.expectedStatuses.length === 1
+      ? query.eq('status', options.expectedStatuses[0])
+      : query.in('status', options.expectedStatuses)
+  }
+
+  const { data, error } = await query
+    .select('id')
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`${options.context}: ${error.message}`)
+  }
+
+  if (!data && !options.allowNoop) {
+    throw new Error(`${options.context}: job state changed before update could be applied`)
+  }
+}
+
+async function markClaimedJobFailed(
+  supabase: ReturnType<typeof createServiceClient>,
+  job: GenerationJobRecord,
+  message: string
+) {
+  const nextFailed = (job.failed_count || 0) + 1
+  await updateGenerationJob(
+    supabase,
+    job.id,
+    {
+      failed_count: nextFailed,
+      status: 'failed',
+      error_message: message,
+      completed_at: new Date().toISOString(),
+    },
+    {
+      expectedStatuses: ['running'],
+      allowNoop: true,
+      context: 'Failed to mark generation job as failed',
+    }
+  )
+}
 
 async function processVideoJob(
   job: GenerationJobRecord,
@@ -275,54 +333,55 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
 
   job = claimedJob as unknown as GenerationJobRecord
 
-  const jobType = normalizeJobType(job)
-  if (jobType === 'video') {
-    return processVideoJob(job, supabase)
-  }
+  try {
+    const jobType = normalizeJobType(job)
+    if (jobType === 'video') {
+      return processVideoJob(job, supabase)
+    }
 
-  if (!job.reference_set_id) {
-    throw new Error('Image generation job missing reference_set_id')
-  }
+    if (!job.reference_set_id) {
+      throw new Error('Image generation job missing reference_set_id')
+    }
 
-  const productPromise = supabase
-    .from(T.products)
-    .select('project_id, global_style_settings')
-    .eq('id', job.product_id)
-    .single()
+    const productPromise = supabase
+      .from(T.products)
+      .select('project_id, global_style_settings')
+      .eq('id', job.product_id)
+      .single()
 
-  const productReferenceImagesPromise = supabase
-    .from(T.reference_images)
-    .select(REFERENCE_IMAGE_SELECT)
-    .eq('reference_set_id', job.reference_set_id)
-    .order('display_order', { ascending: true })
-
-  const textureReferenceImagesPromise = job.texture_set_id
-    ? supabase
+    const productReferenceImagesPromise = supabase
       .from(T.reference_images)
       .select(REFERENCE_IMAGE_SELECT)
-      .eq('reference_set_id', job.texture_set_id)
+      .eq('reference_set_id', job.reference_set_id)
       .order('display_order', { ascending: true })
-    : Promise.resolve({ data: null })
 
-  const sourceImagePromise = job.source_image_id
-    ? supabase
-      .from(T.generated_images)
-      .select('storage_path, mime_type')
-      .eq('id', job.source_image_id)
-      .maybeSingle()
-    : Promise.resolve({ data: null })
+    const textureReferenceImagesPromise = job.texture_set_id
+      ? supabase
+        .from(T.reference_images)
+        .select(REFERENCE_IMAGE_SELECT)
+        .eq('reference_set_id', job.texture_set_id)
+        .order('display_order', { ascending: true })
+      : Promise.resolve({ data: null })
 
-  const [
-    { data: product },
-    { data: refImages },
-    { data: texImages },
-    { data: sourceImg },
-  ] = await Promise.all([
-    productPromise,
-    productReferenceImagesPromise,
-    textureReferenceImagesPromise,
-    sourceImagePromise,
-  ])
+    const sourceImagePromise = job.source_image_id
+      ? supabase
+        .from(T.generated_images)
+        .select('storage_path, mime_type')
+        .eq('id', job.source_image_id)
+        .maybeSingle()
+      : Promise.resolve({ data: null })
+
+    const [
+      { data: product },
+      { data: refImages },
+      { data: texImages },
+      { data: sourceImg },
+    ] = await Promise.all([
+      productPromise,
+      productReferenceImagesPromise,
+      textureReferenceImagesPromise,
+      sourceImagePromise,
+    ])
 
   let geminiApiKey = resolveGoogleApiKey(product?.global_style_settings as GlobalStyleSettings | null)
 
@@ -564,11 +623,16 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     .eq('id', job.id)
     .in('status', ['pending', 'running'])
 
-  return {
-    jobId,
-    processed,
-    completed: completedCount,
-    failed: failedCount,
-    status: finalStatus,
+    return {
+      jobId,
+      processed,
+      completed: completedCount,
+      failed: failedCount,
+      status: finalStatus,
+    }
+  } catch (err) {
+    const safeMessage = sanitizeWorkerErrorMessage(err, 'Generation job failed')
+    await markClaimedJobFailed(supabase, job, safeMessage)
+    throw err
   }
 }
