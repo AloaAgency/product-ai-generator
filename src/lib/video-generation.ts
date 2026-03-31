@@ -79,13 +79,34 @@ type SceneGenerationContext = {
 
 const isVeoModel = (model: string) => model.toLowerCase().startsWith('veo')
 
+function sanitizeExternalErrorMessage(
+  value: string,
+  fallback: string,
+  maxLength = 240
+) {
+  const normalized = value
+    .replace(/\s+/g, ' ')
+    .replace(/(Bearer\s+)[^\s,;]+/gi, '$1[redacted]')
+    .replace(/([?&](?:access_token|api[_-]?key|authorization|signature|sig|token|x-amz-[^=]+|x-goog-[^=]+)=)[^&\s]+/gi, '$1[redacted]')
+    .replace(/((?:api[_-]?key|authorization|secret|signature|token)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+    .trim()
+
+  if (!normalized) return fallback
+  if (normalized.length <= maxLength) return normalized
+  return `${normalized.slice(0, maxLength - 3)}...`
+}
+
+function createExternalServiceError(context: string, detail: string) {
+  return new Error(`${context}: ${sanitizeExternalErrorMessage(detail, 'Unknown error')}`)
+}
+
 function getResponseMimeType(response: Response, fallback: string) {
   return (response.headers.get('content-type') || fallback).split(';')[0]
 }
 
 async function getResponseErrorMessage(response: Response) {
-  const body = (await response.text()).trim()
-  return body || response.statusText || 'Unknown error'
+  const body = sanitizeExternalErrorMessage(await response.text(), '')
+  return body || sanitizeExternalErrorMessage(response.statusText, 'Unknown error')
 }
 
 function getPositiveNumberOrDefault(value: unknown, fallback: number) {
@@ -129,7 +150,7 @@ async function fetchWithTimeout(
       throw new Error(`${errorContext} timed out after ${Math.round(timeoutMs / 1000)}s`)
     }
 
-    throw error
+    throw createExternalServiceError(errorContext, error instanceof Error ? error.message : String(error))
   } finally {
     clear()
   }
@@ -173,7 +194,10 @@ async function fetchFrameBytes(frameRef: FrameRef, label: 'start' | 'end') {
     `Failed to fetch ${label} frame`
   )
   if (!response.ok) {
-    throw new Error(`Failed to fetch ${label} frame (${response.status})`)
+    throw createExternalServiceError(
+      `Failed to fetch ${label} frame (${response.status})`,
+      await getResponseErrorMessage(response)
+    )
   }
 
   const contentLength = Number(response.headers.get('content-length'))
@@ -220,7 +244,7 @@ export async function pollVeoOperation(
     )
     if (!statusResp.ok) {
       const message = await getResponseErrorMessage(statusResp)
-      throw new Error(`Veo operation error: ${statusResp.status} ${message}`)
+      throw createExternalServiceError(`Veo operation error (${statusResp.status})`, message)
     }
 
     operation = await statusResp.json()
@@ -322,7 +346,7 @@ async function startVeoOperation(
 
   if (!response.ok) {
     const message = await getResponseErrorMessage(response)
-    throw new Error(`Veo API error: ${response.status} ${message}`)
+    throw createExternalServiceError(`Veo API error (${response.status})`, message)
   }
 
   const operation = await response.json()
@@ -342,7 +366,7 @@ function getVeoOperationErrorMessage(error: unknown) {
 
 export function getVeoVideoUri(operation: Record<string, unknown>) {
   if (operation?.error) {
-    throw new Error(`Veo operation error: ${getVeoOperationErrorMessage(operation.error)}`)
+    throw createExternalServiceError('Veo operation error', getVeoOperationErrorMessage(operation.error))
   }
 
   const response = operation.response as
@@ -370,7 +394,12 @@ async function downloadVeoVideo(videoUri: string, apiKey: string) {
     getConfiguredTimeout(process.env.VEO_DOWNLOAD_TIMEOUT_MS, DEFAULT_DOWNLOAD_TIMEOUT_MS),
     'Veo video download'
   )
-  if (!videoResp.ok) throw new Error(`Failed to download video (${videoResp.status})`)
+  if (!videoResp.ok) {
+    throw createExternalServiceError(
+      `Failed to download video (${videoResp.status})`,
+      await getResponseErrorMessage(videoResp)
+    )
+  }
 
   const videoBuffer = Buffer.from(await videoResp.arrayBuffer())
   return getBufferResult(videoBuffer, getResponseMimeType(videoResp, 'video/mp4'))
@@ -678,7 +707,7 @@ async function generateWithLtx(
 
   if (!response.ok) {
     const message = await getResponseErrorMessage(response)
-    throw new Error(`LTX API error: ${response.status} ${message}`)
+    throw createExternalServiceError(`LTX API error (${response.status})`, message)
   }
 
   const videoBuffer = Buffer.from(await response.arrayBuffer())

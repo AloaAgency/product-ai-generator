@@ -237,11 +237,26 @@ test('pollVeoOperation waits for completion and rethrows API failures with the r
 
     await assert.rejects(
       () => pollVeoOperation('https://veo.example.test', 'operations/123', 'api-key', 250, 5_000),
-      /Veo operation error: 503 backend offline/
+      /Veo operation error \(503\): backend offline/
     )
   } finally {
     global.fetch = originalFetch
     global.setTimeout = originalSetTimeout
+  }
+})
+
+test('pollVeoOperation redacts sensitive response details in surfaced errors', async () => {
+  const originalFetch = global.fetch
+  try {
+    global.fetch = async () =>
+      new Response('token=secret-value api_key: abc123', { status: 500, statusText: 'Server Error' })
+
+    await assert.rejects(
+      () => pollVeoOperation('https://veo.example.test', 'operations/123', 'api-key', 250, 5_000),
+      /token=\[redacted\] api_key: \[redacted\]/
+    )
+  } finally {
+    global.fetch = originalFetch
   }
 })
 
