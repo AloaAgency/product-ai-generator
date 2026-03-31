@@ -6,6 +6,8 @@ import type { GlobalStyleSettings } from '@/lib/types'
 import { isLtxModel, normalizeDurationValue, parsePositiveNumber } from '@/lib/video-constants'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
+const MAX_PROMPT_LENGTH = 4_000
+const MAX_FRAME_BYTES = 20 * 1024 * 1024
 const DEFAULT_FETCH_TIMEOUT_MS = 60_000
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000
 const DEFAULT_VEO_MODEL = 'veo-3.1-generate-preview'
@@ -90,6 +92,15 @@ function getPositiveNumberOrDefault(value: unknown, fallback: number) {
   return parsePositiveNumber(value) ?? fallback
 }
 
+function validateVideoPrompt(prompt: string) {
+  const normalized = prompt.trim()
+  if (!normalized) throw new Error('Scene has no motion prompt')
+  if (normalized.length > MAX_PROMPT_LENGTH) {
+    throw new Error(`Scene motion prompt exceeds ${MAX_PROMPT_LENGTH} characters`)
+  }
+  return normalized
+}
+
 function getConfiguredTimeout(value: unknown, fallback: number) {
   return Math.max(1_000, Math.round(getPositiveNumberOrDefault(value, fallback)))
 }
@@ -165,9 +176,19 @@ async function fetchFrameBytes(frameRef: FrameRef, label: 'start' | 'end') {
     throw new Error(`Failed to fetch ${label} frame (${response.status})`)
   }
 
+  const contentLength = Number(response.headers.get('content-length'))
+  if (Number.isFinite(contentLength) && contentLength > MAX_FRAME_BYTES) {
+    throw new Error(`${label[0].toUpperCase()}${label.slice(1)} frame exceeds ${MAX_FRAME_BYTES} bytes`)
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer())
+  if (buffer.length > MAX_FRAME_BYTES) {
+    throw new Error(`${label[0].toUpperCase()}${label.slice(1)} frame exceeds ${MAX_FRAME_BYTES} bytes`)
+  }
+
   return {
     mimeType: frameRef.mimeType || getResponseMimeType(response, 'image/png'),
-    bytesBase64Encoded: Buffer.from(await response.arrayBuffer()).toString('base64'),
+    bytesBase64Encoded: buffer.toString('base64'),
   }
 }
 
@@ -329,6 +350,12 @@ export function getVeoVideoUri(operation: Record<string, unknown>) {
     | undefined
   const videoUri = response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri
   if (!videoUri) throw new Error('No video URI in Veo response')
+  try {
+    const parsed = new URL(videoUri)
+    if (parsed.protocol !== 'https:') throw new Error('unsupported protocol')
+  } catch {
+    throw new Error('Invalid video URI in Veo response')
+  }
 
   return videoUri
 }
@@ -360,7 +387,7 @@ async function loadSceneOrThrow(
     .single<SceneRecord>()
 
   if (sceneErr || !scene) throw new Error('Scene not found')
-  if (!scene.motion_prompt) throw new Error('Scene has no motion prompt')
+  scene.motion_prompt = validateVideoPrompt(scene.motion_prompt || '')
 
   return scene as SceneWithMotionPrompt
 }

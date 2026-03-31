@@ -131,6 +131,33 @@ test('buildVeoRequestParts encodes frames, normalizes constrained durations, and
   }
 })
 
+test('buildVeoRequestParts rejects oversized frame payloads before encoding them', async () => {
+  const originalFetch = global.fetch
+  try {
+    global.fetch = async () => new Response(Buffer.alloc(20 * 1024 * 1024 + 1), {
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+    })
+
+    await assert.rejects(
+      () => buildVeoRequestParts(
+        'Hero shot',
+        {
+          start: { url: 'https://example.com/start.png', mimeType: 'image/png' },
+        },
+        {
+          resolution: '720p',
+          durationSeconds: 8,
+        },
+        'veo-3.1-generate-preview'
+      ),
+      /Start frame exceeds 20971520 bytes/
+    )
+  } finally {
+    global.fetch = originalFetch
+  }
+})
+
 test('buildVeoRequestParts ignores an end frame without a start frame and skips unsupported audio flags', async () => {
   const originalFetch = global.fetch
   const originalWarn = console.warn
@@ -244,6 +271,17 @@ test('getVeoVideoUri surfaces operation errors and rejects malformed responses',
   assert.throws(
     () => getVeoVideoUri({ done: true, response: {} }),
     /No video URI in Veo response/
+  )
+  assert.throws(
+    () => getVeoVideoUri({
+      done: true,
+      response: {
+        generateVideoResponse: {
+          generatedSamples: [{ video: { uri: 'http://example.com/video.mp4' } }],
+        },
+      },
+    }),
+    /Invalid video URI in Veo response/
   )
   assert.equal(
     getVeoVideoUri({
