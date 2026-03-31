@@ -131,6 +131,33 @@ test('buildVeoRequestParts encodes frames, normalizes constrained durations, and
   }
 })
 
+test('buildVeoRequestParts rejects oversized frame payloads before encoding them', async () => {
+  const originalFetch = global.fetch
+  try {
+    global.fetch = async () => new Response(Buffer.alloc(20 * 1024 * 1024 + 1), {
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+    })
+
+    await assert.rejects(
+      () => buildVeoRequestParts(
+        'Hero shot',
+        {
+          start: { url: 'https://example.com/start.png', mimeType: 'image/png' },
+        },
+        {
+          resolution: '720p',
+          durationSeconds: 8,
+        },
+        'veo-3.1-generate-preview'
+      ),
+      /Start frame exceeds 20971520 bytes/
+    )
+  } finally {
+    global.fetch = originalFetch
+  }
+})
+
 test('buildVeoRequestParts ignores an end frame without a start frame and skips unsupported audio flags', async () => {
   const originalFetch = global.fetch
   const originalWarn = console.warn
@@ -210,11 +237,26 @@ test('pollVeoOperation waits for completion and rethrows API failures with the r
 
     await assert.rejects(
       () => pollVeoOperation('https://veo.example.test', 'operations/123', 'api-key', 250, 5_000),
-      /Veo operation error: 503 backend offline/
+      /Veo operation error \(503\): backend offline/
     )
   } finally {
     global.fetch = originalFetch
     global.setTimeout = originalSetTimeout
+  }
+})
+
+test('pollVeoOperation redacts sensitive response details in surfaced errors', async () => {
+  const originalFetch = global.fetch
+  try {
+    global.fetch = async () =>
+      new Response('token=secret-value api_key: abc123', { status: 500, statusText: 'Server Error' })
+
+    await assert.rejects(
+      () => pollVeoOperation('https://veo.example.test', 'operations/123', 'api-key', 250, 5_000),
+      /token=\[redacted\] api_key: \[redacted\]/
+    )
+  } finally {
+    global.fetch = originalFetch
   }
 })
 
@@ -245,6 +287,17 @@ test('getVeoVideoUri surfaces operation errors and rejects malformed responses',
     () => getVeoVideoUri({ done: true, response: {} }),
     /No video URI in Veo response/
   )
+  assert.throws(
+    () => getVeoVideoUri({
+      done: true,
+      response: {
+        generateVideoResponse: {
+          generatedSamples: [{ video: { uri: 'http://example.com/video.mp4' } }],
+        },
+      },
+    }),
+    /Invalid video URI in Veo response/
+  )
   assert.equal(
     getVeoVideoUri({
       done: true,
@@ -266,6 +319,7 @@ test('getLtxConfig and buildLtxPayload preserve LTX-specific defaults and image-
       LTX_MODEL: 'ltx-2-pro',
       LTX_RESOLUTION: '2560x1440',
       LTX_DURATION: '10',
+      LTX_REQUEST_TIMEOUT_MS: '45000',
     },
     () => {
       const config = getLtxConfig({
@@ -283,6 +337,7 @@ test('getLtxConfig and buildLtxPayload preserve LTX-specific defaults and image-
 
       assert.equal(config.baseUrl, 'https://ltx.example.test')
       assert.equal(config.durationSeconds, 10)
+      assert.equal(config.requestTimeoutMs, 45000)
       assert.equal(endpoint, 'image-to-video')
       assert.deepEqual(payload, {
         prompt: 'Product fly-through',

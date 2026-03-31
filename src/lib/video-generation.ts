@@ -6,6 +6,10 @@ import type { GlobalStyleSettings } from '@/lib/types'
 import { isLtxModel, normalizeDurationValue, parsePositiveNumber } from '@/lib/video-constants'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
+const MAX_PROMPT_LENGTH = 4_000
+const MAX_FRAME_BYTES = 20 * 1024 * 1024
+const DEFAULT_FETCH_TIMEOUT_MS = 60_000
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000
 const DEFAULT_VEO_MODEL = 'veo-3.1-generate-preview'
 const DEFAULT_VEO_POLL_INTERVAL_MS = 10_000
 const DEFAULT_VEO_POLL_TIMEOUT_MS = 600_000
@@ -63,6 +67,7 @@ type LtxConfig = {
   model: string
   resolution: string
   durationSeconds: number
+  requestTimeoutMs: number
 }
 type SceneGenerationContext = {
   scene: SceneWithMotionPrompt
@@ -74,17 +79,81 @@ type SceneGenerationContext = {
 
 const isVeoModel = (model: string) => model.toLowerCase().startsWith('veo')
 
+function sanitizeExternalErrorMessage(
+  value: string,
+  fallback: string,
+  maxLength = 240
+) {
+  const normalized = value
+    .replace(/\s+/g, ' ')
+    .replace(/(Bearer\s+)[^\s,;]+/gi, '$1[redacted]')
+    .replace(/([?&](?:access_token|api[_-]?key|authorization|signature|sig|token|x-amz-[^=]+|x-goog-[^=]+)=)[^&\s]+/gi, '$1[redacted]')
+    .replace(/((?:api[_-]?key|authorization|secret|signature|token)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+    .trim()
+
+  if (!normalized) return fallback
+  if (normalized.length <= maxLength) return normalized
+  return `${normalized.slice(0, maxLength - 3)}...`
+}
+
+function createExternalServiceError(context: string, detail: string) {
+  return new Error(`${context}: ${sanitizeExternalErrorMessage(detail, 'Unknown error')}`)
+}
+
 function getResponseMimeType(response: Response, fallback: string) {
   return (response.headers.get('content-type') || fallback).split(';')[0]
 }
 
 async function getResponseErrorMessage(response: Response) {
-  const body = (await response.text()).trim()
-  return body || response.statusText || 'Unknown error'
+  const body = sanitizeExternalErrorMessage(await response.text(), '')
+  return body || sanitizeExternalErrorMessage(response.statusText, 'Unknown error')
 }
 
 function getPositiveNumberOrDefault(value: unknown, fallback: number) {
   return parsePositiveNumber(value) ?? fallback
+}
+
+function validateVideoPrompt(prompt: string) {
+  const normalized = prompt.trim()
+  if (!normalized) throw new Error('Scene has no motion prompt')
+  if (normalized.length > MAX_PROMPT_LENGTH) {
+    throw new Error(`Scene motion prompt exceeds ${MAX_PROMPT_LENGTH} characters`)
+  }
+  return normalized
+}
+
+function getConfiguredTimeout(value: unknown, fallback: number) {
+  return Math.max(1_000, Math.round(getPositiveNumberOrDefault(value, fallback)))
+}
+
+function createTimeoutSignal(timeoutMs: number) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  return {
+    signal: controller.signal,
+    clear: () => clearTimeout(timer),
+  }
+}
+
+async function fetchWithTimeout(
+  input: string | URL | Request,
+  init: RequestInit,
+  timeoutMs: number,
+  errorContext: string
+) {
+  const { signal, clear } = createTimeoutSignal(timeoutMs)
+  try {
+    return await fetch(input, { ...init, signal })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`${errorContext} timed out after ${Math.round(timeoutMs / 1000)}s`)
+    }
+
+    throw createExternalServiceError(errorContext, error instanceof Error ? error.message : String(error))
+  } finally {
+    clear()
+  }
 }
 
 function getBufferResult(buffer: Buffer, mimeType: string): VideoGenerationResult {
@@ -118,14 +187,32 @@ async function createFrameRef(supabase: ReturnType<typeof createServiceClient>, 
 }
 
 async function fetchFrameBytes(frameRef: FrameRef, label: 'start' | 'end') {
-  const response = await fetch(frameRef.url)
+  const response = await fetchWithTimeout(
+    frameRef.url,
+    {},
+    getConfiguredTimeout(process.env.VIDEO_FRAME_FETCH_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
+    `Failed to fetch ${label} frame`
+  )
   if (!response.ok) {
-    throw new Error(`Failed to fetch ${label} frame (${response.status})`)
+    throw createExternalServiceError(
+      `Failed to fetch ${label} frame (${response.status})`,
+      await getResponseErrorMessage(response)
+    )
+  }
+
+  const contentLength = Number(response.headers.get('content-length'))
+  if (Number.isFinite(contentLength) && contentLength > MAX_FRAME_BYTES) {
+    throw new Error(`${label[0].toUpperCase()}${label.slice(1)} frame exceeds ${MAX_FRAME_BYTES} bytes`)
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer())
+  if (buffer.length > MAX_FRAME_BYTES) {
+    throw new Error(`${label[0].toUpperCase()}${label.slice(1)} frame exceeds ${MAX_FRAME_BYTES} bytes`)
   }
 
   return {
     mimeType: frameRef.mimeType || getResponseMimeType(response, 'image/png'),
-    bytesBase64Encoded: Buffer.from(await response.arrayBuffer()).toString('base64'),
+    bytesBase64Encoded: buffer.toString('base64'),
   }
 }
 
@@ -149,12 +236,15 @@ export async function pollVeoOperation(
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
     }
 
-    const statusResp = await fetch(`${baseUrl}/${operationName}`, {
-      headers: { 'x-goog-api-key': apiKey },
-    })
+    const statusResp = await fetchWithTimeout(
+      `${baseUrl}/${operationName}`,
+      { headers: { 'x-goog-api-key': apiKey } },
+      getConfiguredTimeout(process.env.VEO_REQUEST_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
+      'Veo operation polling'
+    )
     if (!statusResp.ok) {
       const message = await getResponseErrorMessage(statusResp)
-      throw new Error(`Veo operation error: ${statusResp.status} ${message}`)
+      throw createExternalServiceError(`Veo operation error (${statusResp.status})`, message)
     }
 
     operation = await statusResp.json()
@@ -243,18 +333,20 @@ async function startVeoOperation(
   config: VeoConfig,
   payload: Record<string, unknown>
 ): Promise<string> {
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `${config.baseUrl}/models/${config.model}:predictLongRunning`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
       body: JSON.stringify(payload),
-    }
+    },
+    getConfiguredTimeout(process.env.VEO_REQUEST_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
+    'Veo API request'
   )
 
   if (!response.ok) {
     const message = await getResponseErrorMessage(response)
-    throw new Error(`Veo API error: ${response.status} ${message}`)
+    throw createExternalServiceError(`Veo API error (${response.status})`, message)
   }
 
   const operation = await response.json()
@@ -274,7 +366,7 @@ function getVeoOperationErrorMessage(error: unknown) {
 
 export function getVeoVideoUri(operation: Record<string, unknown>) {
   if (operation?.error) {
-    throw new Error(`Veo operation error: ${getVeoOperationErrorMessage(operation.error)}`)
+    throw createExternalServiceError('Veo operation error', getVeoOperationErrorMessage(operation.error))
   }
 
   const response = operation.response as
@@ -282,16 +374,32 @@ export function getVeoVideoUri(operation: Record<string, unknown>) {
     | undefined
   const videoUri = response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri
   if (!videoUri) throw new Error('No video URI in Veo response')
+  try {
+    const parsed = new URL(videoUri)
+    if (parsed.protocol !== 'https:') throw new Error('unsupported protocol')
+  } catch {
+    throw new Error('Invalid video URI in Veo response')
+  }
 
   return videoUri
 }
 
 async function downloadVeoVideo(videoUri: string, apiKey: string) {
-  const videoResp = await fetch(videoUri, {
-    headers: { 'x-goog-api-key': apiKey },
-    redirect: 'follow',
-  })
-  if (!videoResp.ok) throw new Error(`Failed to download video (${videoResp.status})`)
+  const videoResp = await fetchWithTimeout(
+    videoUri,
+    {
+      headers: { 'x-goog-api-key': apiKey },
+      redirect: 'follow',
+    },
+    getConfiguredTimeout(process.env.VEO_DOWNLOAD_TIMEOUT_MS, DEFAULT_DOWNLOAD_TIMEOUT_MS),
+    'Veo video download'
+  )
+  if (!videoResp.ok) {
+    throw createExternalServiceError(
+      `Failed to download video (${videoResp.status})`,
+      await getResponseErrorMessage(videoResp)
+    )
+  }
 
   const videoBuffer = Buffer.from(await videoResp.arrayBuffer())
   return getBufferResult(videoBuffer, getResponseMimeType(videoResp, 'video/mp4'))
@@ -308,7 +416,7 @@ async function loadSceneOrThrow(
     .single<SceneRecord>()
 
   if (sceneErr || !scene) throw new Error('Scene not found')
-  if (!scene.motion_prompt) throw new Error('Scene has no motion prompt')
+  scene.motion_prompt = validateVideoPrompt(scene.motion_prompt || '')
 
   return scene as SceneWithMotionPrompt
 }
@@ -543,6 +651,10 @@ export function getLtxConfig(settings: SceneVideoSettings): LtxConfig {
       settings.durationSeconds ?? process.env.LTX_DURATION,
       DEFAULT_LTX_DURATION_SECONDS
     ),
+    requestTimeoutMs: getConfiguredTimeout(
+      process.env.LTX_REQUEST_TIMEOUT_MS,
+      DEFAULT_DOWNLOAD_TIMEOUT_MS
+    ),
   }
 }
 
@@ -579,18 +691,23 @@ async function generateWithLtx(
   const config = getLtxConfig(settings)
   const { endpoint, payload } = buildLtxPayload(prompt, frameRefs, settings, config)
 
-  const response = await fetch(`${config.baseUrl}/${endpoint}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
+  const response = await fetchWithTimeout(
+    `${config.baseUrl}/${endpoint}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  })
+    config.requestTimeoutMs,
+    'LTX API request'
+  )
 
   if (!response.ok) {
     const message = await getResponseErrorMessage(response)
-    throw new Error(`LTX API error: ${response.status} ${message}`)
+    throw createExternalServiceError(`LTX API error (${response.status})`, message)
   }
 
   const videoBuffer = Buffer.from(await response.arrayBuffer())
