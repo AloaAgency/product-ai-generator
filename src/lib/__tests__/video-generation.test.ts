@@ -266,6 +266,7 @@ test('getLtxConfig and buildLtxPayload preserve LTX-specific defaults and image-
       LTX_MODEL: 'ltx-2-pro',
       LTX_RESOLUTION: '2560x1440',
       LTX_DURATION: '10',
+      LTX_REQUEST_TIMEOUT_MS: '45000',
     },
     () => {
       const config = getLtxConfig({
@@ -283,6 +284,7 @@ test('getLtxConfig and buildLtxPayload preserve LTX-specific defaults and image-
 
       assert.equal(config.baseUrl, 'https://ltx.example.test')
       assert.equal(config.durationSeconds, 10)
+      assert.equal(config.requestTimeoutMs, 45000)
       assert.equal(endpoint, 'image-to-video')
       assert.deepEqual(payload, {
         prompt: 'Product fly-through',

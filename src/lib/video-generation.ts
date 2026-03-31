@@ -6,6 +6,8 @@ import type { GlobalStyleSettings } from '@/lib/types'
 import { isLtxModel, normalizeDurationValue, parsePositiveNumber } from '@/lib/video-constants'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
+const DEFAULT_FETCH_TIMEOUT_MS = 60_000
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000
 const DEFAULT_VEO_MODEL = 'veo-3.1-generate-preview'
 const DEFAULT_VEO_POLL_INTERVAL_MS = 10_000
 const DEFAULT_VEO_POLL_TIMEOUT_MS = 600_000
@@ -63,6 +65,7 @@ type LtxConfig = {
   model: string
   resolution: string
   durationSeconds: number
+  requestTimeoutMs: number
 }
 type SceneGenerationContext = {
   scene: SceneWithMotionPrompt
@@ -85,6 +88,40 @@ async function getResponseErrorMessage(response: Response) {
 
 function getPositiveNumberOrDefault(value: unknown, fallback: number) {
   return parsePositiveNumber(value) ?? fallback
+}
+
+function getConfiguredTimeout(value: unknown, fallback: number) {
+  return Math.max(1_000, Math.round(getPositiveNumberOrDefault(value, fallback)))
+}
+
+function createTimeoutSignal(timeoutMs: number) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  return {
+    signal: controller.signal,
+    clear: () => clearTimeout(timer),
+  }
+}
+
+async function fetchWithTimeout(
+  input: string | URL | Request,
+  init: RequestInit,
+  timeoutMs: number,
+  errorContext: string
+) {
+  const { signal, clear } = createTimeoutSignal(timeoutMs)
+  try {
+    return await fetch(input, { ...init, signal })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`${errorContext} timed out after ${Math.round(timeoutMs / 1000)}s`)
+    }
+
+    throw error
+  } finally {
+    clear()
+  }
 }
 
 function getBufferResult(buffer: Buffer, mimeType: string): VideoGenerationResult {
@@ -118,7 +155,12 @@ async function createFrameRef(supabase: ReturnType<typeof createServiceClient>, 
 }
 
 async function fetchFrameBytes(frameRef: FrameRef, label: 'start' | 'end') {
-  const response = await fetch(frameRef.url)
+  const response = await fetchWithTimeout(
+    frameRef.url,
+    {},
+    getConfiguredTimeout(process.env.VIDEO_FRAME_FETCH_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
+    `Failed to fetch ${label} frame`
+  )
   if (!response.ok) {
     throw new Error(`Failed to fetch ${label} frame (${response.status})`)
   }
@@ -149,9 +191,12 @@ export async function pollVeoOperation(
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
     }
 
-    const statusResp = await fetch(`${baseUrl}/${operationName}`, {
-      headers: { 'x-goog-api-key': apiKey },
-    })
+    const statusResp = await fetchWithTimeout(
+      `${baseUrl}/${operationName}`,
+      { headers: { 'x-goog-api-key': apiKey } },
+      getConfiguredTimeout(process.env.VEO_REQUEST_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
+      'Veo operation polling'
+    )
     if (!statusResp.ok) {
       const message = await getResponseErrorMessage(statusResp)
       throw new Error(`Veo operation error: ${statusResp.status} ${message}`)
@@ -243,13 +288,15 @@ async function startVeoOperation(
   config: VeoConfig,
   payload: Record<string, unknown>
 ): Promise<string> {
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `${config.baseUrl}/models/${config.model}:predictLongRunning`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
       body: JSON.stringify(payload),
-    }
+    },
+    getConfiguredTimeout(process.env.VEO_REQUEST_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
+    'Veo API request'
   )
 
   if (!response.ok) {
@@ -287,10 +334,15 @@ export function getVeoVideoUri(operation: Record<string, unknown>) {
 }
 
 async function downloadVeoVideo(videoUri: string, apiKey: string) {
-  const videoResp = await fetch(videoUri, {
-    headers: { 'x-goog-api-key': apiKey },
-    redirect: 'follow',
-  })
+  const videoResp = await fetchWithTimeout(
+    videoUri,
+    {
+      headers: { 'x-goog-api-key': apiKey },
+      redirect: 'follow',
+    },
+    getConfiguredTimeout(process.env.VEO_DOWNLOAD_TIMEOUT_MS, DEFAULT_DOWNLOAD_TIMEOUT_MS),
+    'Veo video download'
+  )
   if (!videoResp.ok) throw new Error(`Failed to download video (${videoResp.status})`)
 
   const videoBuffer = Buffer.from(await videoResp.arrayBuffer())
@@ -543,6 +595,10 @@ export function getLtxConfig(settings: SceneVideoSettings): LtxConfig {
       settings.durationSeconds ?? process.env.LTX_DURATION,
       DEFAULT_LTX_DURATION_SECONDS
     ),
+    requestTimeoutMs: getConfiguredTimeout(
+      process.env.LTX_REQUEST_TIMEOUT_MS,
+      DEFAULT_DOWNLOAD_TIMEOUT_MS
+    ),
   }
 }
 
@@ -579,14 +635,19 @@ async function generateWithLtx(
   const config = getLtxConfig(settings)
   const { endpoint, payload } = buildLtxPayload(prompt, frameRefs, settings, config)
 
-  const response = await fetch(`${config.baseUrl}/${endpoint}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
+  const response = await fetchWithTimeout(
+    `${config.baseUrl}/${endpoint}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  })
+    config.requestTimeoutMs,
+    'LTX API request'
+  )
 
   if (!response.ok) {
     const message = await getResponseErrorMessage(response)
