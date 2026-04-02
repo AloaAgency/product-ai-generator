@@ -1,6 +1,17 @@
 'use client'
 
 import { useEffect, useId, useRef, useState } from 'react'
+import {
+  AlertCircle,
+  Bug,
+  CheckCircle2,
+  Lightbulb,
+  Loader2,
+  MessageSquarePlus,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import {
   buildBugReportSubmission,
@@ -156,11 +167,11 @@ export function BugReportWidget() {
       <button
         type="button"
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 z-40 p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg hover:scale-110 transition-all"
+        className="fixed bottom-6 right-6 z-40 inline-flex min-h-12 min-w-12 items-center justify-center rounded-full bg-blue-600 p-3 text-white shadow-lg transition-all hover:scale-105 hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
         title="Report Bug / Request Feature"
         aria-label="Report a bug or request a feature"
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg>
+        <MessageSquarePlus className="h-5 w-5" />
       </button>
 
       {/* Toast notification */}
@@ -168,10 +179,17 @@ export function BugReportWidget() {
         <div
           role="status"
           aria-live="polite"
-          className={`fixed bottom-20 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-white ${
-          toast.type === 'success' ? 'bg-green-600' : 'bg-red-600'
-        }`}
+          className={`fixed bottom-20 right-6 z-[110] flex max-w-sm items-start gap-3 rounded-xl border px-4 py-3 text-sm shadow-2xl ${
+            toast.type === 'success'
+              ? 'border-emerald-900/40 bg-emerald-950/95 text-emerald-100'
+              : 'border-red-900/40 bg-red-950/95 text-red-100'
+          }`}
         >
+          {toast.type === 'success' ? (
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+          ) : (
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+          )}
           {toast.message}
         </div>
       )}
@@ -188,74 +206,82 @@ export function BugReportWidget() {
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={handleClose} />
 
           <div
-            className="relative z-10 w-full max-w-lg mx-4 bg-white dark:bg-gray-800 rounded-lg shadow-xl max-h-[90vh] overflow-y-auto"
+            className="relative z-10 mx-4 flex max-h-[90vh] w-full max-w-lg flex-col overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between p-5 border-b border-gray-200 dark:border-gray-700">
-              <h2 id={dialogTitleId} className="text-lg font-semibold text-gray-900 dark:text-gray-100">Submit Feedback</h2>
+            <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-500/10 text-blue-400">
+                  <MessageSquarePlus className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 id={dialogTitleId} className="text-lg font-semibold text-zinc-100">Submit Feedback</h2>
+                  <p id={dialogDescriptionId} className="text-sm text-zinc-500">
+                    Report a bug or request a feature with optional screenshots.
+                  </p>
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={handleClose}
                 disabled={isSubmitting}
-                className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
                 aria-label="Close feedback form"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-500 dark:text-gray-400"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                <X className="h-5 w-5" />
               </button>
             </div>
 
-            <form ref={formRef} onSubmit={handleSubmit} className="p-5">
-              <p id={dialogDescriptionId} className="mb-4 text-sm text-gray-500 dark:text-gray-400">
-                Submit a bug report or feature request with optional screenshots.
-              </p>
-
+            <form ref={formRef} onSubmit={handleSubmit} className="space-y-5 p-5">
               {/* Type Selection */}
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Type</label>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-zinc-400">Type</label>
                 <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={() => setType('bug')}
-                    className={`flex-1 px-4 py-2 rounded-lg border-2 font-medium transition-all ${
+                    className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
                       type === 'bug'
-                        ? 'border-red-500 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'
-                        : 'border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
+                        ? 'border-red-800 bg-red-950/30 text-red-300'
+                        : 'border-zinc-700 bg-zinc-800 text-zinc-300 hover:border-zinc-600 hover:text-zinc-100'
                     }`}
                   >
+                    <Bug className="h-4 w-4" />
                     Bug Report
                   </button>
                   <button
                     type="button"
                     onClick={() => setType('feature')}
-                    className={`flex-1 px-4 py-2 rounded-lg border-2 font-medium transition-all ${
+                    className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
                       type === 'feature'
-                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400'
-                        : 'border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
+                        ? 'border-blue-800 bg-blue-950/30 text-blue-300'
+                        : 'border-zinc-700 bg-zinc-800 text-zinc-300 hover:border-zinc-600 hover:text-zinc-100'
                     }`}
                   >
+                    <Lightbulb className="h-4 w-4" />
                     Feature Request
                   </button>
                 </div>
               </div>
 
               {/* Title */}
-              <div className="mb-4">
-                <label htmlFor="bug-title" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Title</label>
+              <div>
+                <label htmlFor="bug-title" className="mb-2 block text-sm font-medium text-zinc-400">Title</label>
                 <input
                   id="bug-title"
                   type="text"
                   value={title}
                   onChange={(e) => setTitle(clampBugReportText(e.target.value, MAX_BUG_REPORT_TITLE_LENGTH))}
                   placeholder={type === 'bug' ? 'Brief description of the issue' : 'Brief description of the feature'}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500"
                   maxLength={MAX_BUG_REPORT_TITLE_LENGTH}
                   required
                 />
               </div>
 
               {/* Description */}
-              <div className="mb-4">
-                <label htmlFor="bug-desc" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Description</label>
+              <div>
+                <label htmlFor="bug-desc" className="mb-2 block text-sm font-medium text-zinc-400">Description</label>
                 <textarea
                   id="bug-desc"
                   value={description}
@@ -265,15 +291,15 @@ export function BugReportWidget() {
                     : 'What feature would you like? Why would it be helpful?'
                   }
                   rows={4}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  className="w-full resize-none rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500"
                   maxLength={MAX_BUG_REPORT_DESCRIPTION_LENGTH}
                   required
                 />
               </div>
 
               {/* Image Upload */}
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Screenshots (optional)</label>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-zinc-400">Screenshots (optional)</label>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -286,26 +312,26 @@ export function BugReportWidget() {
                 {images.length > 0 && (
                   <div className="mb-3 space-y-2">
                     {images.map((img, index) => (
-                      <div key={index} className="flex items-start gap-3 p-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-700/50">
-                        <img src={img.preview} alt="" className="w-16 h-16 object-cover rounded border border-gray-300 dark:border-gray-600" />
+                      <div key={index} className="flex items-start gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+                        <img src={img.preview} alt="" className="h-16 w-16 rounded border border-zinc-700 object-cover" />
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs text-gray-500 dark:text-gray-400 truncate mb-1">{img.file.name}</p>
+                          <p className="mb-1 truncate text-xs text-zinc-500">{img.file.name}</p>
                           <input
                             type="text"
                             value={img.caption}
                             onChange={(e) => updateImageCaption(index, e.target.value)}
                             placeholder="Add a caption (optional)"
-                            className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                            className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500"
                             maxLength={MAX_BUG_REPORT_CAPTION_LENGTH}
                           />
                         </div>
                         <button
                           type="button"
                           onClick={() => removeImage(index)}
-                          className="p-1 text-gray-400 hover:text-red-500 transition-colors"
+                          className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"
                           aria-label={`Remove screenshot ${index + 1}`}
                         >
-                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                          <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
                     ))}
@@ -316,12 +342,13 @@ export function BugReportWidget() {
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-400 hover:border-blue-400 hover:text-blue-600 transition-colors text-sm"
+                    className="flex w-full min-h-11 items-center justify-center gap-2 rounded-lg border-2 border-dashed border-zinc-700 px-4 py-3 text-sm text-zinc-400 transition-colors hover:border-blue-500 hover:text-blue-400"
                   >
+                    <Upload className="h-4 w-4" />
                     Add screenshot{images.length > 0 ? ` (${images.length}/${MAX_BUG_REPORT_IMAGES})` : ''}
                   </button>
                 )}
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Max {MAX_BUG_REPORT_IMAGES} images, 5MB each.</p>
+                <p className="mt-1 text-xs text-zinc-500">Max {MAX_BUG_REPORT_IMAGES} images, 5MB each.</p>
               </div>
 
               {/* Actions */}
@@ -330,15 +357,16 @@ export function BugReportWidget() {
                   type="button"
                   onClick={handleClose}
                   disabled={isSubmitting}
-                  className="flex-1 px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                  className="flex min-h-11 flex-1 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 transition-colors hover:border-zinc-600 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="flex-1 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors disabled:opacity-50"
+                  className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
+                  {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
                   {isSubmitting ? 'Submitting...' : `Submit ${type === 'bug' ? 'Bug' : 'Feature'}`}
                 </button>
               </div>
