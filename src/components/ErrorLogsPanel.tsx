@@ -96,7 +96,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
               type="button"
               onClick={handleRefresh}
               disabled={loadingErrorLogs}
-              className="inline-flex items-center gap-1.5 rounded-md bg-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700 disabled:opacity-50 transition-colors"
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-md bg-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700 disabled:opacity-50"
             >
               <RefreshCw className={`h-3 w-3 ${loadingErrorLogs ? 'animate-spin' : ''}`} />
               Refresh
@@ -105,7 +105,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
               type="button"
               onClick={handleClear}
               disabled={clearing || errorLogs.length === 0}
-              className="inline-flex items-center gap-1.5 rounded-md bg-red-900/40 px-2.5 py-1.5 text-xs font-medium text-red-300 hover:bg-red-900/60 disabled:opacity-50 transition-colors"
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-md bg-red-900/40 px-2.5 py-1.5 text-xs font-medium text-red-300 transition-colors hover:bg-red-900/60 disabled:opacity-50"
             >
               <Trash2 className="h-3 w-3" />
               Clear All
@@ -113,50 +113,64 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
           </div>
 
           <div className="max-h-64 space-y-2 overflow-y-auto">
-            {visibleLogs.map((log) => (
-              <div
-                key={log.id}
-                className="rounded-md border border-red-900/30 bg-red-950/30 p-2.5 text-xs"
-              >
-                <button
-                  type="button"
-                  className="flex w-full items-start gap-2 text-left"
-                  onClick={() => toggleEntry(log.id)}
-                  aria-expanded={expandedEntries.has(log.id)}
-                  aria-controls={log.safeContext ? `${panelId}-${log.id}` : undefined}
-                  disabled={!log.safeContext}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 text-zinc-500">
-                      <span>{new Date(log.created_at).toLocaleString()}</span>
-                      {log.error_source && (
-                        <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-400">
-                          {log.error_source}
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-1 text-red-300 break-words">
-                      {log.safeMessage}
-                    </p>
-                  </div>
-                  {log.safeContext && (
-                    <ChevronDown
-                      className={`h-3 w-3 flex-shrink-0 text-zinc-500 transition-transform ${
-                        expandedEntries.has(log.id) ? 'rotate-180' : ''
-                      }`}
-                    />
-                  )}
-                </button>
-                {expandedEntries.has(log.id) && log.safeContext && (
-                  <pre
-                    id={`${panelId}-${log.id}`}
-                    className="mt-2 max-h-40 overflow-auto rounded bg-zinc-900/80 p-2 text-zinc-400"
-                  >
-                    {log.safeContext}
-                  </pre>
-                )}
+            {loadingErrorLogs && visibleLogs.length === 0 ? (
+              <div className="flex items-center justify-center py-8">
+                <RefreshCw className="h-5 w-5 animate-spin text-zinc-500" />
               </div>
-            ))}
+            ) : visibleLogs.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-red-900/30 bg-red-950/10 px-4 py-6 text-center">
+                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-red-950/40 text-red-300">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <p className="mt-3 text-sm font-medium text-red-200">No error logs</p>
+                <p className="mt-1 text-xs text-red-300/70">This panel will populate when project errors are recorded.</p>
+              </div>
+            ) : (
+              visibleLogs.map((log) => (
+                <div
+                  key={log.id}
+                  className="rounded-md border border-red-900/30 bg-red-950/30 p-2.5 text-xs"
+                >
+                  <button
+                    type="button"
+                    className="flex w-full items-start gap-2 text-left"
+                    onClick={() => toggleEntry(log.id)}
+                    aria-expanded={expandedEntries.has(log.id)}
+                    aria-controls={log.safeContext ? `${panelId}-${log.id}` : undefined}
+                    disabled={!log.safeContext}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 text-zinc-500">
+                        <span>{new Date(log.created_at).toLocaleString()}</span>
+                        {log.error_source && (
+                          <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-400">
+                            {log.error_source}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 break-words text-red-300">
+                        {log.safeMessage}
+                      </p>
+                    </div>
+                    {log.safeContext && (
+                      <ChevronDown
+                        className={`h-3 w-3 flex-shrink-0 text-zinc-500 transition-transform ${
+                          expandedEntries.has(log.id) ? 'rotate-180' : ''
+                        }`}
+                      />
+                    )}
+                  </button>
+                  {expandedEntries.has(log.id) && log.safeContext && (
+                    <pre
+                      id={`${panelId}-${log.id}`}
+                      className="mt-2 max-h-40 overflow-auto rounded bg-zinc-900/80 p-2 text-zinc-400"
+                    >
+                      {log.safeContext}
+                    </pre>
+                  )}
+                </div>
+              ))
+            )}
             {hasMoreLogs && (
               <button
                 type="button"

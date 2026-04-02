@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { useAppStore } from '@/lib/store'
-import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronUp, Inbox, Loader2 } from 'lucide-react'
 import {
   deriveGenerationQueueState,
   getFailureTimestamp,
@@ -241,13 +241,27 @@ export default function GlobalGenerationQueue({
                 )
               })
             ) : (
-              <div className="rounded-lg border border-dashed border-zinc-800 bg-zinc-900/40 px-3 py-4 text-xs text-zinc-500">
-                Queue is idle. New generations will appear here automatically.
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-6 text-center">
+                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-zinc-800 text-zinc-500">
+                  <Inbox className="h-5 w-5" />
+                </div>
+                <p className="mt-3 text-sm font-medium text-zinc-300">Queue is idle</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  New generations will appear here automatically.
+                </p>
               </div>
             )}
             {recentFailedJobs.length > 0 && (
               <div className="rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-3">
-                <p className="text-xs font-medium text-red-300">Recent failures</p>
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-red-950/60 text-red-300">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-red-300">Recent failures</p>
+                    <p className="text-xs text-red-300/70">Latest failed jobs are kept here until cleared.</p>
+                  </div>
+                </div>
                 <div className="mt-2 space-y-2">
                   {recentFailedJobs.map((job) => (
                     <div key={job.id} className="rounded-lg border border-red-900/30 bg-black/10 px-3 py-2 text-xs text-red-200">
