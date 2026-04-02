@@ -17,7 +17,7 @@ const LOGIN_PAGE_PREFIX = `<!DOCTYPE html>
     h1 { font-size: 1.25rem; margin-bottom: 1.5rem; text-align: center; }
     label { display: block; font-size: 0.875rem; color: #a1a1aa; margin-bottom: 0.375rem; }
     input { width: 100%; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid #3f3f46; background: #27272a; color: #f4f4f5; font-size: 0.875rem; outline: none; }
-    input:focus { border-color: #71717a; }
+    input:focus { border-color: #71717a; box-shadow: 0 0 0 2px rgba(113, 113, 122, 0.2); }
     button { width: 100%; margin-top: 1rem; padding: 0.5rem; border-radius: 8px; border: none; background: #fff; color: #09090b; font-size: 0.875rem; font-weight: 500; cursor: pointer; }
     button:hover { background: #e4e4e7; }
     .error { color: #ef4444; font-size: 0.8rem; margin-top: 0.75rem; text-align: center; }
@@ -45,7 +45,7 @@ function loginPage(showError: boolean, redirectPath: string) {
     `\n    <form method="POST" action="/api/login">
       <input type="hidden" name="redirect" value="${safeRedirect}" />
       <label for="password">Password</label>
-      <input type="password" id="password" name="password" placeholder="Enter password" autofocus required />
+      <input type="password" id="password" name="password" autocomplete="current-password" placeholder="Enter password" autofocus required />
       <button type="submit">Sign In</button>
       ${showError ? ERROR_HTML : ''}
     </form>\n` +
