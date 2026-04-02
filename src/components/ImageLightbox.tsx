@@ -3,6 +3,7 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import {
+  AlertCircle,
   X,
   ChevronLeft,
   ChevronRight,
@@ -14,6 +15,7 @@ import {
   ExternalLink,
   Trash2,
   AlertTriangle,
+  ImageOff,
   Wand2,
   RefreshCw,
 } from 'lucide-react'
@@ -152,6 +154,7 @@ export function ImageLightbox({
   const [isUpdating, setIsUpdating] = useState(false)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [downloadNotice, setDownloadNotice] = useState<string | null>(null)
   const [notesValue, setNotesValue] = useState('')
   const notesInputRef = useRef<HTMLInputElement>(null)
 
@@ -164,7 +167,14 @@ export function ImageLightbox({
     setNotesValue(currentImage?.notes || '')
     setPromptExpanded(false)
     setCopied(false)
+    setDownloadNotice(null)
   }, [currentImage?.id, currentImage?.notes])
+
+  useEffect(() => {
+    if (!downloadNotice) return
+    const timeout = window.setTimeout(() => setDownloadNotice(null), 4000)
+    return () => window.clearTimeout(timeout)
+  }, [downloadNotice])
 
   const handlePrev = useCallback(() => {
     if (hasPrev) onNavigate(currentIndex - 1)
@@ -249,7 +259,7 @@ export function ImageLightbox({
       document.body.removeChild(link)
       URL.revokeObjectURL(blobUrl)
     } catch (error) {
-      window.alert(getSafeDownloadErrorMessage(error instanceof Error ? error.message : null))
+      setDownloadNotice(getSafeDownloadErrorMessage(error instanceof Error ? error.message : null))
     }
   }, [currentImage, onRequestSignedUrls])
 
@@ -359,24 +369,24 @@ export function ImageLightbox({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-3 py-2 sm:px-4 sm:py-3 bg-gray-900/80 rounded-t-xl">
-          <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-            <span id={dialogTitleId} className="text-white font-medium text-sm sm:text-base whitespace-nowrap">
-              Variation {currentImage.variation_number ?? currentIndex + 1}
+        <div className="flex items-center justify-between rounded-t-xl bg-zinc-900/80 px-3 py-2 sm:px-4 sm:py-3">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+            <span id={dialogTitleId} className="whitespace-nowrap text-sm font-medium text-zinc-100 sm:text-base">
+              {currentImage.file_name || `Variation ${currentImage.variation_number ?? currentIndex + 1}`}
             </span>
             {promptName && (
-              <span className="text-gray-400 text-sm truncate max-w-[120px] sm:max-w-[300px] hidden sm:inline">
+              <span className="hidden max-w-[120px] truncate text-sm text-zinc-400 sm:inline sm:max-w-[300px]">
                 {promptName}
               </span>
             )}
-            <span className="text-gray-500 text-sm whitespace-nowrap">
+            <span className="whitespace-nowrap text-sm text-zinc-500">
               {currentIndex + 1} / {images.length}
             </span>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 text-gray-400 hover:text-white transition-colors rounded-lg hover:bg-gray-700"
+            className="rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
             title="Close (Esc)"
             aria-label="Close lightbox"
           >
@@ -386,21 +396,21 @@ export function ImageLightbox({
 
         {/* Prompt section – collapsed by default, capped height when expanded */}
         {currentImage.prompt && (
-          <div className="shrink-0 px-4 py-2 bg-gray-900/60 border-b border-gray-800 flex items-start gap-3">
+          <div className="flex items-start gap-3 border-b border-zinc-800 bg-zinc-900/60 px-4 py-2">
             <button
               type="button"
               onClick={() => setPromptExpanded(!promptExpanded)}
-              className={`flex-1 text-left text-sm text-gray-300 cursor-pointer ${promptExpanded ? 'max-h-20 overflow-y-auto' : 'overflow-hidden whitespace-nowrap text-ellipsis'}`}
+              className={`flex-1 cursor-pointer text-left text-sm text-zinc-300 ${promptExpanded ? 'max-h-20 overflow-y-auto' : 'overflow-hidden whitespace-nowrap text-ellipsis'}`}
               aria-expanded={promptExpanded}
               aria-label={promptExpanded ? 'Collapse prompt' : 'Expand prompt'}
             >
               {currentImage.prompt}
             </button>
-            <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
+            <div className="mt-0.5 flex shrink-0 items-center gap-1.5">
               <button
                 type="button"
                 onClick={handleCopyPrompt}
-                className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+                className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
                 title="Copy Prompt (P)"
                 aria-label="Copy prompt"
               >
@@ -409,7 +419,7 @@ export function ImageLightbox({
               {projectId && currentImage.productId && (
                 <a
                   href={buildRegenerateUrl(projectId, currentImage)}
-                  className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+                  className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
                   title="Regenerate with this prompt"
                 >
                   <ExternalLink className="w-4 h-4" />
@@ -420,12 +430,12 @@ export function ImageLightbox({
         )}
 
         {/* Image container */}
-        <div className="relative flex-1 min-h-0 flex items-center justify-center bg-gray-950 overflow-hidden">
+        <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-zinc-950">
           {hasPrev && (
             <button
               type="button"
               onClick={handlePrev}
-              className="absolute left-2 sm:left-4 z-10 p-2 sm:p-3 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
+              className="absolute left-2 z-10 rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:left-4 sm:p-3"
               aria-label="Previous image"
             >
               <ChevronLeft className="w-5 h-5 sm:w-6 sm:h-6" />
@@ -435,7 +445,7 @@ export function ImageLightbox({
             <button
               type="button"
               onClick={handleNext}
-              className="absolute right-2 sm:right-4 z-10 p-2 sm:p-3 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
+              className="absolute right-2 z-10 rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:right-4 sm:p-3"
               aria-label="Next image"
             >
               <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6" />
@@ -449,21 +459,29 @@ export function ImageLightbox({
               className="max-w-full max-h-full object-contain"
             />
           ) : (
-            <div className="text-gray-500">No image available</div>
+            <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-800 bg-zinc-900/40 px-6 py-8 text-center">
+              <div className="rounded-full bg-zinc-900 p-3">
+                <ImageOff className="h-6 w-6 text-zinc-500" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-zinc-300">No image available</p>
+                <p className="mt-1 text-xs text-zinc-500">This variation does not have a renderable preview yet.</p>
+              </div>
+            </div>
           )}
 
           {isApproved && (
-            <div className="absolute top-4 right-4 px-3 py-1.5 rounded-full text-sm font-medium bg-green-500/90 text-white">
+            <div className="absolute right-4 top-4 rounded-full bg-emerald-950/90 px-3 py-1.5 text-sm font-medium text-emerald-200">
               Approved
             </div>
           )}
           {isRejected && (
-            <div className="absolute top-4 right-4 px-3 py-1.5 rounded-full text-sm font-medium bg-red-500/90 text-white">
+            <div className="absolute right-4 top-4 rounded-full bg-red-950/90 px-3 py-1.5 text-sm font-medium text-red-200">
               Rejected
             </div>
           )}
           {isRequestChanges && (
-            <div className="absolute top-4 right-4 px-3 py-1.5 rounded-full text-sm font-medium bg-orange-500/90 text-white">
+            <div className="absolute right-4 top-4 rounded-full bg-amber-950/90 px-3 py-1.5 text-sm font-medium text-amber-200">
               Changes Requested
             </div>
           )}
@@ -471,8 +489,8 @@ export function ImageLightbox({
 
         {/* Notes input (for rejected or request_changes) */}
         {showNotesInput && (
-          <div className="px-4 py-2 bg-gray-900/60 border-t border-gray-800 flex items-center gap-3">
-            <span className={`text-sm shrink-0 ${isRequestChanges ? 'text-orange-400' : 'text-red-400'}`}>
+          <div className="flex items-center gap-3 border-t border-zinc-800 bg-zinc-900/60 px-4 py-2">
+            <span className={`shrink-0 text-sm ${isRequestChanges ? 'text-amber-400' : 'text-red-400'}`}>
               {isRequestChanges ? 'Requested changes:' : 'Reason:'}
             </span>
             <input
@@ -483,14 +501,14 @@ export function ImageLightbox({
               onBlur={() => void handleSaveNotes()}
               maxLength={300}
               placeholder={isRequestChanges ? 'Describe changes needed...' : 'Optional rejection reason...'}
-              className={`flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder:text-gray-500 focus:outline-none ${
-                isRequestChanges ? 'focus:border-orange-500' : 'focus:border-red-500'
+              className={`flex-1 rounded-lg border bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none ${
+                isRequestChanges ? 'border-zinc-700 focus:border-amber-500' : 'border-zinc-700 focus:border-red-500'
               }`}
             />
             {isRequestChanges && projectId && currentImage.productId && (
               <a
                 href={`/projects/${projectId}/products/${currentImage.productId}/fix-image?sourceImageId=${currentImage.id}`}
-                className="flex items-center gap-1.5 shrink-0 rounded-lg bg-orange-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-500 transition-colors"
+                className="flex shrink-0 items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-amber-500"
               >
                 <Wand2 className="w-3.5 h-3.5" />
                 Fix
@@ -499,10 +517,19 @@ export function ImageLightbox({
           </div>
         )}
 
+        {downloadNotice && (
+          <div className="border-t border-red-900/30 bg-red-950/20 px-4 py-3" role="status" aria-live="polite">
+            <div className="flex items-start gap-2 text-sm text-red-200">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+              <span>{downloadNotice}</span>
+            </div>
+          </div>
+        )}
+
         {/* Footer toolbar */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 px-3 py-2 sm:px-4 sm:py-3 bg-gray-900/80 rounded-b-xl">
+        <div className="flex flex-col items-stretch justify-between gap-2 rounded-b-xl bg-zinc-900/80 px-3 py-2 sm:flex-row sm:items-center sm:px-4 sm:py-3">
           {/* Thumbnail strip */}
-          <div className="flex items-center gap-2 overflow-x-auto max-w-full sm:max-w-[50%] pb-1">
+          <div className="flex max-w-full items-center gap-2 overflow-x-auto pb-1 sm:max-w-[50%]">
             {thumbnailItems.map((item) => (
               <LightboxThumbnailButton
                 key={item.id}
@@ -517,15 +544,15 @@ export function ImageLightbox({
           </div>
 
           {/* Action buttons */}
-          <div className="flex items-center gap-2 justify-end">
+          <div className="flex items-center justify-end gap-2">
             <button
               type="button"
               onClick={handleApprove}
               disabled={isUpdating}
-              className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors ${
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2 ${
                 isApproved
-                  ? 'bg-green-600 text-white hover:bg-green-700'
-                  : 'bg-gray-700 text-gray-200 hover:bg-green-600 hover:text-white'
+                  ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                  : 'bg-zinc-700 text-zinc-200 hover:bg-emerald-600 hover:text-white'
               }`}
               title="Approve (Enter or A)"
             >
@@ -536,10 +563,10 @@ export function ImageLightbox({
               type="button"
               onClick={handleReject}
               disabled={isUpdating}
-              className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors ${
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2 ${
                 isRejected
                   ? 'bg-red-600 text-white hover:bg-red-700'
-                  : 'bg-gray-700 text-gray-200 hover:bg-red-600 hover:text-white'
+                  : 'bg-zinc-700 text-zinc-200 hover:bg-red-600 hover:text-white'
               }`}
               title="Reject (R)"
             >
@@ -550,10 +577,10 @@ export function ImageLightbox({
               type="button"
               onClick={handleRequestChanges}
               disabled={isUpdating}
-              className={`flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors ${
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2 ${
                 isRequestChanges
-                  ? 'bg-orange-600 text-white hover:bg-orange-700'
-                  : 'bg-gray-700 text-gray-200 hover:bg-orange-600 hover:text-white'
+                  ? 'bg-amber-600 text-white hover:bg-amber-500'
+                  : 'bg-zinc-700 text-zinc-200 hover:bg-amber-600 hover:text-white'
               }`}
               title="Request Changes (C)"
             >
@@ -565,7 +592,7 @@ export function ImageLightbox({
                 type="button"
                 onClick={handlePermanentDelete}
                 disabled={isUpdating}
-                className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium transition-colors bg-gray-700 text-gray-200 hover:bg-red-800 hover:text-white"
+                className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-red-800 hover:text-white sm:gap-2 sm:px-4 sm:py-2"
                 title="Permanently Delete (Delete/Backspace)"
               >
                 {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
@@ -575,7 +602,7 @@ export function ImageLightbox({
             {projectId && currentImage.productId && currentImage.prompt && (
               <a
                 href={buildRegenerateUrl(projectId, currentImage)}
-                className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium bg-gray-700 text-gray-200 hover:bg-purple-600 hover:text-white transition-colors"
+                className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-blue-600 hover:text-white sm:gap-2 sm:px-4 sm:py-2"
                 title="Regenerate with this prompt"
               >
                 <RefreshCw className="w-4 h-4" />
@@ -583,8 +610,9 @@ export function ImageLightbox({
               </a>
             )}
             <button
+              type="button"
               onClick={handleDownload}
-              className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium bg-gray-700 text-gray-200 hover:bg-blue-600 hover:text-white transition-colors"
+              className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-blue-600 hover:text-white sm:gap-2 sm:px-4 sm:py-2"
               title="Download (D)"
             >
               <Download className="w-4 h-4" />
