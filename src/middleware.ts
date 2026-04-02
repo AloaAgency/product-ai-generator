@@ -27,7 +27,16 @@ const LOGIN_PAGE_PREFIX = `<!DOCTYPE html>
   <div class="card">
     <h1>Aloa AI Product Imager</h1>`
 
+// Inline script that disables the submit button and shows "Signing in…"
+// during form submission, matching the loading-state pattern used elsewhere
+// in the app (e.g. BugReportWidget sets isSubmitting on submit).
 const LOGIN_PAGE_SUFFIX = `  </div>
+  <script>
+    document.querySelector('form').addEventListener('submit', function() {
+      var btn = this.querySelector('[type="submit"]');
+      if (btn) { btn.disabled = true; btn.textContent = 'Signing in\u2026'; }
+    });
+  </script>
 </body>
 </html>`
 
