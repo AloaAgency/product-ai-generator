@@ -5,6 +5,7 @@ import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { ProjectHeader } from '@/components/ProjectHeader'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
+import { GalleryContextMenu, type ContextMenuAction } from '@/components/GalleryContextMenu'
 import type { GeneratedImage } from '@/lib/types'
 import {
   Filter,
@@ -61,6 +62,7 @@ export default function ProjectGalleryPage({
   const [requestChangesCount, setRequestChangesCount] = useState(0)
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const signedUrlsRef = useRef(signedUrlsById)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null } | null>(null)
 
   useEffect(() => {
     signedUrlsRef.current = signedUrlsById
@@ -202,6 +204,56 @@ export default function ProjectGalleryPage({
       setBulkDeleting(false)
     }
   }
+
+  const handleContextMenuAction = useCallback(async (action: ContextMenuAction, imageId: string) => {
+    const img = allImageOnly.find((i) => i.id === imageId)
+    if (!img) return
+
+    switch (action) {
+      case 'open': {
+        const idx = allImageOnly.findIndex((i) => i.id === imageId)
+        if (idx !== -1) setLightboxIndex(idx)
+        break
+      }
+      case 'approve':
+        await handleApprovalChange(imageId, img.approval_status === 'approved' ? null : 'approved')
+        break
+      case 'reject':
+        await handleApprovalChange(imageId, img.approval_status === 'rejected' ? null : 'rejected')
+        break
+      case 'request_changes':
+        await handleApprovalChange(imageId, img.approval_status === 'request_changes' ? null : 'request_changes')
+        break
+      case 'download': {
+        const signed = await ensureSignedUrls(imageId)
+        const url = signed?.download_url || signed?.signed_url || img.public_url
+        if (!url) break
+        try {
+          const fileName = img.storage_path?.split('/').pop() ?? `product-gen-${img.variation_number || 0}.png`
+          const resp = await fetch(url)
+          const blob = await resp.blob()
+          const blobUrl = URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          link.href = blobUrl
+          link.download = fileName
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+          URL.revokeObjectURL(blobUrl)
+        } catch (err) {
+          console.error('Download failed for image', imageId, err)
+        }
+        break
+      }
+      case 'delete':
+        if (img.approval_status === 'rejected') {
+          if (window.confirm('Permanently delete this image? This cannot be undone.')) {
+            await handleDelete(imageId)
+          }
+        }
+        break
+    }
+  }, [allImageOnly, handleApprovalChange, ensureSignedUrls, handleDelete])
 
   const handleNameSave = async (name: string) => {
     await updateProject(projectId, { name })
@@ -401,6 +453,11 @@ export default function ProjectGalleryPage({
                           setLightboxIndex(globalIndex)
                         }
                       }}
+                      onContextMenu={(e) => {
+                        if (isVideo) return
+                        e.preventDefault()
+                        setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status })
+                      }}
                       className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
                         isRejected
                           ? 'border-red-600/60 hover:border-red-500'
@@ -416,6 +473,8 @@ export default function ProjectGalleryPage({
                             <img
                               src={img.thumb_public_url}
                               alt="Video thumbnail"
+                              loading="lazy"
+                              decoding="async"
                               className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
                             />
                           ) : (
@@ -438,6 +497,8 @@ export default function ProjectGalleryPage({
                         <img
                           src={img.thumb_public_url ?? img.public_url ?? undefined}
                           alt={`Variation ${img.variation_number}`}
+                          loading="lazy"
+                          decoding="async"
                           className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
                         />
                       )}
@@ -490,6 +551,18 @@ export default function ProjectGalleryPage({
             />
           </div>
         </div>
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <GalleryContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          imageId={contextMenu.imageId}
+          approvalStatus={contextMenu.approvalStatus}
+          onAction={handleContextMenuAction}
+          onClose={() => setContextMenu(null)}
+        />
       )}
 
       {/* Lightbox */}

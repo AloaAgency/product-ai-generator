@@ -812,18 +812,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   errorLogs: [],
   loadingErrorLogs: false,
   fetchErrorLogs: async (projectId) => {
+    const requestKey = 'errorLogs'
+    const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingErrorLogs: true })
     try {
-      const data = await api(`/api/error-logs?project_id=${projectId}`)
+      const data = await api(`/api/error-logs?project_id=${encodeURIComponent(projectId.trim())}`)
+      if (!isLatestRequest(requestKey, requestVersion)) return
       set({ errorLogs: data })
-    } catch (err) {
-      console.error('[ErrorLogs] Failed to fetch', err)
+    } catch {
+      console.error('[ErrorLogs] Failed to fetch')
     } finally {
-      set({ loadingErrorLogs: false })
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ loadingErrorLogs: false })
+      }
     }
   },
   clearErrorLogs: async (projectId) => {
-    await api(`/api/error-logs?project_id=${projectId}`, { method: 'DELETE' })
+    await api(`/api/error-logs?project_id=${encodeURIComponent(projectId.trim())}`, { method: 'DELETE' })
     set({ errorLogs: [] })
   },
 

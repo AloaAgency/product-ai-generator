@@ -3,6 +3,8 @@ import type { ApprovalStatus, LightboxImage } from './ImageLightbox'
 export const getDisplayImageUrl = (image: LightboxImage) =>
   image.preview_signed_url ||
   image.preview_public_url ||
+  image.thumb_signed_url ||
+  image.thumb_public_url ||
   image.signed_url ||
   image.public_url ||
   null
