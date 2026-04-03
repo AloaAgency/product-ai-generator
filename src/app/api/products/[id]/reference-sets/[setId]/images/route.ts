@@ -9,6 +9,7 @@ export const maxDuration = 60
 export const dynamic = 'force-dynamic'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
+const MAX_REFERENCE_IMAGES = 14
 
 export async function POST(
   request: NextRequest,
@@ -40,7 +41,6 @@ export async function POST(
         .order('display_order', { ascending: false })
 
       const existingCount = existing?.length ?? 0
-      const MAX_REFERENCE_IMAGES = 14
 
       if (existingCount + uploads.length > MAX_REFERENCE_IMAGES) {
         return NextResponse.json(
@@ -100,8 +100,6 @@ export async function POST(
       .order('display_order', { ascending: false })
 
     const existingCount = existing?.length ?? 0
-
-    const MAX_REFERENCE_IMAGES = 14
 
     if (existingCount + files.length > MAX_REFERENCE_IMAGES) {
       return NextResponse.json(
