@@ -21,6 +21,8 @@ import {
   sanitizeWorkerErrorMessage,
 } from '@/lib/generation-worker-guards'
 
+type WorkerSupabase = ReturnType<typeof createServiceClient>
+
 type WorkerResult = {
   jobId: string
   processed: number
@@ -59,6 +61,69 @@ type GenerationJobRecord = {
 
 type WorkerReferenceImage = Pick<ReferenceImage, 'id' | 'reference_set_id' | 'storage_path' | 'mime_type' | 'display_order'>
 type GenerationJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+type Base64ReferenceImage = { mimeType: string; base64: string }
+
+type WorkerConfig = {
+  batchSize: number
+  parallelism: number
+  timeBudgetMs: number
+  variationTimeoutMs: number
+  maxVariationRetries: number
+  retryBaseMs: number
+}
+
+type JobCounts = {
+  completed: number
+  failed: number
+}
+
+type ProductRecord = {
+  project_id: string | null
+  global_style_settings: GlobalStyleSettings | null
+}
+
+type ProjectRecord = {
+  global_style_settings: GlobalStyleSettings | null
+}
+
+type SourceImageRecord = {
+  storage_path: string
+  mime_type: string
+}
+
+type LoadedImageJobResources = {
+  geminiApiKey?: string
+  referenceImages: Base64ReferenceImage[]
+}
+
+type VariationPlan = {
+  promptSlug: string
+  startingCompleted: number
+  startingFailed: number
+  variationNumbers: number[]
+}
+
+type ProgressState = {
+  processed: number
+  successCount: number
+  failCount: number
+  lastError: string | null
+}
+
+type VariationProcessingResult = {
+  processed: number
+  completedCount: number
+  failedCount: number
+  lastError: string | null
+  cancelled: boolean
+}
+
+const DEFAULT_TIME_BUDGET_MS = 760000
+const MAX_TIME_BUDGET_MS = 800000
+const DEFAULT_VARIATION_TIMEOUT_MS = 300000
+const DEFAULT_VARIATION_RETRIES = 2
+const DEFAULT_RETRY_BASE_MS = 1500
+const STATUS_REFRESH_INTERVAL_MS = 3000
 
 const GENERATION_JOB_SELECT = [
   'id',
@@ -92,8 +157,51 @@ const REFERENCE_IMAGE_SELECT = [
 
 const normalizeJobType = (job: GenerationJobRecord) => (job.job_type === 'video' ? 'video' : 'image')
 
+function getJobCounts(job: Pick<GenerationJobRecord, 'completed_count' | 'failed_count'>): JobCounts {
+  return {
+    completed: job.completed_count || 0,
+    failed: job.failed_count || 0,
+  }
+}
+
+function createWorkerResult(
+  jobId: string,
+  status: string,
+  counts: JobCounts,
+  processed = 0
+): WorkerResult {
+  return {
+    jobId,
+    processed,
+    completed: counts.completed,
+    failed: counts.failed,
+    status,
+  }
+}
+
+function parseWorkerConfig(options: WorkerOptions): WorkerConfig {
+  const variationTimeoutMsRaw = Number(process.env.GENERATION_VARIATION_TIMEOUT_MS)
+  const maxVariationRetriesRaw = Number(process.env.GENERATION_VARIATION_RETRIES)
+  const retryBaseMsRaw = Number(process.env.GENERATION_RETRY_BASE_MS)
+
+  return {
+    batchSize: parseWorkerPositiveInteger(options.batchSize, 1, { max: MAX_GENERATION_BATCH_SIZE }),
+    parallelism: parseWorkerPositiveInteger(options.parallelism, 1, { max: MAX_GENERATION_PARALLELISM }),
+    timeBudgetMs: parseWorkerPositiveInteger(options.timeBudgetMs, DEFAULT_TIME_BUDGET_MS, { max: MAX_TIME_BUDGET_MS }),
+    variationTimeoutMs: Number.isFinite(variationTimeoutMsRaw) && variationTimeoutMsRaw > 0
+      ? variationTimeoutMsRaw
+      : DEFAULT_VARIATION_TIMEOUT_MS,
+    maxVariationRetries: Number.isFinite(maxVariationRetriesRaw) && maxVariationRetriesRaw >= 0
+      ? maxVariationRetriesRaw
+      : DEFAULT_VARIATION_RETRIES,
+    retryBaseMs: Number.isFinite(retryBaseMsRaw) && retryBaseMsRaw > 0
+      ? retryBaseMsRaw
+      : DEFAULT_RETRY_BASE_MS,
+  }
+}
+
 async function updateGenerationJob(
-  supabase: ReturnType<typeof createServiceClient>,
+  supabase: WorkerSupabase,
   jobId: string,
   updates: Record<string, unknown>,
   options: {
@@ -127,16 +235,15 @@ async function updateGenerationJob(
 }
 
 async function markClaimedJobFailed(
-  supabase: ReturnType<typeof createServiceClient>,
+  supabase: WorkerSupabase,
   job: GenerationJobRecord,
   message: string
 ) {
-  const nextFailed = (job.failed_count || 0) + 1
   await updateGenerationJob(
     supabase,
     job.id,
     {
-      failed_count: nextFailed,
+      failed_count: getJobCounts(job).failed + 1,
       status: 'failed',
       error_message: message,
       completed_at: new Date().toISOString(),
@@ -149,21 +256,64 @@ async function markClaimedJobFailed(
   )
 }
 
+async function loadGenerationJob(supabase: WorkerSupabase, jobId: string): Promise<GenerationJobRecord> {
+  const { data, error } = await supabase
+    .from(T.generation_jobs)
+    .select(GENERATION_JOB_SELECT)
+    .eq('id', jobId)
+    .single()
+
+  if (error || !data) {
+    throw new Error('Generation job not found')
+  }
+
+  return data as unknown as GenerationJobRecord
+}
+
+async function getLatestJobResult(supabase: WorkerSupabase, jobId: string): Promise<WorkerResult> {
+  const { data } = await supabase
+    .from(T.generation_jobs)
+    .select('status, completed_count, failed_count')
+    .eq('id', jobId)
+    .single()
+
+  const counts = getJobCounts({
+    completed_count: data?.completed_count ?? 0,
+    failed_count: data?.failed_count ?? 0,
+  })
+
+  return createWorkerResult(jobId, data?.status || 'running', counts)
+}
+
+async function claimPendingJob(supabase: WorkerSupabase, job: GenerationJobRecord): Promise<GenerationJobRecord | null> {
+  const { data, error } = await supabase
+    .from(T.generation_jobs)
+    .update({ status: 'running', started_at: new Date().toISOString() })
+    .eq('id', job.id)
+    .eq('status', 'pending')
+    .select(GENERATION_JOB_SELECT)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to claim generation job: ${error.message}`)
+  }
+
+  return (data as unknown as GenerationJobRecord | null) ?? null
+}
+
+async function maybeReturnNonPendingJob(job: GenerationJobRecord): Promise<WorkerResult | null> {
+  if (job.status === 'pending') return null
+  return createWorkerResult(job.id, job.status, getJobCounts(job))
+}
+
 async function processVideoJob(
   job: GenerationJobRecord,
-  supabase: ReturnType<typeof createServiceClient>
+  supabase: WorkerSupabase
 ): Promise<WorkerResult> {
-  const completed = job.completed_count || 0
-  const failed = job.failed_count || 0
+  const counts = getJobCounts(job)
 
   if (job.status === 'completed' || job.status === 'cancelled') {
-    return {
-      jobId: job.id,
-      processed: 0,
-      completed,
-      failed,
-      status: job.status,
-    }
+    return createWorkerResult(job.id, job.status, counts)
   }
 
   if (job.status === 'pending') {
@@ -179,15 +329,14 @@ async function processVideoJob(
   }
 
   if (!job.scene_id) {
-    const message = 'Video job missing scene_id'
-    const nextFailed = failed + 1
+    const failedCounts = { ...counts, failed: counts.failed + 1 }
     await updateGenerationJob(
       supabase,
       job.id,
       {
         status: 'failed',
-        failed_count: nextFailed,
-        error_message: message,
+        failed_count: failedCounts.failed,
+        error_message: 'Video job missing scene_id',
         completed_at: new Date().toISOString(),
       },
       {
@@ -195,23 +344,17 @@ async function processVideoJob(
         context: 'Failed to persist missing scene_id failure',
       }
     )
-    return {
-      jobId: job.id,
-      processed: 1,
-      completed,
-      failed: nextFailed,
-      status: 'failed',
-    }
+    return createWorkerResult(job.id, 'failed', failedCounts, 1)
   }
 
   try {
     await generateSceneVideo(job.product_id, job.scene_id, job.generation_model || undefined, job.id)
-    const nextCompleted = completed + 1
+    const completedCounts = { ...counts, completed: counts.completed + 1 }
     await updateGenerationJob(
       supabase,
       job.id,
       {
-        completed_count: nextCompleted,
+        completed_count: completedCounts.completed,
         status: 'completed',
         completed_at: new Date().toISOString(),
       },
@@ -220,23 +363,16 @@ async function processVideoJob(
         context: 'Failed to persist completed video generation job',
       }
     )
-    return {
-      jobId: job.id,
-      processed: 1,
-      completed: nextCompleted,
-      failed,
-      status: 'completed',
-    }
+    return createWorkerResult(job.id, 'completed', completedCounts, 1)
   } catch (err) {
-    const message = sanitizeWorkerErrorMessage(err, 'Video generation failed')
-    const nextFailed = failed + 1
+    const failedCounts = { ...counts, failed: counts.failed + 1 }
     await updateGenerationJob(
       supabase,
       job.id,
       {
-        failed_count: nextFailed,
+        failed_count: failedCounts.failed,
         status: 'failed',
-        error_message: message,
+        error_message: sanitizeWorkerErrorMessage(err, 'Video generation failed'),
         completed_at: new Date().toISOString(),
       },
       {
@@ -244,13 +380,7 @@ async function processVideoJob(
         context: 'Failed to persist video generation failure',
       }
     )
-    return {
-      jobId: job.id,
-      processed: 1,
-      completed,
-      failed: nextFailed,
-      status: 'failed',
-    }
+    return createWorkerResult(job.id, 'failed', failedCounts, 1)
   }
 }
 
