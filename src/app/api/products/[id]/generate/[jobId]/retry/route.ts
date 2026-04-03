@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { processGenerationJob } from '@/lib/generation-worker'
 import { T } from '@/lib/db-tables'
+import { kickWorkerForJob, shouldRunVideoGenerationInline } from '@/lib/video-job-request'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -49,36 +50,10 @@ export async function POST(
       return NextResponse.json({ error: 'Failed to retry job' }, { status: 500 })
     }
 
-    const shouldRunInline =
-      process.env.INLINE_GENERATION === 'true' || process.env.NODE_ENV === 'development'
-
-    if (shouldRunInline) {
+    if (shouldRunVideoGenerationInline()) {
       void processGenerationJob(jobId)
     } else {
-      const cronSecret = process.env.CRON_SECRET
-      if (cronSecret) {
-        const url = new URL('/api/worker/generate', request.url)
-        url.searchParams.set('jobId', jobId)
-        void (async () => {
-          try {
-            const res = await fetch(url.toString(), {
-              method: 'GET',
-              headers: {
-                Authorization: `Bearer ${cronSecret}`,
-              },
-            })
-            console.log('[RetryGeneration] Worker kick', {
-              jobId,
-              status: res.status,
-            })
-          } catch (err) {
-            console.warn('[RetryGeneration] Worker kick failed', {
-              jobId,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        })()
-      }
+      kickWorkerForJob(jobId, request.url, '[RetryGeneration]')
     }
 
     return NextResponse.json({ job: updated }, { status: 200 })

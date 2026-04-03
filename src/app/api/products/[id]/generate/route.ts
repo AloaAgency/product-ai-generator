@@ -6,6 +6,7 @@ import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
 import { processGenerationJob } from '@/lib/generation-worker'
+import { kickWorkerForJob } from '@/lib/video-job-request'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -275,37 +276,11 @@ export async function POST(
       const finalBudget = Number.isFinite(overrideBudget) && overrideBudget > 0 ? overrideBudget : timeBudgetMs
       void processGenerationJob(job.id, { batchSize: finalBatch, parallelism: finalParallel, timeBudgetMs: finalBudget })
     } else {
-      const cronSecret = process.env.CRON_SECRET
-      if (cronSecret) {
-        const url = new URL('/api/worker/generate', request.url)
-        url.searchParams.set('jobId', job.id)
-        const batchSize = process.env.GENERATION_BATCH_SIZE
-        const parallelism = process.env.GENERATION_PARALLELISM
-        const budget = process.env.GENERATION_TIME_BUDGET_MS
-        if (batchSize) url.searchParams.set('batch', batchSize)
-        if (parallelism) url.searchParams.set('parallel', parallelism)
-        if (budget) url.searchParams.set('budget', budget)
-
-        void (async () => {
-          try {
-            const res = await fetch(url.toString(), {
-              method: 'GET',
-              headers: {
-                Authorization: `Bearer ${cronSecret}`,
-              },
-            })
-            console.log('[Generate] Worker kick', {
-              jobId: job.id,
-              status: res.status,
-            })
-          } catch (err) {
-            console.warn('[Generate] Worker kick failed', {
-              jobId: job.id,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        })()
-      }
+      kickWorkerForJob(job.id, request.url, '[Generate]', {
+        batch: process.env.GENERATION_BATCH_SIZE ?? '',
+        parallel: process.env.GENERATION_PARALLELISM ?? '',
+        budget: process.env.GENERATION_TIME_BUDGET_MS ?? '',
+      })
     }
 
     return NextResponse.json({ job }, { status: 201 })

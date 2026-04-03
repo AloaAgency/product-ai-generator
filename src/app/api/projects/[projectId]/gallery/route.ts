@@ -206,25 +206,11 @@ export async function GET(
       : result.filter((p) => p.images.length > 0)
 
     // Count rejected and request_changes images in parallel (for badge display)
-    const applyScopeToRejected = () => {
+    const scopedStatusCount = (status: string) => {
       const q = supabase
         .from(T.generated_images)
         .select('id', { count: 'exact', head: true })
-        .eq('approval_status', 'rejected')
-      if (jobIds.length > 0 && sceneIds.length > 0) {
-        return q.or(`job_id.in.(${jobIds.join(',')}),scene_id.in.(${sceneIds.join(',')})`)
-      } else if (jobIds.length > 0) {
-        return q.in('job_id', jobIds)
-      } else {
-        return q.in('scene_id', sceneIds)
-      }
-    }
-
-    const applyScopeToChanges = () => {
-      const q = supabase
-        .from(T.generated_images)
-        .select('id', { count: 'exact', head: true })
-        .eq('approval_status', 'request_changes')
+        .eq('approval_status', status)
       if (jobIds.length > 0 && sceneIds.length > 0) {
         return q.or(`job_id.in.(${jobIds.join(',')}),scene_id.in.(${sceneIds.join(',')})`)
       } else if (jobIds.length > 0) {
@@ -235,8 +221,8 @@ export async function GET(
     }
 
     const [rejectedResult, changesResult] = await Promise.all([
-      approvalStatus !== 'rejected' ? applyScopeToRejected() : Promise.resolve({ count: null }),
-      approvalStatus !== 'request_changes' ? applyScopeToChanges() : Promise.resolve({ count: null }),
+      approvalStatus !== 'rejected' ? scopedStatusCount('rejected') : Promise.resolve({ count: null }),
+      approvalStatus !== 'request_changes' ? scopedStatusCount('request_changes') : Promise.resolve({ count: null }),
     ])
 
     const rejectedCount = rejectedResult.count ?? 0
