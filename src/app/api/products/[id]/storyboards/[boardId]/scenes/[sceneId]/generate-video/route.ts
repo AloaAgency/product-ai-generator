@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processGenerationJob } from '@/lib/generation-worker'
-import { buildVideoJobRequest, shouldRunVideoGenerationInline } from '@/lib/video-job-request'
+import { buildVideoJobRequest, kickWorkerForJob, shouldRunVideoGenerationInline } from '@/lib/video-job-request'
 
 export const runtime = 'nodejs'
 export const maxDuration = 600
@@ -61,30 +61,7 @@ export async function POST(
     if (shouldRunInline) {
       void processGenerationJob(job.id)
     } else {
-      const cronSecret = process.env.CRON_SECRET
-      if (cronSecret) {
-        const url = new URL('/api/worker/generate', request.url)
-        url.searchParams.set('jobId', job.id)
-        void (async () => {
-          try {
-            const res = await fetch(url.toString(), {
-              method: 'GET',
-              headers: {
-                Authorization: `Bearer ${cronSecret}`,
-              },
-            })
-            console.log('[GenerateVideo] Worker kick', {
-              jobId: job.id,
-              status: res.status,
-            })
-          } catch (err) {
-            console.warn('[GenerateVideo] Worker kick failed', {
-              jobId: job.id,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        })()
-      }
+      kickWorkerForJob(job.id, request.url, '[GenerateVideo]')
     }
 
     return NextResponse.json({ job }, { status: 201 })
