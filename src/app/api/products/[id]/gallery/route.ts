@@ -116,14 +116,17 @@ export async function GET(
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
     }
 
-    // Sign thumbnail + full-size URLs for images and video URLs in parallel
+    // Sign only thumbnail URLs for images (full-size signed on demand by lightbox)
     const imageItems = (images || []).filter((img) => img.media_type !== 'video')
     const thumbPaths = imageItems
       .map((img) => img.thumb_storage_path)
       .filter(Boolean) as string[]
-    const imagePaths = imageItems
+    // For images without thumbnails, sign the full path as fallback
+    const fallbackPaths = imageItems
+      .filter((img) => !img.thumb_storage_path && img.storage_path)
       .map((img) => img.storage_path)
       .filter(Boolean) as string[]
+    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...fallbackPaths]))
 
     const videoItems = (images || []).filter((img) => img.media_type === 'video')
     const videoPaths = videoItems
@@ -132,8 +135,6 @@ export async function GET(
     const videoThumbPaths = videoItems
       .map((v) => v.thumb_storage_path)
       .filter(Boolean) as string[]
-
-    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...imagePaths]))
     const allVideoBucketPaths = [...videoPaths, ...videoThumbPaths]
 
     const [signedImageResult, signedVideoResult] = await Promise.all([
@@ -160,7 +161,7 @@ export async function GET(
       ...img,
       public_url: img.media_type === 'video'
         ? (signedVideos.get(img.storage_path) ?? null)
-        : (signedImageBucket.get(img.storage_path) ?? null),
+        : (!img.thumb_storage_path ? (signedImageBucket.get(img.storage_path) ?? null) : null),
       preview_public_url: null,
       thumb_public_url: img.media_type === 'video'
         ? (img.thumb_storage_path ? (signedVideos.get(img.thumb_storage_path) ?? null) : null)
