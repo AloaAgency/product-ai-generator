@@ -1,3 +1,6 @@
+import { createServiceClient } from '@/lib/supabase/server'
+import { T } from '@/lib/db-tables'
+
 type SceneVideoJobInput = {
   motion_prompt: string | null
   title: string | null
@@ -76,4 +79,54 @@ export function kickWorkerForJob(
       })
     }
   })()
+}
+
+type CreateSceneVideoJobResult =
+  | { job: Record<string, unknown>; error: null }
+  | { job: null; error: string }
+
+/**
+ * Fetches a storyboard scene, validates it, and inserts a video generation job.
+ * Returns the created job on success or an error string on failure.
+ * Used by both the standalone scenes route and the storyboard-nested scenes route.
+ */
+export async function createSceneVideoJob(
+  supabase: ReturnType<typeof createServiceClient>,
+  productId: string,
+  sceneId: string,
+  requestedModel?: string | null
+): Promise<CreateSceneVideoJobResult> {
+  const { data: scene, error: sceneError } = await supabase
+    .from(T.storyboard_scenes)
+    .select('*')
+    .eq('id', sceneId)
+    .single()
+
+  if (sceneError || !scene) return { job: null, error: 'Scene not found' }
+  if (!scene.motion_prompt) return { job: null, error: 'Scene has no motion prompt' }
+
+  const { model, resolution, aspectRatio, finalPrompt } = buildVideoJobRequest(scene, requestedModel)
+
+  const { data: job, error: jobError } = await supabase
+    .from(T.generation_jobs)
+    .insert({
+      product_id: productId,
+      prompt_template_id: null,
+      reference_set_id: null,
+      final_prompt: finalPrompt,
+      variation_count: 1,
+      resolution,
+      aspect_ratio: aspectRatio,
+      status: 'pending',
+      completed_count: 0,
+      failed_count: 0,
+      generation_model: model,
+      job_type: 'video',
+      scene_id: sceneId,
+    })
+    .select()
+    .single()
+
+  if (jobError || !job) return { job: null, error: 'Failed to create video job' }
+  return { job: job as Record<string, unknown>, error: null }
 }
