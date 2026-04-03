@@ -1,5 +1,7 @@
-import { createServiceClient } from '@/lib/supabase/server'
+import type { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+
+type ServiceClient = ReturnType<typeof createServiceClient>
 
 type SceneVideoJobInput = {
   motion_prompt: string | null
@@ -91,7 +93,7 @@ type CreateSceneVideoJobResult =
  * Used by both the standalone scenes route and the storyboard-nested scenes route.
  */
 export async function createSceneVideoJob(
-  supabase: ReturnType<typeof createServiceClient>,
+  supabase: ServiceClient,
   productId: string,
   sceneId: string,
   requestedModel?: string | null
