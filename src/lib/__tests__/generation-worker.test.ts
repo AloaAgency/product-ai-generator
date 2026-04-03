@@ -157,6 +157,60 @@ describe('processGenerationJob', () => {
     serviceClientState.current = null
   })
 
+  it('returns running jobs without reclaiming them', async () => {
+    const jobId = '00000000-0000-4000-8000-000000000000'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { id: jobId, status: 'running', completed_count: 2, failed_count: 1 },
+      },
+    ])
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 0,
+      completed: 2,
+      failed: 1,
+      status: 'running',
+    })
+    expect(serviceClientState.current?.updates).toHaveLength(0)
+  })
+
+  it('returns the latest job state when another worker claims the pending job first', async () => {
+    const jobId = '12345678-1234-4234-8234-123456789012'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { id: jobId, status: 'pending', completed_count: 1, failed_count: 0 },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: null,
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'running', completed_count: 1, failed_count: 0 },
+      },
+    ])
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 0,
+      completed: 1,
+      failed: 0,
+      status: 'running',
+    })
+    expect(serviceClientState.current?.updates).toHaveLength(1)
+  })
+
   it('marks a claimed image job as failed when required job data is missing', async () => {
     const jobId = '11111111-1111-4111-8111-111111111111'
     serviceClientState.current = createMockSupabase([
