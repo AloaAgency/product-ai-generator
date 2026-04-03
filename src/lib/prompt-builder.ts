@@ -3,6 +3,13 @@
  * Uses Claude to refine user prompts with global product style settings
  */
 
+/** Maximum character lengths for AI-interpolated fields — guards against injection and oversized API payloads */
+export const MAX_PRODUCT_NAME_LEN = 200
+export const MAX_PRODUCT_DESC_LEN = 500
+export const MAX_USER_PROMPT_LEN = 2000
+export const MAX_STYLE_VALUE_LEN = 500
+export const MAX_SUGGESTION_COUNT = 20
+
 export interface GlobalStyleSettings {
   subject_rule?: string
   lens?: string
@@ -53,8 +60,8 @@ export function buildFullPrompt(
   }
   parts.push(`REFERENCE RULE: ${refRule}`)
 
-  // User prompt
-  parts.push(`IMAGE TO GENERATE:\n${userPrompt.trim()}`)
+  // User prompt — truncated to prevent oversized API payloads
+  parts.push(`IMAGE TO GENERATE:\n${userPrompt.trim().slice(0, MAX_USER_PROMPT_LEN)}`)
 
   // Resolution/aspect suffix
   const resolution = settings.default_resolution || '4K'
@@ -77,12 +84,17 @@ export function buildPromptSuggestionSystemPrompt(
   settings: GlobalStyleSettings,
   count: number
 ): string {
+  // Sanitize interpolated fields to prevent prompt injection and oversized API payloads
+  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN)
+  const safeDesc = productDescription ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN) : null
+  const safeCount = Math.max(1, Math.min(Math.floor(count), MAX_SUGGESTION_COUNT))
+
   const styleBlock = Object.entries(settings)
-    .filter(([, v]) => typeof v === 'string' && v.trim())
-    .map(([k, v]) => `• ${k}: ${v}`)
+    .filter(([, v]) => typeof v === 'string' && (v as string).trim())
+    .map(([k, v]) => `• ${k}: ${(v as string).slice(0, MAX_STYLE_VALUE_LEN)}`)
     .join('\n')
 
-  return `You are a product photography director. Generate exactly ${count} unique image prompt ideas for the product "${productName}"${productDescription ? ` (${productDescription})` : ''}.
+  return `You are a product photography director. Generate exactly ${safeCount} unique image prompt ideas for the product "${safeName}"${safeDesc ? ` (${safeDesc})` : ''}.
 
 ${styleBlock ? `The product has these style requirements:\n${styleBlock}\n` : ''}
 
@@ -116,7 +128,13 @@ export function parsePromptSuggestions(raw: string): { name: string; prompt_text
         prompt_text: (p.prompt_text || p.promptText || p.prompt || '').trim(),
       }))
       .filter((p: { name: string; prompt_text: string }) => p.prompt_text.length > 0)
-  } catch {
+  } catch (err) {
+    console.warn(
+      '[parsePromptSuggestions] Failed to parse JSON response:',
+      err instanceof Error ? err.message : String(err),
+      '— raw snippet:',
+      jsonStr.slice(0, 200)
+    )
     return []
   }
 }

@@ -217,45 +217,28 @@ export async function GET(
       ? result
       : result.filter((p) => p.images.length > 0)
 
-    // Count rejected and request_changes images (for badge display)
-    let rejectedCount = 0
-    let requestChangesCount = 0
-
-    if (approvalStatus !== 'rejected') {
-      let rejectedQuery = supabase
+    // Count rejected and request_changes images in parallel (for badge display)
+    const scopedStatusCount = (status: string) => {
+      const q = supabase
         .from(T.generated_images)
         .select('id', { count: 'exact', head: true })
-        .eq('approval_status', 'rejected')
+        .eq('approval_status', status)
       if (jobIds.length > 0 && sceneIds.length > 0) {
-        rejectedQuery = rejectedQuery.or(
-          `job_id.in.(${jobIds.join(',')}),scene_id.in.(${sceneIds.join(',')})`
-        )
+        return q.or(`job_id.in.(${jobIds.join(',')}),scene_id.in.(${sceneIds.join(',')})`)
       } else if (jobIds.length > 0) {
-        rejectedQuery = rejectedQuery.in('job_id', jobIds)
+        return q.in('job_id', jobIds)
       } else {
-        rejectedQuery = rejectedQuery.in('scene_id', sceneIds)
+        return q.in('scene_id', sceneIds)
       }
-      const { count } = await rejectedQuery
-      rejectedCount = count ?? 0
     }
 
-    if (approvalStatus !== 'request_changes') {
-      let changesQuery = supabase
-        .from(T.generated_images)
-        .select('id', { count: 'exact', head: true })
-        .eq('approval_status', 'request_changes')
-      if (jobIds.length > 0 && sceneIds.length > 0) {
-        changesQuery = changesQuery.or(
-          `job_id.in.(${jobIds.join(',')}),scene_id.in.(${sceneIds.join(',')})`
-        )
-      } else if (jobIds.length > 0) {
-        changesQuery = changesQuery.in('job_id', jobIds)
-      } else {
-        changesQuery = changesQuery.in('scene_id', sceneIds)
-      }
-      const { count } = await changesQuery
-      requestChangesCount = count ?? 0
-    }
+    const [rejectedResult, changesResult] = await Promise.all([
+      approvalStatus !== 'rejected' ? scopedStatusCount('rejected') : Promise.resolve({ count: null }),
+      approvalStatus !== 'request_changes' ? scopedStatusCount('request_changes') : Promise.resolve({ count: null }),
+    ])
+
+    const rejectedCount = rejectedResult.count ?? 0
+    const requestChangesCount = changesResult.count ?? 0
 
     return NextResponse.json({ products: filtered, rejected_count: rejectedCount, request_changes_count: requestChangesCount })
   } catch (err) {

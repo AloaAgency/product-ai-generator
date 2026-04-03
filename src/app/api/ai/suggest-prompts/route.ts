@@ -13,8 +13,15 @@ import { logError } from '@/lib/error-logger'
 
 export async function POST(request: NextRequest) {
   let product_id: string | undefined
+
+  let body: { product_id?: string; count?: number }
   try {
-    const body = await request.json()
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 })
+  }
+
+  try {
     product_id = body.product_id
     const count = body.count ?? 5
 
@@ -29,7 +36,7 @@ export async function POST(request: NextRequest) {
 
     const { data: product, error: productError } = await supabase
       .from(T.products)
-      .select('*')
+      .select('id,name,description,project_id,global_style_settings')
       .eq('id', product_id)
       .single()
 
@@ -44,7 +51,7 @@ export async function POST(request: NextRequest) {
     if (typedProduct.project_id) {
       const { data: project } = await supabase
         .from(T.projects)
-        .select('*')
+        .select('global_style_settings')
         .eq('id', typedProduct.project_id)
         .single()
       if (project) {

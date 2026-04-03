@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE } from '@/lib/auth-constants'
 
 const PASSWORD = process.env.SITE_PASSWORD || 'aloaagency@1234'
-const COOKIE_NAME = 'site-auth'
 
 export async function POST(request: NextRequest) {
   const formData = await request.formData()
@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
 
   if (password === PASSWORD) {
     const response = NextResponse.redirect(new URL(safeRedirect, request.url))
-    response.cookies.set(COOKIE_NAME, 'authenticated', {
+    response.cookies.set(AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',

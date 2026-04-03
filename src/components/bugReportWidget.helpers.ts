@@ -1,12 +1,17 @@
 export const MAX_BUG_REPORT_IMAGES = 5
 export const MAX_BUG_REPORT_FILE_SIZE = 5 * 1024 * 1024
 export const ALLOWED_BUG_REPORT_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+export const MAX_BUG_REPORT_TITLE_LENGTH = 120
+export const MAX_BUG_REPORT_DESCRIPTION_LENGTH = 2000
+export const MAX_BUG_REPORT_CAPTION_LENGTH = 160
 
 export interface SelectedBugReportImage {
   file: File
   preview: string
   caption: string
 }
+
+export const clampBugReportText = (value: string, maxLength: number) => value.slice(0, maxLength)
 
 export const validateBugReportFiles = ({
   currentCount,
@@ -55,7 +60,7 @@ export const buildBugReportSubmission = ({
     imageField: `image_${index}`,
     captionField: `caption_${index}`,
     file: img.file,
-    caption: img.caption || `Screenshot ${index + 1}`,
+    caption: clampBugReportText(img.caption, MAX_BUG_REPORT_CAPTION_LENGTH) || `Screenshot ${index + 1}`,
   })),
   imageCount: String(images.length),
 })

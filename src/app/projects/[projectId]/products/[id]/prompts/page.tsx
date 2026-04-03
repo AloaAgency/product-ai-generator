@@ -164,12 +164,12 @@ export default function PromptsPage({
   }
 
   return (
-    <div className="min-h-screen bg-zinc-900 text-zinc-100 p-6 space-y-6 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between">
+    <div className="min-h-screen bg-zinc-900 text-zinc-100 p-4 sm:p-6 space-y-6 max-w-4xl mx-auto">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold">Prompt Templates</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <label
-            className={`inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-medium cursor-pointer hover:bg-zinc-700 transition-colors ${batchUploading ? 'opacity-40 pointer-events-none' : ''}`}
+            className={`inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-sm font-medium cursor-pointer hover:bg-zinc-700 transition-colors ${batchUploading ? 'opacity-40 pointer-events-none' : ''}`}
           >
             {batchUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
             Batch Upload
@@ -187,14 +187,14 @@ export default function PromptsPage({
           <a
             href="/sample-prompts.md"
             download
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 px-4 py-2.5 text-sm font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
           >
             <Download className="h-4 w-4" />
             Sample
           </a>
           <button
             onClick={() => setShowCreate(!showCreate)}
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
           >
             <Plus className="h-4 w-4" />
             New Template
@@ -212,7 +212,7 @@ export default function PromptsPage({
           <button
             key={f.value}
             onClick={() => setPromptTypeFilter(f.value)}
-            className={`flex items-center gap-1 rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+            className={`flex items-center gap-1 rounded-full px-3 py-2 min-h-[44px] sm:min-h-0 sm:py-1 text-sm font-medium transition-colors ${
               promptTypeFilter === f.value
                 ? 'bg-zinc-100 text-zinc-900'
                 : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
@@ -371,17 +371,17 @@ export default function PromptsPage({
                     <div className="flex items-center gap-1 shrink-0">
                       <button
                         onClick={() => startEdit(t)}
-                        className="rounded p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700 transition-colors"
+                        className="rounded p-2.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
                         title="Edit"
                       >
-                        <Pencil className="h-3.5 w-3.5" />
+                        <Pencil className="h-4 w-4" />
                       </button>
                       {confirmDeleteId === t.id ? (
                         <div className="flex items-center gap-1">
                           <button
                             onClick={() => handleDelete(t.id)}
                             disabled={deletingId === t.id}
-                            className="rounded px-2 py-1 text-xs font-medium text-red-400 hover:bg-red-900/30 transition-colors"
+                            className="rounded px-3 py-2.5 text-xs font-medium text-red-400 hover:bg-red-900/30 transition-colors min-h-[44px] flex items-center"
                           >
                             {deletingId === t.id ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -391,7 +391,7 @@ export default function PromptsPage({
                           </button>
                           <button
                             onClick={() => setConfirmDeleteId(null)}
-                            className="rounded px-2 py-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                            className="rounded px-3 py-2.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors min-h-[44px] flex items-center"
                           >
                             Cancel
                           </button>
@@ -399,10 +399,10 @@ export default function PromptsPage({
                       ) : (
                         <button
                           onClick={() => setConfirmDeleteId(t.id)}
-                          className="rounded p-1.5 text-zinc-500 hover:text-red-400 hover:bg-zinc-700 transition-colors"
+                          className="rounded p-2.5 text-zinc-500 hover:text-red-400 hover:bg-zinc-700 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
                           title="Delete"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <Trash2 className="h-4 w-4" />
                         </button>
                       )}
                     </div>

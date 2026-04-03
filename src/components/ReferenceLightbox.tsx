@@ -1,7 +1,8 @@
 'use client'
 
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useId } from 'react'
 import { X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 
 export interface ReferenceLightboxImage {
   id: string
@@ -22,6 +23,7 @@ export default function ReferenceLightbox({
   onClose,
   onNavigate,
 }: ReferenceLightboxProps) {
+  const dialogTitleId = useId()
   const currentImage = images[currentIndex]
   const hasPrev = currentIndex > 0
   const hasNext = currentIndex < images.length - 1
@@ -34,12 +36,14 @@ export default function ReferenceLightbox({
     if (hasNext) onNavigate(currentIndex + 1)
   }, [currentIndex, hasNext, onNavigate])
 
+  useModalShortcuts({
+    isOpen: true,
+    onClose,
+  })
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       switch (e.key) {
-        case 'Escape':
-          onClose()
-          break
         case 'ArrowLeft':
           handlePrev()
           break
@@ -50,22 +54,25 @@ export default function ReferenceLightbox({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, handlePrev, handleNext])
+  }, [handlePrev, handleNext])
 
   if (!currentImage) return null
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
-      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={dialogTitleId}
     >
+      <div className="fixed inset-0 bg-black/90" onClick={onClose} />
       <div
-        className="relative flex h-full max-h-[90vh] w-full max-w-5xl flex-col"
+        className="relative z-10 flex h-full max-h-[90vh] w-full max-w-5xl flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between rounded-t-xl bg-zinc-900/80 px-4 py-3">
           <div className="flex items-center gap-4">
-            <span className="text-sm font-medium text-zinc-100">
+            <span id={dialogTitleId} className="text-sm font-medium text-zinc-100">
               {currentImage.file_name ?? `Image ${currentIndex + 1}`}
             </span>
             <span className="text-xs text-zinc-400">
@@ -73,9 +80,11 @@ export default function ReferenceLightbox({
             </span>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
             title="Close (Esc)"
+            aria-label="Close lightbox"
           >
             <X className="h-5 w-5" />
           </button>
@@ -84,18 +93,22 @@ export default function ReferenceLightbox({
         <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-zinc-950">
           {hasPrev && (
             <button
+              type="button"
               onClick={handlePrev}
               className="absolute left-4 z-10 rounded-full bg-black/50 p-3 text-white transition-colors hover:bg-black/70"
               title="Previous (←)"
+              aria-label="Previous reference image"
             >
               <ChevronLeft className="h-6 w-6" />
             </button>
           )}
           {hasNext && (
             <button
+              type="button"
               onClick={handleNext}
               className="absolute right-4 z-10 rounded-full bg-black/50 p-3 text-white transition-colors hover:bg-black/70"
               title="Next (→)"
+              aria-label="Next reference image"
             >
               <ChevronRight className="h-6 w-6" />
             </button>

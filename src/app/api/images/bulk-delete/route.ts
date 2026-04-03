@@ -2,12 +2,21 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 
+const MAX_BULK_DELETE = 200
+
 export async function POST(request: NextRequest) {
   try {
     const { imageIds } = await request.json()
 
     if (!Array.isArray(imageIds) || imageIds.length === 0) {
       return NextResponse.json({ error: 'imageIds must be a non-empty array' }, { status: 400 })
+    }
+
+    if (imageIds.length > MAX_BULK_DELETE) {
+      return NextResponse.json(
+        { error: `Cannot delete more than ${MAX_BULK_DELETE} images in a single request` },
+        { status: 400 }
+      )
     }
 
     const supabase = createServiceClient()
