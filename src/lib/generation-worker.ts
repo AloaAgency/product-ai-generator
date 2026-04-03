@@ -384,457 +384,511 @@ async function processVideoJob(
   }
 }
 
+async function fetchProductRecord(supabase: WorkerSupabase, productId: string): Promise<ProductRecord> {
+  const { data, error } = await supabase
+    .from(T.products)
+    .select('project_id, global_style_settings')
+    .eq('id', productId)
+    .single()
+
+  if (error || !data) {
+    throw new Error(error?.message || 'Product not found for generation job')
+  }
+
+  return data as ProductRecord
+}
+
+async function fetchReferenceImages(
+  supabase: WorkerSupabase,
+  referenceSetId: string,
+  context: string
+): Promise<WorkerReferenceImage[]> {
+  const { data, error } = await supabase
+    .from(T.reference_images)
+    .select(REFERENCE_IMAGE_SELECT)
+    .eq('reference_set_id', referenceSetId)
+    .order('display_order', { ascending: true })
+
+  if (error) {
+    throw new Error(`${context}: ${error.message}`)
+  }
+
+  return (data || []) as unknown as WorkerReferenceImage[]
+}
+
+async function fetchSourceImage(
+  supabase: WorkerSupabase,
+  sourceImageId: string | null | undefined
+): Promise<SourceImageRecord | null> {
+  if (!sourceImageId) return null
+
+  const { data, error } = await supabase
+    .from(T.generated_images)
+    .select('storage_path, mime_type')
+    .eq('id', sourceImageId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to load source image: ${error.message}`)
+  }
+
+  return (data as SourceImageRecord | null) ?? null
+}
+
+async function resolveGeminiApiKeyForJob(
+  supabase: WorkerSupabase,
+  product: ProductRecord
+): Promise<string | undefined> {
+  const productKey = resolveGoogleApiKey(product.global_style_settings)
+  if (productKey || !product.project_id) return productKey
+
+  const { data: project, error } = await supabase
+    .from(T.projects)
+    .select('global_style_settings')
+    .eq('id', product.project_id)
+    .single()
+
+  if (error) {
+    throw new Error(`Failed to load project settings: ${error.message}`)
+  }
+
+  return resolveGoogleApiKey((project as ProjectRecord | null)?.global_style_settings)
+}
+
+function limitReferenceImages(
+  images: WorkerReferenceImage[],
+  limit: number | null | undefined
+): WorkerReferenceImage[] {
+  const maxImages = limit ?? images.length
+  return images.slice(0, maxImages)
+}
+
+async function downloadStorageBase64(
+  supabase: WorkerSupabase,
+  bucket: string,
+  storagePath: string,
+  mimeType: string,
+  context: string
+): Promise<Base64ReferenceImage | null> {
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .download(storagePath)
+
+  if (error) {
+    throw new Error(`${context}: ${error.message}`)
+  }
+
+  if (!data) return null
+
+  const arrayBuffer = await data.arrayBuffer()
+  return {
+    mimeType,
+    base64: Buffer.from(arrayBuffer).toString('base64'),
+  }
+}
+
+async function buildReferenceImagePayloads(
+  supabase: WorkerSupabase,
+  sourceImage: SourceImageRecord | null,
+  referenceImages: WorkerReferenceImage[]
+): Promise<Base64ReferenceImage[]> {
+  const sourcePayload = sourceImage
+    ? await downloadStorageBase64(
+      supabase,
+      'generated-images',
+      sourceImage.storage_path,
+      sourceImage.mime_type,
+      'Failed to download source image'
+    )
+    : null
+
+  const referencePayloads = await Promise.all(
+    referenceImages.map((image) => downloadStorageBase64(
+      supabase,
+      'reference-images',
+      image.storage_path,
+      image.mime_type,
+      'Failed to download reference image'
+    ))
+  )
+
+  return [
+    ...(sourcePayload ? [sourcePayload] : []),
+    ...referencePayloads.filter((image): image is Base64ReferenceImage => image !== null),
+  ]
+}
+
+async function loadImageJobResources(
+  supabase: WorkerSupabase,
+  job: GenerationJobRecord
+): Promise<LoadedImageJobResources> {
+  if (!job.reference_set_id) {
+    throw new Error('Image generation job missing reference_set_id')
+  }
+
+  const [product, productReferenceImages, textureReferenceImages, sourceImage] = await Promise.all([
+    fetchProductRecord(supabase, job.product_id),
+    fetchReferenceImages(supabase, job.reference_set_id, 'Failed to load reference images'),
+    job.texture_set_id
+      ? fetchReferenceImages(supabase, job.texture_set_id, 'Failed to load texture reference images')
+      : Promise.resolve([]),
+    fetchSourceImage(supabase, job.source_image_id),
+  ])
+
+  const limitedReferenceImages = [
+    ...limitReferenceImages(productReferenceImages, job.product_image_count),
+    ...limitReferenceImages(textureReferenceImages, job.texture_image_count),
+  ]
+
+  return {
+    geminiApiKey: await resolveGeminiApiKeyForJob(supabase, product),
+    referenceImages: await buildReferenceImagePayloads(supabase, sourceImage, limitedReferenceImages),
+  }
+}
+
+function createVariationPlan(job: GenerationJobRecord, batchSize: number): VariationPlan {
+  const counts = getJobCounts(job)
+  const remaining = job.variation_count - counts.completed - counts.failed
+  const toProcess = Math.max(0, Math.min(batchSize, remaining))
+
+  return {
+    promptSlug: slugify(job.final_prompt, 30),
+    startingCompleted: counts.completed,
+    startingFailed: counts.failed,
+    variationNumbers: Array.from(
+      { length: toProcess },
+      (_, index) => counts.completed + counts.failed + index + 1
+    ),
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function jitter(ms: number) {
+  return ms + Math.floor(Math.random() * 250)
+}
+
+function isRetriableError(err: unknown) {
+  const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase()
+  return (
+    message.includes('rate limit') ||
+    message.includes('429') ||
+    message.includes('timeout') ||
+    message.includes('aborted') ||
+    message.includes('abort') ||
+    message.includes('server error') ||
+    message.includes('503') ||
+    message.includes('502')
+  )
+}
+
+async function persistProgress(
+  supabase: WorkerSupabase,
+  jobId: string,
+  progress: ProgressState,
+  plan: VariationPlan
+) {
+  await updateGenerationJob(
+    supabase,
+    jobId,
+    {
+      completed_count: plan.startingCompleted + progress.successCount,
+      failed_count: plan.startingFailed + progress.failCount,
+      ...(progress.lastError ? { error_message: progress.lastError } : {}),
+    },
+    {
+      expectedStatuses: ['pending', 'running'],
+      allowNoop: true,
+      context: 'Failed to persist generation job progress',
+    }
+  )
+}
+
+async function runVariation(
+  supabase: WorkerSupabase,
+  job: GenerationJobRecord,
+  variationNumber: number,
+  promptSlug: string,
+  geminiApiKey: string | undefined,
+  referenceImages: Base64ReferenceImage[],
+  variationTimeoutMs: number
+) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), variationTimeoutMs)
+
+  try {
+    const result = await generateGeminiImage({
+      prompt: job.final_prompt,
+      resolution: job.resolution as '2K' | '4K',
+      aspectRatio: job.aspect_ratio as '16:9' | '1:1' | '9:16',
+      referenceImages,
+      apiKey: geminiApiKey,
+      signal: controller.signal,
+    })
+
+    const imageBuffer = Buffer.from(result.base64Data, 'base64')
+    const extension = resolveExtension(result.mimeType)
+    const thumbnail = await createThumbnail(imageBuffer)
+    const preview = await createPreview(imageBuffer)
+
+    const storagePath = buildImageStoragePath(job.product_id, job.id, variationNumber, promptSlug, extension)
+    const thumbPath = buildThumbnailPath(storagePath, thumbnail.extension)
+    const previewPath = buildPreviewPath(storagePath, preview.extension)
+
+    const [
+      { error: imageUploadError },
+      { error: thumbUploadError },
+      { error: previewUploadError },
+    ] = await Promise.all([
+      supabase.storage
+        .from('generated-images')
+        .upload(storagePath, imageBuffer, { contentType: result.mimeType }),
+      supabase.storage
+        .from('generated-images')
+        .upload(thumbPath, thumbnail.buffer, { contentType: thumbnail.mimeType }),
+      supabase.storage
+        .from('generated-images')
+        .upload(previewPath, preview.buffer, { contentType: preview.mimeType }),
+    ])
+
+    if (imageUploadError) {
+      throw new Error(`Failed to upload generated image: ${imageUploadError.message}`)
+    }
+    if (thumbUploadError) {
+      throw new Error(`Failed to upload image thumbnail: ${thumbUploadError.message}`)
+    }
+    if (previewUploadError) {
+      throw new Error(`Failed to upload image preview: ${previewUploadError.message}`)
+    }
+
+    const { error: insertError } = await supabase.from(T.generated_images).insert({
+      job_id: job.id,
+      variation_number: variationNumber,
+      storage_path: storagePath,
+      thumb_storage_path: thumbPath,
+      preview_storage_path: previewPath,
+      mime_type: result.mimeType,
+      file_size: imageBuffer.length,
+      approval_status: 'pending',
+    })
+
+    if (insertError) {
+      throw new Error(`Failed to record generated image: ${insertError.message}`)
+    }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function runVariationWithRetry(
+  supabase: WorkerSupabase,
+  job: GenerationJobRecord,
+  variationNumber: number,
+  promptSlug: string,
+  resources: LoadedImageJobResources,
+  config: WorkerConfig
+) {
+  let lastError: unknown = null
+
+  for (let attempt = 0; attempt <= config.maxVariationRetries; attempt += 1) {
+    try {
+      await runVariation(
+        supabase,
+        job,
+        variationNumber,
+        promptSlug,
+        resources.geminiApiKey,
+        resources.referenceImages,
+        config.variationTimeoutMs
+      )
+      return
+    } catch (err) {
+      lastError = err
+      if (attempt >= config.maxVariationRetries || !isRetriableError(err)) {
+        throw err
+      }
+      await sleep(jitter(config.retryBaseMs * Math.pow(2, attempt)))
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Variation failed')
+}
+
+function createShouldStopChecker(
+  supabase: WorkerSupabase,
+  jobId: string,
+  timeBudgetMs: number
+) {
+  const startedAt = Date.now()
+  let cancelled = false
+  let lastStatusCheckAt = 0
+
+  const shouldStop = async () => {
+    if (Date.now() - startedAt > timeBudgetMs) return true
+    if (Date.now() - lastStatusCheckAt < STATUS_REFRESH_INTERVAL_MS) return cancelled
+
+    lastStatusCheckAt = Date.now()
+    const { data, error } = await supabase
+      .from(T.generation_jobs)
+      .select('status')
+      .eq('id', jobId)
+      .single()
+
+    if (error) {
+      throw new Error(`Failed to refresh generation job status: ${error.message}`)
+    }
+
+    cancelled = data?.status === 'cancelled'
+    return cancelled
+  }
+
+  return {
+    shouldStop,
+    wasCancelled: () => cancelled,
+  }
+}
+
+async function processVariations(
+  supabase: WorkerSupabase,
+  job: GenerationJobRecord,
+  plan: VariationPlan,
+  resources: LoadedImageJobResources,
+  config: WorkerConfig
+): Promise<VariationProcessingResult> {
+  const progress: ProgressState = {
+    processed: 0,
+    successCount: 0,
+    failCount: 0,
+    lastError: null,
+  }
+
+  let nextIndex = 0
+  const stopChecker = createShouldStopChecker(supabase, job.id, config.timeBudgetMs)
+
+  const worker = async () => {
+    while (nextIndex < plan.variationNumbers.length) {
+      if (await stopChecker.shouldStop()) {
+        break
+      }
+
+      const variationNumber = plan.variationNumbers[nextIndex]
+      nextIndex += 1
+
+      try {
+        await runVariationWithRetry(supabase, job, variationNumber, plan.promptSlug, resources, config)
+        progress.successCount += 1
+      } catch (err) {
+        progress.failCount += 1
+        progress.lastError = sanitizeWorkerErrorMessage(err, 'Variation failed')
+      } finally {
+        progress.processed += 1
+        await persistProgress(supabase, job.id, progress, plan)
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(config.parallelism, plan.variationNumbers.length) },
+      () => worker()
+    )
+  )
+
+  return {
+    processed: progress.processed,
+    completedCount: plan.startingCompleted + progress.successCount,
+    failedCount: plan.startingFailed + progress.failCount,
+    lastError: progress.lastError,
+    cancelled: stopChecker.wasCancelled(),
+  }
+}
+
+async function persistFinalImageJobState(
+  supabase: WorkerSupabase,
+  job: GenerationJobRecord,
+  result: VariationProcessingResult
+) {
+  if (result.cancelled) {
+    return createWorkerResult(
+      job.id,
+      'cancelled',
+      { completed: result.completedCount, failed: result.failedCount },
+      result.processed
+    )
+  }
+
+  const finalCompleted = result.completedCount + result.failedCount >= job.variation_count
+  const allFailed = finalCompleted && result.completedCount === 0 && result.failedCount > 0
+  const finalStatus = finalCompleted
+    ? allFailed ? 'failed' : 'completed'
+    : 'pending'
+
+  const updates: Record<string, unknown> = {
+    completed_count: result.completedCount,
+    failed_count: result.failedCount,
+    status: finalStatus,
+    ...(result.lastError ? { error_message: result.lastError } : {}),
+  }
+
+  if (finalCompleted) {
+    updates.completed_at = new Date().toISOString()
+    if (allFailed) {
+      updates.error_message = result.lastError || 'All variations failed'
+    }
+  }
+
+  await updateGenerationJob(
+    supabase,
+    job.id,
+    updates,
+    {
+      expectedStatuses: ['pending', 'running'],
+      allowNoop: false,
+      context: 'Failed to persist final generation job state',
+    }
+  )
+
+  return createWorkerResult(
+    job.id,
+    finalStatus,
+    { completed: result.completedCount, failed: result.failedCount },
+    result.processed
+  )
+}
+
 export async function processGenerationJob(jobId: string, options: WorkerOptions = {}): Promise<WorkerResult> {
   if (!isValidGenerationJobId(jobId)) {
     throw new Error('Invalid generation job id')
   }
 
   const supabase = createServiceClient()
-  const batchSize = parseWorkerPositiveInteger(options.batchSize, 1, { max: MAX_GENERATION_BATCH_SIZE })
-  const parallelism = parseWorkerPositiveInteger(options.parallelism, 1, { max: MAX_GENERATION_PARALLELISM })
-  const timeBudgetMs = parseWorkerPositiveInteger(options.timeBudgetMs, 760000, { max: 800000 })
-  const variationTimeoutMsRaw = Number(process.env.GENERATION_VARIATION_TIMEOUT_MS)
-  const variationTimeoutMs = Number.isFinite(variationTimeoutMsRaw) && variationTimeoutMsRaw > 0
-    ? variationTimeoutMsRaw
-    : 300000
-  const maxVariationRetriesRaw = Number(process.env.GENERATION_VARIATION_RETRIES)
-  const maxVariationRetries = Number.isFinite(maxVariationRetriesRaw) && maxVariationRetriesRaw >= 0
-    ? maxVariationRetriesRaw
-    : 2
-  const retryBaseMsRaw = Number(process.env.GENERATION_RETRY_BASE_MS)
-  const retryBaseMs = Number.isFinite(retryBaseMsRaw) && retryBaseMsRaw > 0
-    ? retryBaseMsRaw
-    : 1500
+  const config = parseWorkerConfig(options)
+  const initialJob = await loadGenerationJob(supabase, jobId)
+  const earlyResult = await maybeReturnNonPendingJob(initialJob)
 
-  const { data: initialJob, error: jobError } = await supabase
-    .from(T.generation_jobs)
-    .select(GENERATION_JOB_SELECT)
-    .eq('id', jobId)
-    .single()
-
-  if (jobError || !initialJob) {
-    throw new Error('Generation job not found')
+  if (earlyResult) {
+    return earlyResult
   }
 
-  let job = initialJob as unknown as GenerationJobRecord
-
-  if (job.status === 'completed' || job.status === 'cancelled') {
-    return {
-      jobId,
-      processed: 0,
-      completed: job.completed_count || 0,
-      failed: job.failed_count || 0,
-      status: job.status,
-    }
-  }
-
-  // Only one worker should claim a pending job. Running jobs are already owned by another worker.
-  if (job.status === 'running') {
-    return {
-      jobId,
-      processed: 0,
-      completed: job.completed_count || 0,
-      failed: job.failed_count || 0,
-      status: job.status,
-    }
-  }
-
-  if (job.status !== 'pending') {
-    return {
-      jobId,
-      processed: 0,
-      completed: job.completed_count || 0,
-      failed: job.failed_count || 0,
-      status: job.status,
-    }
-  }
-
-  const { data: claimedJob, error: claimError } = await supabase
-    .from(T.generation_jobs)
-    .update({ status: 'running', started_at: new Date().toISOString() })
-    .eq('id', job.id)
-    .eq('status', 'pending')
-    .select(GENERATION_JOB_SELECT)
-    .maybeSingle()
-
-  if (claimError) {
-    throw new Error(`Failed to claim generation job: ${claimError.message}`)
-  }
-
+  const claimedJob = await claimPendingJob(supabase, initialJob)
   if (!claimedJob) {
-    const { data: latestJob } = await supabase
-      .from(T.generation_jobs)
-      .select('status, completed_count, failed_count')
-      .eq('id', job.id)
-      .single()
-
-    return {
-      jobId,
-      processed: 0,
-      completed: latestJob?.completed_count || 0,
-      failed: latestJob?.failed_count || 0,
-      status: latestJob?.status || 'running',
-    }
+    return getLatestJobResult(supabase, jobId)
   }
-
-  job = claimedJob as unknown as GenerationJobRecord
 
   try {
-    const jobType = normalizeJobType(job)
-    if (jobType === 'video') {
-      return processVideoJob(job, supabase)
+    if (normalizeJobType(claimedJob) === 'video') {
+      return processVideoJob(claimedJob, supabase)
     }
 
-    if (!job.reference_set_id) {
-      throw new Error('Image generation job missing reference_set_id')
-    }
-
-    const productPromise = supabase
-      .from(T.products)
-      .select('project_id, global_style_settings')
-      .eq('id', job.product_id)
-      .single()
-
-    const productReferenceImagesPromise = supabase
-      .from(T.reference_images)
-      .select(REFERENCE_IMAGE_SELECT)
-      .eq('reference_set_id', job.reference_set_id)
-      .order('display_order', { ascending: true })
-
-    const textureReferenceImagesPromise = job.texture_set_id
-      ? supabase
-        .from(T.reference_images)
-        .select(REFERENCE_IMAGE_SELECT)
-        .eq('reference_set_id', job.texture_set_id)
-        .order('display_order', { ascending: true })
-      : Promise.resolve({ data: null, error: null })
-
-    const sourceImagePromise = job.source_image_id
-      ? supabase
-        .from(T.generated_images)
-        .select('storage_path, mime_type')
-        .eq('id', job.source_image_id)
-        .maybeSingle()
-      : Promise.resolve({ data: null, error: null })
-
-    const [
-      { data: product, error: productError },
-      { data: refImages, error: refImagesError },
-      { data: texImages, error: textureImagesError },
-      { data: sourceImg, error: sourceImageError },
-    ] = await Promise.all([
-      productPromise,
-      productReferenceImagesPromise,
-      textureReferenceImagesPromise,
-      sourceImagePromise,
-    ])
-
-    if (productError || !product) {
-      throw new Error(productError?.message || 'Product not found for generation job')
-    }
-
-    if (refImagesError) {
-      throw new Error(`Failed to load reference images: ${refImagesError.message}`)
-    }
-
-    if (textureImagesError) {
-      throw new Error(`Failed to load texture reference images: ${textureImagesError.message}`)
-    }
-
-    if (sourceImageError) {
-      throw new Error(`Failed to load source image: ${sourceImageError.message}`)
-    }
-
-    let geminiApiKey = resolveGoogleApiKey(product.global_style_settings as GlobalStyleSettings | null)
-
-    if (!geminiApiKey && product.project_id) {
-      const { data: project, error: projectError } = await supabase
-        .from(T.projects)
-        .select('global_style_settings')
-        .eq('id', product.project_id)
-        .single()
-      if (projectError) {
-        throw new Error(`Failed to load project settings: ${projectError.message}`)
-      }
-      geminiApiKey = resolveGoogleApiKey(project?.global_style_settings as GlobalStyleSettings | null)
-    }
-
-  const referenceImages = (refImages || []) as unknown as WorkerReferenceImage[]
-  const productImageLimit = job.product_image_count ?? referenceImages.length
-  const limitedProductImages = referenceImages.slice(0, productImageLimit)
-
-  let textureImages: WorkerReferenceImage[] = []
-  if (job.texture_set_id && texImages) {
-    textureImages = (texImages || []) as unknown as WorkerReferenceImage[]
-    const textureImageLimit = job.texture_image_count ?? textureImages.length
-    textureImages = textureImages.slice(0, textureImageLimit)
-  }
-
-  // Combine product images first, then texture images
-  const allReferenceImages = [...limitedProductImages, ...textureImages]
-  const refImagesBase64: { mimeType: string; base64: string }[] = []
-
-    if (sourceImg) {
-      const { data: sourceFileData, error: sourceDownloadError } = await supabase.storage
-        .from('generated-images')
-        .download(sourceImg.storage_path)
-      if (sourceDownloadError) {
-        throw new Error(`Failed to download source image: ${sourceDownloadError.message}`)
-      }
-      if (sourceFileData) {
-        const arrayBuffer = await sourceFileData.arrayBuffer()
-        const base64 = Buffer.from(arrayBuffer).toString('base64')
-        refImagesBase64.push({ mimeType: sourceImg.mime_type, base64 })
-      }
-    }
-
-    const downloadedReferenceImages = await Promise.all(
-      allReferenceImages.map(async (refImg) => {
-        const { data: fileData, error: fileError } = await supabase.storage
-          .from('reference-images')
-          .download(refImg.storage_path)
-        if (fileError) {
-          throw new Error(`Failed to download reference image: ${fileError.message}`)
-        }
-        if (!fileData) return null
-        const arrayBuffer = await fileData.arrayBuffer()
-        return {
-          mimeType: refImg.mime_type,
-          base64: Buffer.from(arrayBuffer).toString('base64'),
-        }
-      })
-    )
-    refImagesBase64.push(
-      ...downloadedReferenceImages.filter(
-        (image): image is { mimeType: string; base64: string } => image !== null
-      )
-    )
-
-  const promptSlug = slugify(job.final_prompt, 30)
-  const startingCompleted = job.completed_count || 0
-  const startingFailed = job.failed_count || 0
-  const remaining = job.variation_count - startingCompleted - startingFailed
-  const toProcess = Math.max(0, Math.min(batchSize, remaining))
-  const variationNumbers = Array.from({ length: toProcess }, (_, i) => startingCompleted + startingFailed + i + 1)
-
-  let processed = 0
-  let successCount = 0
-  let failCount = 0
-  let lastError: string | null = null
-
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-  const jitter = (ms: number) => ms + Math.floor(Math.random() * 250)
-  const isRetriableError = (err: unknown) => {
-    const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase()
-    return (
-      message.includes('rate limit') ||
-      message.includes('429') ||
-      message.includes('timeout') ||
-      message.includes('aborted') ||
-      message.includes('abort') ||
-      message.includes('server error') ||
-      message.includes('503') ||
-      message.includes('502')
-    )
-  }
-
-  const runVariation = async (variationNumber: number) => {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), variationTimeoutMs)
-    try {
-      const result = await generateGeminiImage({
-        prompt: job.final_prompt,
-        resolution: job.resolution as '2K' | '4K',
-        aspectRatio: job.aspect_ratio as '16:9' | '1:1' | '9:16',
-        referenceImages: refImagesBase64,
-        apiKey: geminiApiKey,
-        signal: controller.signal,
-      })
-
-      const imageBuffer = Buffer.from(result.base64Data, 'base64')
-      const ext = resolveExtension(result.mimeType)
-
-      const thumb = await createThumbnail(imageBuffer)
-      const preview = await createPreview(imageBuffer)
-
-      const storagePath = buildImageStoragePath(job.product_id, job.id, variationNumber, promptSlug, ext)
-      const thumbPath = buildThumbnailPath(storagePath, thumb.extension)
-      const previewPath = buildPreviewPath(storagePath, preview.extension)
-
-      const [
-        { error: imageUploadError },
-        { error: thumbUploadError },
-        { error: previewUploadError },
-      ] = await Promise.all([
-        supabase.storage
-          .from('generated-images')
-          .upload(storagePath, imageBuffer, { contentType: result.mimeType }),
-        supabase.storage
-          .from('generated-images')
-          .upload(thumbPath, thumb.buffer, { contentType: thumb.mimeType }),
-        supabase.storage
-          .from('generated-images')
-          .upload(previewPath, preview.buffer, { contentType: preview.mimeType }),
-      ])
-
-      if (imageUploadError) {
-        throw new Error(`Failed to upload generated image: ${imageUploadError.message}`)
-      }
-      if (thumbUploadError) {
-        throw new Error(`Failed to upload image thumbnail: ${thumbUploadError.message}`)
-      }
-      if (previewUploadError) {
-        throw new Error(`Failed to upload image preview: ${previewUploadError.message}`)
-      }
-
-      const { error: insertError } = await supabase.from(T.generated_images).insert({
-        job_id: job.id,
-        variation_number: variationNumber,
-        storage_path: storagePath,
-        thumb_storage_path: thumbPath,
-        preview_storage_path: previewPath,
-        mime_type: result.mimeType,
-        file_size: imageBuffer.length,
-        approval_status: 'pending',
-      })
-
-      if (insertError) {
-        throw new Error(`Failed to record generated image: ${insertError.message}`)
-      }
-    } finally {
-      clearTimeout(timeout)
-    }
-  }
-
-  const runVariationWithRetry = async (variationNumber: number) => {
-    let lastError: unknown = null
-    for (let attempt = 0; attempt <= maxVariationRetries; attempt++) {
-      try {
-        await runVariation(variationNumber)
-        return
-      } catch (err) {
-        lastError = err
-        if (attempt >= maxVariationRetries || !isRetriableError(err)) {
-          throw err
-        }
-        const delay = jitter(retryBaseMs * Math.pow(2, attempt))
-        await sleep(delay)
-      }
-    }
-    throw lastError instanceof Error ? lastError : new Error('Variation failed')
-  }
-
-  let index = 0
-  const startedAt = Date.now()
-  let cancelled = false
-  let lastStatusCheck = 0
-  const shouldStop = async () => {
-    if (Date.now() - startedAt > timeBudgetMs) return true
-    if (Date.now() - lastStatusCheck < 3000) return cancelled
-    lastStatusCheck = Date.now()
-    const { data, error: statusError } = await supabase
-      .from(T.generation_jobs)
-      .select('status')
-      .eq('id', job.id)
-      .single()
-    if (statusError) {
-      throw new Error(`Failed to refresh generation job status: ${statusError.message}`)
-    }
-    if (data?.status === 'cancelled') {
-      cancelled = true
-      return true
-    }
-    return false
-  }
-  const worker = async () => {
-    while (index < variationNumbers.length) {
-      if (await shouldStop()) {
-        break
-      }
-      const current = variationNumbers[index]
-      index += 1
-      try {
-        await runVariationWithRetry(current)
-        successCount += 1
-      } catch (err) {
-        failCount += 1
-        lastError = sanitizeWorkerErrorMessage(err, 'Variation failed')
-      } finally {
-        processed += 1
-        // Incremental progress update so polling clients see real progress.
-        await updateGenerationJob(
-          supabase,
-          job.id,
-          {
-            completed_count: startingCompleted + successCount,
-            failed_count: startingFailed + failCount,
-            ...(lastError ? { error_message: lastError } : {}),
-          },
-          {
-            expectedStatuses: ['pending', 'running'],
-            allowNoop: true,
-            context: 'Failed to persist generation job progress',
-          }
-        )
-      }
-    }
-  }
-
-  const workers = Array.from({ length: Math.min(parallelism, variationNumbers.length) }, () => worker())
-  await Promise.all(workers)
-
-  const completedCount = startingCompleted + successCount
-  const failedCount = startingFailed + failCount
-
-  if (cancelled) {
-    return {
-      jobId,
-      processed,
-      completed: completedCount,
-      failed: failedCount,
-      status: 'cancelled',
-    }
-  }
-
-  const finalCompleted = completedCount + failedCount >= job.variation_count
-  const allFailed = finalCompleted && completedCount === 0 && failedCount > 0
-  const finalStatus = finalCompleted
-    ? allFailed ? 'failed' : 'completed'
-    : 'pending'
-  const failureMessage = lastError || 'All variations failed'
-  const updates: Record<string, unknown> = {
-    completed_count: completedCount,
-    failed_count: failedCount,
-    status: finalStatus,
-    ...(lastError ? { error_message: lastError } : {}),
-  }
-
-  if (finalCompleted) {
-    updates.completed_at = new Date().toISOString()
-    if (allFailed) updates.error_message = failureMessage
-  }
-
-    await updateGenerationJob(
-      supabase,
-      job.id,
-      updates,
-      {
-        expectedStatuses: ['pending', 'running'],
-        allowNoop: cancelled,
-        context: 'Failed to persist final generation job state',
-      }
-    )
-
-    return {
-      jobId,
-      processed,
-      completed: completedCount,
-      failed: failedCount,
-      status: finalStatus,
-    }
+    const resources = await loadImageJobResources(supabase, claimedJob)
+    const plan = createVariationPlan(claimedJob, config.batchSize)
+    const variationResult = await processVariations(supabase, claimedJob, plan, resources, config)
+    return persistFinalImageJobState(supabase, claimedJob, variationResult)
   } catch (err) {
     const safeMessage = sanitizeWorkerErrorMessage(err, 'Generation job failed')
-    await markClaimedJobFailed(supabase, job, safeMessage)
+    await markClaimedJobFailed(supabase, claimedJob, safeMessage)
     throw err
   }
 }
