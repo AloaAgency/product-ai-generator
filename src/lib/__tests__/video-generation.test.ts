@@ -231,7 +231,7 @@ test('pollVeoOperation waits for completion and rethrows API failures with the r
     )
 
     assert.equal(operation.done, true)
-    assert.deepEqual(sleepCalls, [250])
+    assert.equal(sleepCalls[0], 250)
 
     global.fetch = async () => new Response('backend offline', { status: 503, statusText: 'Service Unavailable' })
 
@@ -239,6 +239,43 @@ test('pollVeoOperation waits for completion and rethrows API failures with the r
       () => pollVeoOperation('https://veo.example.test', 'operations/123', 'api-key', 250, 5_000),
       /Veo operation error \(503\): backend offline/
     )
+  } finally {
+    global.fetch = originalFetch
+    global.setTimeout = originalSetTimeout
+  }
+})
+
+test('pollVeoOperation retries transient polling failures before succeeding', async () => {
+  const originalFetch = global.fetch
+  const originalSetTimeout = global.setTimeout
+  const sleepCalls: number[] = []
+  const responses = [
+    new Response('backend offline', { status: 503, statusText: 'Service Unavailable' }),
+    createJsonResponse({ done: true, response: {} }),
+  ]
+
+  try {
+    global.fetch = async () => {
+      const next = responses.shift()
+      if (!next) throw new Error('unexpected poll')
+      return next
+    }
+    global.setTimeout = ((callback: (...args: unknown[]) => void, delay?: number) => {
+      sleepCalls.push(delay ?? 0)
+      callback()
+      return 0 as unknown as ReturnType<typeof setTimeout>
+    }) as typeof setTimeout
+
+    const operation = await pollVeoOperation(
+      'https://veo.example.test',
+      'operations/retry',
+      'api-key',
+      250,
+      5_000
+    )
+
+    assert.equal(operation.done, true)
+    assert.ok(sleepCalls.includes(1000))
   } finally {
     global.fetch = originalFetch
     global.setTimeout = originalSetTimeout
