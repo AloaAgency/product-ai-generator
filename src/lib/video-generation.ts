@@ -13,6 +13,8 @@ const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000
 const DEFAULT_VEO_MODEL = 'veo-3.1-generate-preview'
 const DEFAULT_VEO_POLL_INTERVAL_MS = 10_000
 const DEFAULT_VEO_POLL_TIMEOUT_MS = 600_000
+const DEFAULT_EXTERNAL_FETCH_RETRIES = 2
+const EXTERNAL_FETCH_RETRY_BASE_MS = 1_000
 const DEFAULT_LTX_API_BASE_URL = 'https://api.ltx.video/v1'
 const DEFAULT_LTX_MODEL = 'ltx-2-pro'
 const DEFAULT_LTX_DURATION_SECONDS = 8
@@ -100,6 +102,10 @@ function createExternalServiceError(context: string, detail: string) {
   return new Error(`${context}: ${sanitizeExternalErrorMessage(detail, 'Unknown error')}`)
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 function getResponseMimeType(response: Response, fallback: string) {
   return (response.headers.get('content-type') || fallback).split(';')[0]
 }
@@ -156,6 +162,86 @@ async function fetchWithTimeout(
   }
 }
 
+function shouldRetryExternalStatus(status: number) {
+  return status === 408 || status === 425 || status === 429 || status >= 500
+}
+
+function shouldRetryExternalError(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
+  return (
+    message.includes('timed out') ||
+    message.includes('timeout') ||
+    message.includes('abort') ||
+    message.includes('network') ||
+    message.includes('fetch failed') ||
+    message.includes('socket hang up') ||
+    message.includes('econnreset') ||
+    message.includes('rate limit') ||
+    message.includes('429') ||
+    message.includes('502') ||
+    message.includes('503') ||
+    message.includes('504')
+  )
+}
+
+function getRetryDelayMs(attempt: number) {
+  return EXTERNAL_FETCH_RETRY_BASE_MS * Math.pow(2, attempt)
+}
+
+async function fetchIdempotentWithRetry(
+  input: string | URL | Request,
+  init: RequestInit,
+  timeoutMs: number,
+  errorContext: string,
+  options: {
+    statusErrorContext?: string
+  } = {}
+) {
+  let lastError: unknown = null
+
+  for (let attempt = 0; attempt <= DEFAULT_EXTERNAL_FETCH_RETRIES; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(input, init, timeoutMs, errorContext)
+      if (response.ok) return response
+
+      const error = createExternalServiceError(
+        `${options.statusErrorContext || errorContext} (${response.status})`,
+        await getResponseErrorMessage(response)
+      )
+
+      if (attempt >= DEFAULT_EXTERNAL_FETCH_RETRIES || !shouldRetryExternalStatus(response.status)) {
+        throw error
+      }
+
+      lastError = error
+    } catch (error) {
+      if (attempt >= DEFAULT_EXTERNAL_FETCH_RETRIES || !shouldRetryExternalError(error)) {
+        throw error
+      }
+
+      lastError = error
+    }
+
+    await sleep(getRetryDelayMs(attempt))
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(`${errorContext}: Unknown error`)
+}
+
+async function parseJsonResponse<T>(
+  response: Response,
+  errorContext: string
+): Promise<T> {
+  try {
+    return await response.json() as T
+  } catch (error) {
+    throw createExternalServiceError(
+      `${errorContext} returned invalid JSON`,
+      error instanceof Error ? error.message : String(error)
+    )
+  }
+}
+
 function getBufferResult(buffer: Buffer, mimeType: string): VideoGenerationResult {
   const extension = mimeType.includes('/') ? mimeType.split('/')[1] : 'mp4'
   return {
@@ -166,18 +252,24 @@ function getBufferResult(buffer: Buffer, mimeType: string): VideoGenerationResul
 }
 
 async function createFrameRef(supabase: ReturnType<typeof createServiceClient>, imageId: string) {
-  const { data: image } = await supabase
+  const { data: image, error: imageError } = await supabase
     .from(T.generated_images)
     .select('storage_path, mime_type')
     .eq('id', imageId)
     .single<GeneratedImageFrame>()
 
+  if (imageError) {
+    throw new Error(`Failed to load frame image: ${imageError.message}`)
+  }
   if (!image?.storage_path) return undefined
 
-  const { data: signed } = await supabase.storage
+  const { data: signed, error: signedError } = await supabase.storage
     .from('generated-images')
     .createSignedUrl(image.storage_path, SIGNED_URL_TTL_SECONDS)
 
+  if (signedError) {
+    throw new Error(`Failed to sign frame image: ${signedError.message}`)
+  }
   if (!signed?.signedUrl) return undefined
 
   return {
@@ -187,18 +279,12 @@ async function createFrameRef(supabase: ReturnType<typeof createServiceClient>, 
 }
 
 async function fetchFrameBytes(frameRef: FrameRef, label: 'start' | 'end') {
-  const response = await fetchWithTimeout(
+  const response = await fetchIdempotentWithRetry(
     frameRef.url,
     {},
     getConfiguredTimeout(process.env.VIDEO_FRAME_FETCH_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
     `Failed to fetch ${label} frame`
   )
-  if (!response.ok) {
-    throw createExternalServiceError(
-      `Failed to fetch ${label} frame (${response.status})`,
-      await getResponseErrorMessage(response)
-    )
-  }
 
   const contentLength = Number(response.headers.get('content-length'))
   if (Number.isFinite(contentLength) && contentLength > MAX_FRAME_BYTES) {
@@ -236,18 +322,15 @@ export async function pollVeoOperation(
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
     }
 
-    const statusResp = await fetchWithTimeout(
+    const statusResp = await fetchIdempotentWithRetry(
       `${baseUrl}/${operationName}`,
       { headers: { 'x-goog-api-key': apiKey } },
       getConfiguredTimeout(process.env.VEO_REQUEST_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
-      'Veo operation polling'
+      'Veo operation polling',
+      { statusErrorContext: 'Veo operation error' }
     )
-    if (!statusResp.ok) {
-      const message = await getResponseErrorMessage(statusResp)
-      throw createExternalServiceError(`Veo operation error (${statusResp.status})`, message)
-    }
 
-    operation = await statusResp.json()
+    operation = await parseJsonResponse(statusResp, 'Veo operation polling')
   }
 
   return operation
@@ -349,8 +432,8 @@ async function startVeoOperation(
     throw createExternalServiceError(`Veo API error (${response.status})`, message)
   }
 
-  const operation = await response.json()
-  const operationName = operation?.name
+  const operation = await parseJsonResponse<Record<string, unknown>>(response, 'Veo API request')
+  const operationName = typeof operation?.name === 'string' ? operation.name : null
   if (!operationName) throw new Error('No operation name in Veo response')
 
   return operationName
@@ -385,7 +468,7 @@ export function getVeoVideoUri(operation: Record<string, unknown>) {
 }
 
 async function downloadVeoVideo(videoUri: string, apiKey: string) {
-  const videoResp = await fetchWithTimeout(
+  const videoResp = await fetchIdempotentWithRetry(
     videoUri,
     {
       headers: { 'x-goog-api-key': apiKey },
@@ -394,12 +477,6 @@ async function downloadVeoVideo(videoUri: string, apiKey: string) {
     getConfiguredTimeout(process.env.VEO_DOWNLOAD_TIMEOUT_MS, DEFAULT_DOWNLOAD_TIMEOUT_MS),
     'Veo video download'
   )
-  if (!videoResp.ok) {
-    throw createExternalServiceError(
-      `Failed to download video (${videoResp.status})`,
-      await getResponseErrorMessage(videoResp)
-    )
-  }
 
   const videoBuffer = Buffer.from(await videoResp.arrayBuffer())
   return getBufferResult(videoBuffer, getResponseMimeType(videoResp, 'video/mp4'))
@@ -570,8 +647,28 @@ async function createGeneratedVideoRecord(
     .select()
     .single()
 
-  if (insertErr) throw new Error(insertErr.message)
+  if (insertErr) throw new Error(`Failed to record generated video: ${insertErr.message}`)
   return record
+}
+
+async function cleanupUploadedVideoAssets(
+  supabase: ReturnType<typeof createServiceClient>,
+  storagePaths: Array<string | null | undefined>
+) {
+  const paths = storagePaths.filter((path): path is string => !!path)
+  if (paths.length === 0) return
+
+  try {
+    const { error } = await supabase.storage
+      .from('generated-videos')
+      .remove(paths)
+
+    if (error) {
+      console.warn('Failed to clean up uploaded video assets:', error.message)
+    }
+  } catch (error) {
+    console.warn('Failed to clean up uploaded video assets:', error)
+  }
 }
 
 export async function generateSceneVideo(
@@ -607,7 +704,12 @@ export async function generateSceneVideo(
   )
   const thumbStoragePath = await uploadVideoThumbnail(supabase, storagePath, result.buffer)
 
-  return createGeneratedVideoRecord(supabase, scene, jobId, storagePath, thumbStoragePath, result)
+  try {
+    return await createGeneratedVideoRecord(supabase, scene, jobId, storagePath, thumbStoragePath, result)
+  } catch (error) {
+    await cleanupUploadedVideoAssets(supabase, [storagePath, thumbStoragePath])
+    throw error
+  }
 }
 
 // ---------------------------------------------------------------------------
