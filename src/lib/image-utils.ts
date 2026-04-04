@@ -14,7 +14,10 @@ import { writeFile, readFile, unlink, access } from 'fs/promises'
 // then fall back to system ffmpeg
 async function resolveFfmpegPath(): Promise<string | null> {
   try {
-    // ffmpeg-static path can be mangled by bundlers, so verify it exists
+    // ffmpeg-static path can be mangled by bundlers, so verify it exists.
+    // require() is intentional here — dynamic loading so a missing optional
+    // dependency is caught at runtime rather than at module parse time.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const ffmpegStatic = require('ffmpeg-static') as string
     if (ffmpegStatic) {
       await access(ffmpegStatic)
