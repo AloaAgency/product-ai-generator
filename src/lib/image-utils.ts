@@ -30,11 +30,20 @@ async function resolveFfmpegPath(): Promise<string | null> {
 
 // Cache the resolution promise so concurrent callers share the same in-flight
 // work rather than racing to call setFfmpegPath multiple times.
+// The promise is cleared on failure so subsequent calls can retry (e.g. if
+// ffmpeg is installed after the server starts).
 let ffmpegPathPromise: Promise<void> | null = null
 function ensureFfmpegPath(): Promise<void> {
   if (!ffmpegPathPromise) {
     ffmpegPathPromise = resolveFfmpegPath().then((p) => {
-      if (p) ffmpeg.setFfmpegPath(p)
+      if (!p) {
+        // Reset so the next call retries discovery instead of immediately failing
+        ffmpegPathPromise = null
+        throw new Error(
+          'ffmpeg not found: install the ffmpeg-static package or ensure ffmpeg is on PATH'
+        )
+      }
+      ffmpeg.setFfmpegPath(p)
     })
   }
   return ffmpegPathPromise
@@ -208,6 +217,10 @@ export const extractVideoThumbnail = async (
   videoBuffer: Buffer,
   width = 480
 ): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => {
+  if (videoBuffer.length === 0) {
+    throw new Error('extractVideoThumbnail: video buffer is empty')
+  }
+
   await ensureFfmpegPath()
 
   const id = randomUUID()
