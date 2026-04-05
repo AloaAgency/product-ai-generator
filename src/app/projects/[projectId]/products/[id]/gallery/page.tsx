@@ -49,15 +49,13 @@ export default function GalleryPage({
 }) {
   const { projectId, id } = use(params)
 
-  const {
-    galleryImages,
-    loadingGallery,
-    fetchGallery,
-    updateImageApproval,
-    deleteImage,
-    bulkDeleteImages,
-    fetchGenerationJobs,
-  } = useAppStore()
+  const galleryImages = useAppStore((state) => state.galleryImages)
+  const loadingGallery = useAppStore((state) => state.loadingGallery)
+  const fetchGallery = useAppStore((state) => state.fetchGallery)
+  const updateImageApproval = useAppStore((state) => state.updateImageApproval)
+  const deleteImage = useAppStore((state) => state.deleteImage)
+  const bulkDeleteImages = useAppStore((state) => state.bulkDeleteImages)
+  const fetchGenerationJobs = useAppStore((state) => state.fetchGenerationJobs)
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [mediaFilter, setMediaFilter] = useState<'all' | 'image' | 'video'>('all')
