@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { timingSafeEqual } from 'crypto'
-import { AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE } from '@/lib/auth-constants'
+import { AUTH_COOKIE_NAME, deriveAuthToken } from '@/lib/auth-constants'
 
 /** Compare two strings in constant time to mitigate timing attacks. */
 function safeCompare(a: string, b: string): boolean {
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
 
   if (safeCompare(password ?? '', PASSWORD)) {
     const response = NextResponse.redirect(new URL(safeRedirect, request.url))
-    response.cookies.set(AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE, {
+    response.cookies.set(AUTH_COOKIE_NAME, deriveAuthToken(PASSWORD), {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
