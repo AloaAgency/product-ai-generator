@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE } from '@/lib/auth-constants'
+import { AUTH_COOKIE_NAME, deriveAuthToken } from '@/lib/auth-constants'
 
 // Static parts of the login page HTML, split so the form (which varies per request)
 // can be inserted between them without re-declaring the surrounding boilerplate.
@@ -75,10 +75,15 @@ export function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  // Check for auth cookie
-  const auth = request.cookies.get(AUTH_COOKIE_NAME)
-  if (auth?.value === AUTH_COOKIE_VALUE) {
-    return NextResponse.next()
+  // Check for auth cookie. The cookie value is an HMAC derived from
+  // SITE_PASSWORD — a predictable static string like "authenticated" would
+  // allow any visitor who reads the source to forge a valid cookie.
+  const password = process.env.SITE_PASSWORD
+  if (password) {
+    const auth = request.cookies.get(AUTH_COOKIE_NAME)
+    if (auth?.value === deriveAuthToken(password)) {
+      return NextResponse.next()
+    }
   }
 
   // Show login page, preserving the intended destination

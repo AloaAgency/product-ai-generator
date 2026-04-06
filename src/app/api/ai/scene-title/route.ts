@@ -30,9 +30,11 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ scene_title })
   } catch (err) {
+    // Log the full error internally but never echo raw error messages back to
+    // the client — they can contain API keys or internal query details.
     console.error('[scene-title] Error:', err)
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
+      { error: 'Internal server error' },
       { status: 500 }
     )
   }
