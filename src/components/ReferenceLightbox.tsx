@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId } from 'react'
 import { X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { getDownloadImageUrl } from './imageLightbox.helpers'
 
 export interface ReferenceLightboxImage {
   id: string
@@ -57,6 +58,10 @@ export default function ReferenceLightbox({
   }, [handlePrev, handleNext])
 
   if (!currentImage) return null
+  const imageUrl = getDownloadImageUrl({
+    id: currentImage.id,
+    public_url: currentImage.public_url,
+  })
 
   return (
     <div
@@ -114,9 +119,9 @@ export default function ReferenceLightbox({
             </button>
           )}
 
-          {currentImage.public_url ? (
+          {imageUrl ? (
             <img
-              src={currentImage.public_url}
+              src={imageUrl}
               alt={currentImage.file_name ?? ''}
               className="max-h-full max-w-full object-contain"
             />

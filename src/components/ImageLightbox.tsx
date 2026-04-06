@@ -24,6 +24,7 @@ import {
   getDownloadImageUrl,
   getKeyboardAction,
   getNextApprovalStatus,
+  sanitizeRouteSegment,
   shouldRequestSignedUrls,
 } from './imageLightbox.helpers'
 import { getSafeDownloadErrorMessage } from './errorDisplay.helpers'
@@ -71,13 +72,17 @@ interface ImageLightboxProps {
 
 /** Build generate URL with all job settings pre-filled for regeneration */
 function buildRegenerateUrl(projectId: string, image: LightboxImage): string {
+  const safeProjectId = sanitizeRouteSegment(projectId)
+  const safeProductId = sanitizeRouteSegment(image.productId)
+  if (!safeProjectId || !safeProductId) return '#'
+
   const params = new URLSearchParams()
   if (image.prompt) params.set('prompt', image.prompt)
   if (image.reference_set_id) params.set('reference_set_id', image.reference_set_id)
   if (image.texture_set_id) params.set('texture_set_id', image.texture_set_id)
   if (image.product_image_count != null) params.set('product_image_count', String(image.product_image_count))
   if (image.texture_image_count != null) params.set('texture_image_count', String(image.texture_image_count))
-  return `/projects/${projectId}/products/${image.productId}/generate?${params.toString()}`
+  return `/projects/${safeProjectId}/products/${safeProductId}/generate?${params.toString()}`
 }
 
 const LightboxThumbnailButton = memo(function LightboxThumbnailButton({
@@ -355,6 +360,12 @@ export function ImageLightbox({
   if (!currentImage) return null
 
   const imageUrl = getDisplayImageUrl(currentImage)
+  const safeFixProjectId = sanitizeRouteSegment(projectId)
+  const safeFixProductId = sanitizeRouteSegment(currentImage.productId)
+  const safeFixImageId = sanitizeRouteSegment(currentImage.id)
+  const fixImageHref = safeFixProjectId && safeFixProductId && safeFixImageId
+    ? `/projects/${safeFixProjectId}/products/${safeFixProductId}/fix-image?sourceImageId=${safeFixImageId}`
+    : null
 
   return (
     <div
@@ -505,9 +516,9 @@ export function ImageLightbox({
                 isRequestChanges ? 'border-zinc-700 focus:border-amber-500' : 'border-zinc-700 focus:border-red-500'
               }`}
             />
-            {isRequestChanges && projectId && currentImage.productId && (
+            {isRequestChanges && fixImageHref && (
               <a
-                href={`/projects/${projectId}/products/${currentImage.productId}/fix-image?sourceImageId=${currentImage.id}`}
+                href={fixImageHref}
                 className="flex shrink-0 items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-amber-500"
               >
                 <Wand2 className="w-3.5 h-3.5" />
