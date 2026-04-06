@@ -1,13 +1,38 @@
 import type { ApprovalStatus, LightboxImage } from './ImageLightbox'
 
+const SAFE_URL_PROTOCOLS = new Set(['http:', 'https:', 'blob:'])
+
+const sanitizeUrlCandidate = (value?: string | null) => {
+  if (!value) return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (trimmed.startsWith('/')) return trimmed
+
+  try {
+    const parsed = new URL(trimmed)
+    if (!SAFE_URL_PROTOCOLS.has(parsed.protocol)) return null
+    return parsed.toString()
+  } catch {
+    return null
+  }
+}
+
+export const sanitizeRouteSegment = (value?: string | null) => {
+  if (!value) return null
+  const trimmed = value.trim()
+  return trimmed ? encodeURIComponent(trimmed) : null
+}
+
 export const getDisplayImageUrl = (image: LightboxImage) =>
-  image.preview_signed_url ||
-  image.preview_public_url ||
-  image.thumb_signed_url ||
-  image.thumb_public_url ||
-  image.signed_url ||
-  image.public_url ||
-  null
+  sanitizeUrlCandidate(
+    image.preview_signed_url ||
+    image.preview_public_url ||
+    image.thumb_signed_url ||
+    image.thumb_public_url ||
+    image.signed_url ||
+    image.public_url ||
+    null
+  )
 
 export const getDownloadImageUrl = (
   image: LightboxImage,
@@ -15,7 +40,14 @@ export const getDownloadImageUrl = (
     signed_url?: string | null
     download_url?: string | null
   } | null
-) => signedUrls?.download_url || signedUrls?.signed_url || image.download_url || image.signed_url || image.public_url || null
+) => sanitizeUrlCandidate(
+  signedUrls?.download_url ||
+  signedUrls?.signed_url ||
+  image.download_url ||
+  image.signed_url ||
+  image.public_url ||
+  null
+)
 
 export const shouldRequestSignedUrls = (image: LightboxImage, hasRequester: boolean) => {
   if (!hasRequester) return false

@@ -5,6 +5,9 @@ import {
   clampBugReportText,
   MAX_BUG_REPORT_CAPTION_LENGTH,
   MAX_BUG_REPORT_FILE_SIZE,
+  MAX_BUG_REPORT_DESCRIPTION_LENGTH,
+  normalizeBugReportMultiline,
+  normalizeBugReportSingleLine,
   parseBugReportResponse,
   validateBugReportFiles,
   type SelectedBugReportImage,
@@ -48,7 +51,7 @@ test('buildBugReportSubmission trims fields and fills default screenshot caption
 
   const submission = buildBugReportSubmission({
     type: 'feature',
-    title: '  Add queue filters  ',
+    title: '  Add queue filters \u0000  ',
     description: '  More precise filtering please  ',
     images,
   })
@@ -62,6 +65,17 @@ test('buildBugReportSubmission trims fields and fills default screenshot caption
       { imageField: 'image_0', caption: 'Screenshot 1' },
       { imageField: 'image_1', caption: 'Keep this' },
     ]
+  )
+})
+
+test('bug report normalization removes control characters and preserves safe multiline formatting', () => {
+  assert.equal(
+    normalizeBugReportSingleLine('  bad\u0000  title \n here ', 120),
+    'bad title here'
+  )
+  assert.equal(
+    normalizeBugReportMultiline('line 1\r\n\r\n\r\nline 2\u0007', MAX_BUG_REPORT_DESCRIPTION_LENGTH),
+    'line 1\n\nline 2'
   )
 })
 
