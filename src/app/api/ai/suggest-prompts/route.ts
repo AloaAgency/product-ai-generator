@@ -82,6 +82,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ prompts })
   } catch (err) {
+    // Log the full error internally but never echo raw error messages back to
+    // the client — they can contain API keys or internal query details.
     console.error('[SuggestPrompts] Error:', err)
     await logError({
       productId: product_id,
@@ -89,7 +91,7 @@ export async function POST(request: NextRequest) {
       errorSource: 'api/ai/suggest-prompts',
     })
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
+      { error: 'Internal server error' },
       { status: 500 }
     )
   }
