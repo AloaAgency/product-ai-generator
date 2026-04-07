@@ -821,4 +821,84 @@ describe('processGenerationJob', () => {
       failed_count: 0,
     })
   })
+
+  it('marks video jobs completed after successful generation', async () => {
+    const jobId = '88888888-8888-4888-8888-888888888888'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createVideoJobRecord(jobId),
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    const { generateSceneVideo } = await import('@/lib/video-generation')
+    vi.mocked(generateSceneVideo).mockResolvedValue(undefined)
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 1,
+      failed: 0,
+      status: 'completed',
+    })
+    expect(generateSceneVideo).toHaveBeenCalledWith('product-1', 'scene-1', 'veo-3', jobId)
+    expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
+      status: 'completed',
+      completed_count: 1,
+    })
+  })
+
+  it('sanitizes video generation failures before persisting them', async () => {
+    const jobId = '99999999-9999-4999-8999-999999999999'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createVideoJobRecord(jobId),
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    const { generateSceneVideo } = await import('@/lib/video-generation')
+    vi.mocked(generateSceneVideo).mockRejectedValue(
+      new Error('upstream failed with Bearer super-secret-token')
+    )
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 1,
+      status: 'failed',
+    })
+    expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: 'upstream failed with Bearer [redacted]',
+    })
+  })
 })
