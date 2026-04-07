@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type QueryResponse = {
   table: string
@@ -52,6 +52,62 @@ vi.mock('@/lib/image-utils', () => ({
   resolveExtension: vi.fn(() => 'png'),
   slugify: vi.fn(() => 'prompt'),
 }))
+
+function createImageJobRecord(jobId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id: jobId,
+    product_id: 'product-1',
+    prompt_template_id: null,
+    reference_set_id: 'refs-1',
+    texture_set_id: null,
+    product_image_count: null,
+    texture_image_count: null,
+    final_prompt: 'Prompt',
+    variation_count: 1,
+    resolution: '2K',
+    aspect_ratio: '16:9',
+    status: 'running',
+    completed_count: 0,
+    failed_count: 0,
+    error_message: null,
+    generation_model: null,
+    job_type: 'image',
+    scene_id: null,
+    source_image_id: null,
+    ...overrides,
+  }
+}
+
+function createVideoJobRecord(jobId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id: jobId,
+    product_id: 'product-1',
+    prompt_template_id: null,
+    reference_set_id: null,
+    texture_set_id: null,
+    product_image_count: null,
+    texture_image_count: null,
+    final_prompt: 'Prompt',
+    variation_count: 1,
+    resolution: '1080p',
+    aspect_ratio: '16:9',
+    status: 'running',
+    completed_count: 0,
+    failed_count: 0,
+    error_message: null,
+    generation_model: 'veo-3',
+    job_type: 'video',
+    scene_id: 'scene-1',
+    source_image_id: null,
+    ...overrides,
+  }
+}
+
+function createDownloadPayload(contents: string) {
+  return {
+    arrayBuffer: async () => Buffer.from(contents),
+  }
+}
 
 function createMockSupabase(
   queryResponses: QueryResponse[],
@@ -153,8 +209,17 @@ function createMockSupabase(
 describe('processGenerationJob', () => {
   beforeEach(() => {
     vi.resetModules()
+    vi.restoreAllMocks()
     vi.clearAllMocks()
+    vi.useRealTimers()
     serviceClientState.current = null
+    delete process.env.GENERATION_VARIATION_RETRIES
+    delete process.env.GENERATION_RETRY_BASE_MS
+    delete process.env.GENERATION_VARIATION_TIMEOUT_MS
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('returns running jobs without reclaiming them', async () => {
@@ -219,33 +284,13 @@ describe('processGenerationJob', () => {
         type: 'select-single',
         data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
       },
-      {
-        table: 'prodai_generation_jobs',
-        type: 'update-maybeSingle',
-        data: {
-          id: jobId,
-          product_id: 'product-1',
-          prompt_template_id: null,
-          reference_set_id: null,
-          texture_set_id: null,
-          product_image_count: null,
-          texture_image_count: null,
-          final_prompt: 'Prompt',
-          variation_count: 1,
-          resolution: '2K',
-          aspect_ratio: '16:9',
-          status: 'running',
-          completed_count: 0,
-          failed_count: 0,
-          error_message: null,
-          generation_model: null,
-          job_type: 'image',
-          scene_id: null,
-          source_image_id: null,
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId, { reference_set_id: null }),
         },
-      },
-      {
-        table: 'prodai_generation_jobs',
+        {
+          table: 'prodai_generation_jobs',
         type: 'update-maybeSingle',
         data: { id: jobId },
       },
@@ -273,27 +318,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
-          data: {
-            id: jobId,
-            product_id: 'product-1',
-            prompt_template_id: null,
-            reference_set_id: 'refs-1',
-            texture_set_id: null,
-            product_image_count: null,
-            texture_image_count: null,
-            final_prompt: 'Prompt',
-            variation_count: 1,
-            resolution: '2K',
-            aspect_ratio: '16:9',
-            status: 'running',
-            completed_count: 0,
-            failed_count: 0,
-            error_message: null,
-            generation_model: null,
-            job_type: 'image',
-            scene_id: null,
-            source_image_id: null,
-          },
+          data: createImageJobRecord(jobId),
         },
         {
           table: 'prodai_products',
@@ -376,27 +401,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
-          data: {
-            id: jobId,
-            product_id: 'product-1',
-            prompt_template_id: null,
-            reference_set_id: 'refs-1',
-            texture_set_id: null,
-            product_image_count: null,
-            texture_image_count: null,
-            final_prompt: 'Prompt',
-            variation_count: 1,
-            resolution: '2K',
-            aspect_ratio: '16:9',
-            status: 'running',
-            completed_count: 0,
-            failed_count: 0,
-            error_message: null,
-            generation_model: null,
-            job_type: 'image',
-            scene_id: null,
-            source_image_id: null,
-          },
+          data: createImageJobRecord(jobId),
         },
         {
           table: 'prodai_products',
@@ -464,5 +469,196 @@ describe('processGenerationJob', () => {
       failed_count: 1,
       error_message: 'Failed to persist generation job progress: write conflict',
     })
+  })
+
+  it('retries retriable image generation errors and completes the job after a later success', async () => {
+    const jobId = '44444444-4444-4444-8444-444444444444'
+    process.env.GENERATION_VARIATION_RETRIES = '1'
+    process.env.GENERATION_RETRY_BASE_MS = '1'
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId),
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: null, global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running' },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage)
+      .mockRejectedValueOnce(new Error('429 rate limit'))
+      .mockResolvedValueOnce({
+        mimeType: 'image/png',
+        base64Data: Buffer.from('image').toString('base64'),
+        requestId: 'req-retry',
+        raw: {},
+      })
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 1,
+      failed: 0,
+      status: 'completed',
+    })
+    expect(generateGeminiImage).toHaveBeenCalledTimes(2)
+    expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
+      status: 'completed',
+      completed_count: 1,
+      failed_count: 0,
+    })
+  })
+
+  it('uses the project Gemini key and sends source plus limited reference images to Gemini', async () => {
+    const jobId = '55555555-5555-4555-8555-555555555555'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId, {
+            texture_set_id: 'texture-1',
+            product_image_count: 1,
+            texture_image_count: 1,
+            source_image_id: 'source-1',
+          }),
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: 'project-1', global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [
+            { id: 'ref-1', reference_set_id: 'refs-1', storage_path: 'products/ref-1.png', mime_type: 'image/png', display_order: 1 },
+            { id: 'ref-2', reference_set_id: 'refs-1', storage_path: 'products/ref-2.png', mime_type: 'image/png', display_order: 2 },
+          ],
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [
+            { id: 'tex-1', reference_set_id: 'texture-1', storage_path: 'textures/tex-1.png', mime_type: 'image/png', display_order: 1 },
+          ],
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'select-maybeSingle',
+          data: { storage_path: 'generated/source.png', mime_type: 'image/png' },
+        },
+        {
+          table: 'prodai_projects',
+          type: 'select-single',
+          data: { global_style_settings: { gemini_api_key: 'project-key' } },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running' },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'generated-images', type: 'download', data: createDownloadPayload('source') },
+        { bucket: 'reference-images', type: 'download', data: createDownloadPayload('product-ref') },
+        { bucket: 'reference-images', type: 'download', data: createDownloadPayload('texture-ref') },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockResolvedValue({
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-project-key',
+      raw: {},
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 1,
+      failed: 0,
+      status: 'completed',
+    })
+
+    expect(generateGeminiImage).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'project-key',
+      referenceImages: [
+        { mimeType: 'image/png', base64: Buffer.from('source').toString('base64') },
+        { mimeType: 'image/png', base64: Buffer.from('product-ref').toString('base64') },
+        { mimeType: 'image/png', base64: Buffer.from('texture-ref').toString('base64') },
+      ],
+    }))
   })
 })
