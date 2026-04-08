@@ -86,10 +86,15 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  // Show login page, preserving the intended destination
+  if (pathname.startsWith('/api/')) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  // Show login page, preserving the intended destination. Return 200 so the
+  // browser renders the gate as a normal document instead of a failed request.
   const showError = request.nextUrl.searchParams.has('error')
   return new NextResponse(loginPage(showError, pathname), {
-    status: 401,
+    status: 200,
     headers: { 'content-type': 'text/html' },
   })
 }
