@@ -22,6 +22,7 @@ const MAX_UPLOAD_RETRIES = 1
 const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const requestVersions = new Map<string, number>()
 const successfulRequests = new Set<string>()
+const inFlightRequests = new Map<string, Promise<unknown>>()
 let aiRequestCount = 0
 
 const sanitizePathSegment = (value: string) => encodeURIComponent(value.trim())
@@ -65,6 +66,7 @@ const beginTrackedRequest = (key: string) => {
 const invalidateTrackedRequest = (key: string) => {
   const version = (requestVersions.get(key) ?? 0) + 1
   requestVersions.set(key, version)
+  inFlightRequests.delete(key)
   return version
 }
 
@@ -153,6 +155,50 @@ const safeParseResponse = async (res: Response) => {
 
 const logStoreError = (scope: string, error: unknown) => {
   console.error(`[Store:${scope}]`, error)
+}
+
+const getInFlightRequest = <T>(key: string, request: () => Promise<T>) => {
+  const existingRequest = inFlightRequests.get(key) as Promise<T> | undefined
+  if (existingRequest) return existingRequest
+
+  const nextRequest = request().finally(() => {
+    if (inFlightRequests.get(key) === nextRequest) {
+      inFlightRequests.delete(key)
+    }
+  })
+
+  inFlightRequests.set(key, nextRequest)
+  return nextRequest
+}
+
+const mergeUpdatedImage = (images: GeneratedImage[], imageId: string, updated: Partial<GeneratedImage>) => {
+  let didChange = false
+  const nextImages = images.map((image) => {
+    if (image.id !== imageId) return image
+    didChange = true
+    return { ...image, ...updated }
+  })
+
+  return didChange ? nextImages : images
+}
+
+const removeImagesById = (images: GeneratedImage[], ids: Set<string>) => {
+  const nextImages = images.filter((image) => !ids.has(image.id))
+  return nextImages.length === images.length ? images : nextImages
+}
+
+const beginAiRequest = (set: (partial: Partial<AppState>) => void) => {
+  aiRequestCount += 1
+  if (aiRequestCount === 1) {
+    set({ aiLoading: true })
+  }
+}
+
+const endAiRequest = (set: (partial: Partial<AppState>) => void) => {
+  aiRequestCount = Math.max(0, aiRequestCount - 1)
+  if (aiRequestCount === 0) {
+    set({ aiLoading: false })
+  }
 }
 
 interface AppState {
@@ -323,7 +369,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingProjects: true })
     try {
-      const data = await api('/api/projects')
+      const data = await getInFlightRequest(requestKey, () => api('/api/projects'))
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ projects: data })
@@ -342,7 +388,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestKey = buildRequestKey('currentProject', id)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await api(`/api/projects/${buildApiPath(id)}`)
+      const data = await getInFlightRequest(requestKey, () => api(`/api/projects/${buildApiPath(id)}`))
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ currentProject: data })
@@ -404,7 +450,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const params = new URLSearchParams()
       if (projectId) params.set('project_id', projectId.trim())
       const qs = params.toString()
-      const data = await api(`/api/products${qs ? `?${qs}` : ''}`)
+      const data = await getInFlightRequest(requestKey, () => api(`/api/products${qs ? `?${qs}` : ''}`))
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ products: data })
@@ -423,7 +469,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestKey = buildRequestKey('currentProduct', id)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await api(`/api/products/${buildApiPath(id)}`)
+      const data = await getInFlightRequest(requestKey, () => api(`/api/products/${buildApiPath(id)}`))
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ currentProduct: data })
@@ -500,7 +546,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingRefSets: true })
     try {
-      const data = await api(`/api/products/${buildApiPath(productId)}/reference-sets`)
+      const data = await getInFlightRequest(requestKey, () =>
+        api(`/api/products/${buildApiPath(productId)}/reference-sets`)
+      )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ referenceSets: data })
@@ -569,8 +617,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestKey = buildRequestKey('referenceImages', productId, setId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await api(
-        `/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}/images`
+      const data = await getInFlightRequest(requestKey, () =>
+        api(
+          `/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}/images`
+        )
       )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
@@ -611,19 +661,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     >
 
     const fileMap = new Map(uploadSpecs.map((spec, idx) => [spec.clientId, files[idx]]))
-    const uploadResults: Array<{
-      storage_path: string
-      file_name: string
-      mime_type: string
-      file_size: number
-      display_order: number
-      clientId: string
-      error?: string
-    }> = []
-
-    for (const item of signedPayload) {
+    const uploadResultPromises = signedPayload.map(async (item) => {
       if (!('signedUrl' in item)) {
-        uploadResults.push({
+        return {
           clientId: item.clientId,
           storage_path: '',
           file_name: '',
@@ -631,13 +671,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           file_size: 0,
           display_order: 0,
           error: item.error || 'Failed to sign upload',
-        })
-        continue
+        }
       }
 
       const file = fileMap.get(item.clientId)
       if (!file) {
-        uploadResults.push({
+        return {
           clientId: item.clientId,
           storage_path: '',
           file_name: item.file_name,
@@ -645,15 +684,24 @@ export const useAppStore = create<AppState>((set, get) => ({
           file_size: item.file_size,
           display_order: item.display_order,
           error: 'Missing file data',
-        })
-        continue
+        }
       }
 
-      let uploadResp: Response
       try {
-        uploadResp = await uploadToSignedUrl(item.signedUrl, file)
+        const uploadResp = await uploadToSignedUrl(item.signedUrl, file)
+        if (!uploadResp.ok) {
+          return {
+            clientId: item.clientId,
+            storage_path: item.storage_path,
+            file_name: item.file_name,
+            mime_type: item.mime_type,
+            file_size: item.file_size,
+            display_order: item.display_order,
+            error: `Upload failed (${uploadResp.status})`,
+          }
+        }
       } catch (error) {
-        uploadResults.push({
+        return {
           clientId: item.clientId,
           storage_path: item.storage_path,
           file_name: item.file_name,
@@ -662,32 +710,20 @@ export const useAppStore = create<AppState>((set, get) => ({
           display_order: item.display_order,
           error:
             extractErrorMessage(error instanceof Error ? error.message : null) || 'Upload failed',
-        })
-        continue
+        }
       }
 
-      if (!uploadResp.ok) {
-        uploadResults.push({
-          clientId: item.clientId,
-          storage_path: item.storage_path,
-          file_name: item.file_name,
-          mime_type: item.mime_type,
-          file_size: item.file_size,
-          display_order: item.display_order,
-          error: `Upload failed (${uploadResp.status})`,
-        })
-        continue
-      }
-
-      uploadResults.push({
+      return {
         clientId: item.clientId,
         storage_path: item.storage_path,
         file_name: item.file_name,
         mime_type: item.mime_type,
         file_size: item.file_size,
         display_order: item.display_order,
-      })
-    }
+      }
+    })
+
+    const uploadResults = await Promise.all(uploadResultPromises)
 
     const successfulUploads = uploadResults.filter((u) => !u.error)
     let payload: Array<ReferenceImage & { error?: string; file?: string }> = []
@@ -740,7 +776,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestKey = buildRequestKey('promptTemplates', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await api(`/api/products/${buildApiPath(productId)}/prompts`)
+      const data = await getInFlightRequest(requestKey, () =>
+        api(`/api/products/${buildApiPath(productId)}/prompts`)
+      )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ promptTemplates: data })
@@ -797,7 +835,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const shouldShowLoading = get().generationJobs.length === 0
     if (shouldShowLoading) set({ loadingJobs: true })
     try {
-      const data = await api(`/api/products/${buildApiPath(productId)}/generate`)
+      const data = await getInFlightRequest(requestKey, () =>
+        api(`/api/products/${buildApiPath(productId)}/generate`)
+      )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ generationJobs: data })
@@ -834,7 +874,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestKey = buildRequestKey('currentJob', productId, jobId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`)
+      const data = await getInFlightRequest(requestKey, () =>
+        api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`)
+      )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ currentJob: { ...data.job, images: data.images } })
@@ -913,7 +955,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const shouldShowLoading = get().galleryImages.length === 0
     if (shouldShowLoading) set({ loadingGallery: true })
     try {
-      const data = await api(`/api/products/${buildApiPath(productId)}/gallery?${qs}`)
+      const data = await getInFlightRequest(requestKey, () =>
+        api(`/api/products/${buildApiPath(productId)}/gallery?${qs}`)
+      )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({
@@ -972,27 +1016,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const updated = data.image ?? data
     set((s) => ({
-      galleryImages: s.galleryImages.map((i) =>
-        i.id === imageId ? { ...i, ...updated } : i
-      ),
+      galleryImages: mergeUpdatedImage(s.galleryImages, imageId, updated),
       currentJob: s.currentJob?.images
         ? {
             ...s.currentJob,
-            images: s.currentJob.images.map((img) =>
-              img.id === imageId ? { ...img, ...updated } : img
-            ),
+            images: mergeUpdatedImage(s.currentJob.images, imageId, updated),
           }
         : s.currentJob,
     }))
   },
   deleteImage: async (imageId) => {
     await api(`/api/images/${buildApiPath(imageId)}`, { method: 'DELETE' })
+    const idSet = new Set([imageId])
     set((s) => ({
-      galleryImages: s.galleryImages.filter((i) => i.id !== imageId),
+      galleryImages: removeImagesById(s.galleryImages, idSet),
       currentJob: s.currentJob?.images
         ? {
             ...s.currentJob,
-            images: s.currentJob.images.filter((img) => img.id !== imageId),
+            images: removeImagesById(s.currentJob.images, idSet),
           }
         : s.currentJob,
     }))
@@ -1007,11 +1048,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const idSet = new Set(sanitizedIds)
     set((s) => ({
-      galleryImages: s.galleryImages.filter((i) => !idSet.has(i.id)),
+      galleryImages: removeImagesById(s.galleryImages, idSet),
       currentJob: s.currentJob?.images
         ? {
             ...s.currentJob,
-            images: s.currentJob.images.filter((img) => !idSet.has(img.id)),
+            images: removeImagesById(s.currentJob.images, idSet),
           }
         : s.currentJob,
     }))
@@ -1025,7 +1066,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingSettingsTemplates: true })
     try {
-      const data = await api(`/api/products/${buildApiPath(productId)}/settings-templates`)
+      const data = await getInFlightRequest(requestKey, () =>
+        api(`/api/products/${buildApiPath(productId)}/settings-templates`)
+      )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ settingsTemplates: data })
@@ -1103,7 +1146,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ loadingErrorLogs: true })
     try {
       const qs = buildProjectScopedQuery(projectId)
-      const data = await api(`/api/error-logs?${qs}`)
+      const data = await getInFlightRequest(requestKey, () => api(`/api/error-logs?${qs}`))
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ errorLogs: data })
@@ -1128,8 +1171,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // AI
   aiLoading: false,
   buildPrompt: async (productId, userPrompt) => {
-    aiRequestCount += 1
-    set({ aiLoading: true })
+    beginAiRequest(set)
     try {
       const data = await api('/api/ai/build-prompt', {
         method: 'POST',
@@ -1141,13 +1183,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
       return data.refined_prompt
     } finally {
-      aiRequestCount = Math.max(0, aiRequestCount - 1)
-      set({ aiLoading: aiRequestCount > 0 })
+      endAiRequest(set)
     }
   },
   suggestPrompts: async (productId, count = 5) => {
-    aiRequestCount += 1
-    set({ aiLoading: true })
+    beginAiRequest(set)
     try {
       const data = await api('/api/ai/suggest-prompts', {
         method: 'POST',
@@ -1159,8 +1199,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
       return data.prompts
     } finally {
-      aiRequestCount = Math.max(0, aiRequestCount - 1)
-      set({ aiLoading: aiRequestCount > 0 })
+      endAiRequest(set)
     }
   },
 }))

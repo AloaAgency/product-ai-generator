@@ -22,20 +22,18 @@ export default function ProductDashboard({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { projectId, id } = use(params)
-  const {
-    currentProduct,
-    referenceSets,
-    promptTemplates,
-    generationJobs,
-    galleryImages,
-    galleryTotal,
-    loadingJobs,
-    fetchReferenceSets,
-    fetchPromptTemplates,
-    fetchGenerationJobs,
-    fetchGallery,
-    retryGenerationJob,
-  } = useAppStore()
+  const currentProduct = useAppStore((state) => state.currentProduct)
+  const referenceSets = useAppStore((state) => state.referenceSets)
+  const promptTemplates = useAppStore((state) => state.promptTemplates)
+  const generationJobs = useAppStore((state) => state.generationJobs)
+  const galleryImages = useAppStore((state) => state.galleryImages)
+  const galleryTotal = useAppStore((state) => state.galleryTotal)
+  const loadingJobs = useAppStore((state) => state.loadingJobs)
+  const fetchReferenceSets = useAppStore((state) => state.fetchReferenceSets)
+  const fetchPromptTemplates = useAppStore((state) => state.fetchPromptTemplates)
+  const fetchGenerationJobs = useAppStore((state) => state.fetchGenerationJobs)
+  const fetchGallery = useAppStore((state) => state.fetchGallery)
+  const retryGenerationJob = useAppStore((state) => state.retryGenerationJob)
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null)
 
   useEffect(() => {

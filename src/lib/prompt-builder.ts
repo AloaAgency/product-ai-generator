@@ -108,6 +108,9 @@ Output ONLY valid JSON, no markdown fences:
 {"prompts":[{"name":"Short title","prompt_text":"Detailed 50-150 word image generation prompt"}]}`
 }
 
+/** Pre-compiled regex for stripping markdown code fences — hoisted to avoid per-call recompilation */
+const CODE_FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/i
+
 /**
  * Parse Claude's prompt suggestion response
  */
@@ -115,7 +118,7 @@ export function parsePromptSuggestions(raw: string): { name: string; prompt_text
   if (!raw) return []
 
   // Extract JSON from possible code fences
-  const match = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const match = raw.match(CODE_FENCE_RE)
   const jsonStr = match?.[1]?.trim() || raw.trim()
 
   try {

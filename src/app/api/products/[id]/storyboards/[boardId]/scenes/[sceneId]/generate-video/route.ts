@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { processGenerationJob } from '@/lib/generation-worker'
+import { logError } from '@/lib/error-logger'
 import {
   createSceneVideoJob,
   kickWorkerForJob,
@@ -15,9 +16,14 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; boardId: string; sceneId: string }> }
 ) {
+  const { id: productId, sceneId } = await params
   try {
-    const { id: productId, sceneId } = await params
-    const body = await request.json()
+    let body: { model?: string } = {}
+    try {
+      body = await request.json()
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 })
+    }
     const supabase = createServiceClient()
 
     const { job, error } = await createSceneVideoJob(supabase, productId, sceneId, body.model)
@@ -26,7 +32,16 @@ export async function POST(
     if (error) return NextResponse.json({ error }, { status: 400 })
 
     if (shouldRunVideoGenerationInline()) {
-      void processGenerationJob(job!.id as string)
+      void processGenerationJob(job!.id as string).catch(async (err) => {
+        const message = err instanceof Error ? err.message : 'Video generation failed'
+        console.error('[GenerateVideo] Inline job failed:', err)
+        await logError({
+          productId,
+          errorMessage: message,
+          errorSource: 'api/products/storyboards/scenes/generate-video:inline',
+          errorContext: { sceneId, jobId: job!.id as string },
+        })
+      })
     } else {
       kickWorkerForJob(job!.id as string, request.url, '[GenerateVideo]')
     }
@@ -35,6 +50,12 @@ export async function POST(
   } catch (err) {
     console.error('[GenerateVideo] Error:', err)
     const message = err instanceof Error ? err.message : 'Internal server error'
+    await logError({
+      productId,
+      errorMessage: message,
+      errorSource: 'api/products/storyboards/scenes/generate-video',
+      errorContext: { sceneId },
+    })
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

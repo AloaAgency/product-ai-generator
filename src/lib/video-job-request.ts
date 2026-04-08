@@ -18,6 +18,8 @@ type VideoJobRequest = {
   finalPrompt: string
 }
 
+const DEFAULT_WORKER_KICK_TIMEOUT_MS = 15_000
+
 export function buildVideoJobRequest(
   scene: SceneVideoJobInput,
   requestedModel?: string | null,
@@ -58,6 +60,10 @@ export function kickWorkerForJob(
 ): void {
   const cronSecret = env.CRON_SECRET
   if (!cronSecret) return
+  const timeoutMs = Number(env.WORKER_KICK_TIMEOUT_MS)
+  const requestTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : DEFAULT_WORKER_KICK_TIMEOUT_MS
 
   const url = new URL('/api/worker/generate', requestUrl)
   url.searchParams.set('jobId', jobId)
@@ -68,10 +74,13 @@ export function kickWorkerForJob(
   }
 
   void (async () => {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs)
     try {
       const res = await fetch(url.toString(), {
         method: 'GET',
         headers: { Authorization: `Bearer ${cronSecret}` },
+        signal: controller.signal,
       })
       console.log(`${label} Worker kick`, { jobId, status: res.status })
     } catch (err) {
@@ -79,6 +88,8 @@ export function kickWorkerForJob(
         jobId,
         error: err instanceof Error ? err.message : String(err),
       })
+    } finally {
+      clearTimeout(timeout)
     }
   })()
 }

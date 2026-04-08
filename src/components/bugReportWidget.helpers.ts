@@ -4,6 +4,7 @@ export const ALLOWED_BUG_REPORT_TYPES = ['image/jpeg', 'image/png', 'image/gif',
 export const MAX_BUG_REPORT_TITLE_LENGTH = 120
 export const MAX_BUG_REPORT_DESCRIPTION_LENGTH = 2000
 export const MAX_BUG_REPORT_CAPTION_LENGTH = 160
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g
 
 export interface SelectedBugReportImage {
   file: File
@@ -12,6 +13,20 @@ export interface SelectedBugReportImage {
 }
 
 export const clampBugReportText = (value: string, maxLength: number) => value.slice(0, maxLength)
+
+const trimAndStripControlChars = (value: string) => value.replace(CONTROL_CHARS, '').trim()
+
+export const normalizeBugReportSingleLine = (value: string, maxLength: number) =>
+  clampBugReportText(trimAndStripControlChars(value).replace(/\s+/g, ' '), maxLength)
+
+export const normalizeBugReportMultiline = (value: string, maxLength: number) =>
+  clampBugReportText(
+    trimAndStripControlChars(value)
+      .replace(/\r\n?/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n'),
+    maxLength
+  )
 
 export const validateBugReportFiles = ({
   currentCount,
@@ -54,13 +69,13 @@ export const buildBugReportSubmission = ({
   images: SelectedBugReportImage[]
 }) => ({
   type,
-  title: title.trim(),
-  description: description.trim(),
+  title: normalizeBugReportSingleLine(title, MAX_BUG_REPORT_TITLE_LENGTH),
+  description: normalizeBugReportMultiline(description, MAX_BUG_REPORT_DESCRIPTION_LENGTH),
   imageEntries: images.map((img, index) => ({
     imageField: `image_${index}`,
     captionField: `caption_${index}`,
     file: img.file,
-    caption: clampBugReportText(img.caption, MAX_BUG_REPORT_CAPTION_LENGTH) || `Screenshot ${index + 1}`,
+    caption: normalizeBugReportSingleLine(img.caption, MAX_BUG_REPORT_CAPTION_LENGTH) || `Screenshot ${index + 1}`,
   })),
   imageCount: String(images.length),
 })

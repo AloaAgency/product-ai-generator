@@ -31,6 +31,7 @@ test('getSafeErrorContext redacts secrets and truncates large payloads', () => {
     request: {
       authorization: 'Bearer secret-token',
       token: 'secret-token',
+      signedUrl: 'https://example.com/file.png?token=secret-token&X-Amz-Signature=secret-signature',
       detail: 'x'.repeat(1300),
     },
   })
@@ -38,5 +39,6 @@ test('getSafeErrorContext redacts secrets and truncates large payloads', () => {
   assert.ok(context)
   assert.match(context || '', /\[redacted\]/)
   assert.doesNotMatch(context || '', /secret-token/)
+  assert.doesNotMatch(context || '', /secret-signature/)
   assert.ok((context || '').length <= 1200)
 })

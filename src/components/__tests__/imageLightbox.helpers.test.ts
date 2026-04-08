@@ -6,6 +6,7 @@ import {
   getDownloadImageUrl,
   getKeyboardAction,
   getNextApprovalStatus,
+  sanitizeRouteSegment,
   shouldRequestSignedUrls,
 } from '../imageLightbox.helpers.js'
 
@@ -26,8 +27,23 @@ test('image URL helpers honor preview and download fallback order', () => {
   assert.equal(getDisplayImageUrl(image), 'preview-public')
   assert.equal(getDownloadImageUrl(image), 'signed')
   assert.equal(
-    getDownloadImageUrl(image, { download_url: 'download', signed_url: 'fresh-signed' }),
-    'download'
+    getDownloadImageUrl(image, { download_url: 'https://example.com/download', signed_url: 'https://example.com/fresh-signed' }),
+    'https://example.com/download'
+  )
+})
+
+test('image URL helpers reject unsafe protocols and preserve safe absolute or relative URLs', () => {
+  assert.equal(
+    getDisplayImageUrl(buildImage({ public_url: 'javascript:alert(1)' })),
+    null
+  )
+  assert.equal(
+    getDownloadImageUrl(buildImage({ download_url: 'https://example.com/file.png?token=abc' })),
+    'https://example.com/file.png?token=abc'
+  )
+  assert.equal(
+    getDisplayImageUrl(buildImage({ preview_public_url: '/api/images/123' })),
+    '/api/images/123'
   )
 })
 
@@ -62,4 +78,9 @@ test('keyboard handling stops modal shortcuts while the notes field is focused',
 test('approval toggles clear an already-selected status', () => {
   assert.equal(getNextApprovalStatus('approved', 'approved'), null)
   assert.equal(getNextApprovalStatus('rejected', 'approved'), 'approved')
+})
+
+test('sanitizeRouteSegment encodes reserved characters and rejects blank values', () => {
+  assert.equal(sanitizeRouteSegment('product/../1'), 'product%2F..%2F1')
+  assert.equal(sanitizeRouteSegment('  '), null)
 })

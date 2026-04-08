@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import { MAX_PRODUCT_NAME_LEN, MAX_PRODUCT_DESC_LEN, MAX_USER_PROMPT_LEN, MAX_STYLE_VALUE_LEN } from '@/lib/prompt-builder'
-import type { Product, Project } from '@/lib/types'
+import type { GlobalStyleSettings } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
@@ -31,36 +31,31 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
+    // Single JOIN query — fetches product + parent project in one round-trip
     const { data: product, error: productError } = await supabase
       .from(T.products)
-      .select('id,name,description,project_id,global_style_settings')
+      .select(`id,name,description,project_id,global_style_settings,${T.projects}!fk_products_project(global_style_settings)`)
       .eq('id', product_id)
-      .single()
+      .single<{
+        id: string
+        name: string
+        description: string | null
+        project_id: string | null
+        global_style_settings: GlobalStyleSettings | null
+        prodai_projects: { global_style_settings: GlobalStyleSettings | null } | null
+      }>()
 
     if (productError || !product) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
 
-    const typedProduct = product as Product
-
-    // Fetch parent project in parallel if project_id is known
-    let projectStyles = {}
-    if (typedProduct.project_id) {
-      const { data: project } = await supabase
-        .from(T.projects)
-        .select('global_style_settings')
-        .eq('id', typedProduct.project_id)
-        .single()
-      if (project) {
-        projectStyles = (project as Project).global_style_settings ?? {}
-      }
-    }
-    const settings = mergeStyles(projectStyles, typedProduct.global_style_settings)
+    const projectStyles = product.prodai_projects?.global_style_settings ?? {}
+    const settings = mergeStyles(projectStyles, product.global_style_settings ?? undefined)
 
     // Truncate user-controlled and DB-sourced fields before AI interpolation to
     // prevent oversized payloads and limit prompt injection surface area
-    const safeName = typedProduct.name.slice(0, MAX_PRODUCT_NAME_LEN)
-    const safeDesc = typedProduct.description ? typedProduct.description.slice(0, MAX_PRODUCT_DESC_LEN) : null
+    const safeName = product.name.slice(0, MAX_PRODUCT_NAME_LEN)
+    const safeDesc = product.description ? product.description.slice(0, MAX_PRODUCT_DESC_LEN) : null
     const safePrompt = user_prompt.slice(0, MAX_USER_PROMPT_LEN)
 
     const styleBlock = Object.entries(settings)
@@ -84,6 +79,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ refined_prompt: text.trim() })
   } catch (err) {
+    // Log the full error internally but never echo raw error messages back to
+    // the client — they can contain API keys or internal query details.
     console.error('[BuildPrompt] Error:', err)
     await logError({
       productId: product_id,
@@ -91,7 +88,7 @@ export async function POST(request: NextRequest) {
       errorSource: 'api/ai/build-prompt',
     })
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
+      { error: 'Internal server error' },
       { status: 500 }
     )
   }

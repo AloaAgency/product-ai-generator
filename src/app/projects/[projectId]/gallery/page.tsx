@@ -48,7 +48,10 @@ export default function ProjectGalleryPage({
   params: Promise<{ projectId: string }>
 }) {
   const { projectId } = use(params)
-  const { currentProject, fetchProject, updateProject, bulkDeleteImages } = useAppStore()
+  const currentProject = useAppStore((state) => state.currentProject)
+  const fetchProject = useAppStore((state) => state.fetchProject)
+  const updateProject = useAppStore((state) => state.updateProject)
+  const bulkDeleteImages = useAppStore((state) => state.bulkDeleteImages)
 
   const [productGroups, setProductGroups] = useState<ProductGroup[]>([])
   const [loading, setLoading] = useState(true)

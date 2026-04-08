@@ -38,8 +38,31 @@ export async function processReferenceImageCompression(
     }
   }
 
-  const buffer = Buffer.from(await fileData.arrayBuffer())
-  const result = await compressReferenceImage(buffer)
+  let buffer: Buffer
+  try {
+    buffer = Buffer.from(await fileData.arrayBuffer())
+  } catch (err) {
+    return {
+      imageId,
+      wasCompressed: false,
+      originalSize: 0,
+      compressedSize: 0,
+      error: `Buffer conversion failed: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
+
+  let result: Awaited<ReturnType<typeof compressReferenceImage>>
+  try {
+    result = await compressReferenceImage(buffer)
+  } catch (err) {
+    return {
+      imageId,
+      wasCompressed: false,
+      originalSize: buffer.length,
+      compressedSize: buffer.length,
+      error: `Compression failed: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
 
   if (!result.wasCompressed) {
     return {
