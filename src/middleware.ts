@@ -17,15 +17,22 @@ export function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  // Show login page, preserving the intended destination
+  if (pathname.startsWith('/api/')) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  // Show login page for document requests, preserving the intended destination.
+  // Returning 200 here avoids the app looking "down" to browsers and simple health checks.
   const errorParam = request.nextUrl.searchParams.get('error') || ''
   return new NextResponse(loginPage(errorParam, pathname), {
-    status: 401,
+    status: 200,
     headers: { 'content-type': 'text/html' },
   })
 }
 
 function loginPage(error: string, redirectPath: string) {
+  const safeRedirectPath = escapeHtmlAttr(redirectPath)
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -50,7 +57,7 @@ function loginPage(error: string, redirectPath: string) {
   <div class="card">
     <h1>Aloa AI Product Imager</h1>
     <form method="POST" action="/api/login">
-      <input type="hidden" name="redirect" value="${redirectPath}" />
+      <input type="hidden" name="redirect" value="${safeRedirectPath}" />
       <label for="password">Password</label>
       <input type="password" id="password" name="password" placeholder="Enter password" autofocus required />
       <button type="submit">Sign In</button>
@@ -59,6 +66,15 @@ function loginPage(error: string, redirectPath: string) {
   </div>
 </body>
 </html>`
+}
+
+function escapeHtmlAttr(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
 }
 
 export const config = {
