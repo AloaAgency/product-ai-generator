@@ -127,15 +127,20 @@ export async function GET(
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
     }
 
-    // Sign thumbnail URLs for images, plus full paths as fallback
+    // Sign lightweight image assets for gallery/list rendering.
+    // Full-size originals are fetched on demand by the lightbox.
     const imageItems = (images || []).filter((img) => img.media_type !== 'video')
     const thumbPaths = imageItems
       .map((img) => img.thumb_storage_path)
       .filter(Boolean) as string[]
-    const fullPaths = imageItems
+    const previewPaths = imageItems
+      .map((img) => img.preview_storage_path)
+      .filter(Boolean) as string[]
+    const fallbackPaths = imageItems
+      .filter((img) => !img.thumb_storage_path && !img.preview_storage_path && img.storage_path)
       .map((img) => img.storage_path)
       .filter(Boolean) as string[]
-    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...fullPaths]))
+    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...previewPaths, ...fallbackPaths]))
 
     const videoItems = (images || []).filter((img) => img.media_type === 'video')
     const videoPaths = videoItems
@@ -170,8 +175,10 @@ export async function GET(
       ...img,
       public_url: img.media_type === 'video'
         ? (signedVideos.get(img.storage_path) ?? null)
-        : (signedImageBucket.get(img.storage_path) ?? null),
-      preview_public_url: null,
+        : (!img.thumb_storage_path && !img.preview_storage_path ? (signedImageBucket.get(img.storage_path) ?? null) : null),
+      preview_public_url: img.media_type === 'video'
+        ? null
+        : (img.preview_storage_path ? (signedImageBucket.get(img.preview_storage_path) ?? null) : null),
       thumb_public_url: img.media_type === 'video'
         ? (img.thumb_storage_path ? (signedVideos.get(img.thumb_storage_path) ?? null) : null)
         : (img.thumb_storage_path ? (signedImageBucket.get(img.thumb_storage_path) ?? null) : null),

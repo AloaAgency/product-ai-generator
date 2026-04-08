@@ -4,8 +4,10 @@ import type { LightboxImage } from '../ImageLightbox'
 import {
   getDisplayImageUrl,
   getDownloadImageUrl,
+  getFullImageUrl,
   getKeyboardAction,
   getNextApprovalStatus,
+  getPreviewImageUrl,
   sanitizeRouteSegment,
   shouldRequestSignedUrls,
 } from '../imageLightbox.helpers.js'
@@ -20,12 +22,14 @@ const buildImage = (overrides: Partial<LightboxImage> = {}): LightboxImage => ({
 
 test('image URL helpers honor preview and download fallback order', () => {
   const image = buildImage({
-    preview_public_url: 'preview-public',
-    signed_url: 'signed',
-    public_url: 'public',
+    preview_public_url: 'https://example.com/preview-public',
+    signed_url: 'https://example.com/full-signed',
+    public_url: 'https://example.com/full-public',
   })
-  assert.equal(getDisplayImageUrl(image), 'preview-public')
-  assert.equal(getDownloadImageUrl(image), 'signed')
+  assert.equal(getPreviewImageUrl(image), 'https://example.com/preview-public')
+  assert.equal(getFullImageUrl(image), 'https://example.com/full-signed')
+  assert.equal(getDisplayImageUrl(image), 'https://example.com/preview-public')
+  assert.equal(getDownloadImageUrl(image), 'https://example.com/full-signed')
   assert.equal(
     getDownloadImageUrl(image, { download_url: 'https://example.com/download', signed_url: 'https://example.com/fresh-signed' }),
     'https://example.com/download'
@@ -61,6 +65,21 @@ test('keyboard delete path only permanently deletes already-rejected images with
   assert.deepEqual(
     getKeyboardAction({ key: 'Backspace', isNotesFocused: false, isRejected: false, hasDelete: true }),
     { action: 'reject', preventDefault: true }
+  )
+})
+
+test('keyboard navigation prevents scroll and supports first/last shortcuts', () => {
+  assert.deepEqual(
+    getKeyboardAction({ key: 'ArrowLeft', isNotesFocused: false, isRejected: false, hasDelete: false }),
+    { action: 'prev', preventDefault: true }
+  )
+  assert.deepEqual(
+    getKeyboardAction({ key: 'Home', isNotesFocused: false, isRejected: false, hasDelete: false }),
+    { action: 'first', preventDefault: true }
+  )
+  assert.deepEqual(
+    getKeyboardAction({ key: 'End', isNotesFocused: false, isRejected: false, hasDelete: false }),
+    { action: 'last', preventDefault: true }
   )
 })
 

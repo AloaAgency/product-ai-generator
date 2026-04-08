@@ -20,10 +20,12 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import {
+  getFullImageUrl,
   getDisplayImageUrl,
   getDownloadImageUrl,
   getKeyboardAction,
   getNextApprovalStatus,
+  getPreviewImageUrl,
   sanitizeRouteSegment,
   shouldRequestSignedUrls,
 } from './imageLightbox.helpers'
@@ -161,7 +163,10 @@ export function ImageLightbox({
   const [copied, setCopied] = useState(false)
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null)
   const [notesValue, setNotesValue] = useState('')
+  const [resolvedImageUrl, setResolvedImageUrl] = useState<string | null>(null)
   const notesInputRef = useRef<HTMLInputElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const preloadCacheRef = useRef<Map<string, Promise<void>>>(new Map())
 
   const currentImage = images[currentIndex]
   const hasPrev = currentIndex > 0
@@ -181,6 +186,34 @@ export function ImageLightbox({
     return () => window.clearTimeout(timeout)
   }, [downloadNotice])
 
+  const preloadImage = useCallback((url: string | null) => {
+    if (!url) return Promise.resolve()
+
+    const cached = preloadCacheRef.current.get(url)
+    if (cached) return cached
+
+    const img = new window.Image()
+    img.decoding = 'async'
+    img.src = url
+
+    const pending = (typeof img.decode === 'function'
+      ? img.decode().catch(() => undefined)
+      : new Promise<void>((resolve) => {
+          img.onload = () => resolve()
+          img.onerror = () => resolve()
+        }))
+      .finally(() => {
+        preloadCacheRef.current.set(url, Promise.resolve())
+      })
+
+    preloadCacheRef.current.set(url, pending)
+    return pending
+  }, [])
+
+  useEffect(() => {
+    dialogRef.current?.focus()
+  }, [])
+
   const handlePrev = useCallback(() => {
     if (hasPrev) onNavigate(currentIndex - 1)
   }, [currentIndex, hasPrev, onNavigate])
@@ -188,6 +221,14 @@ export function ImageLightbox({
   const handleNext = useCallback(() => {
     if (hasNext) onNavigate(currentIndex + 1)
   }, [currentIndex, hasNext, onNavigate])
+
+  const handleFirst = useCallback(() => {
+    if (currentIndex > 0) onNavigate(0)
+  }, [currentIndex, onNavigate])
+
+  const handleLast = useCallback(() => {
+    if (currentIndex < images.length - 1) onNavigate(images.length - 1)
+  }, [currentIndex, images.length, onNavigate])
 
   const handleApprove = useCallback(async () => {
     if (!currentImage || isUpdating) return
@@ -311,6 +352,12 @@ export function ImageLightbox({
         case 'next':
           handleNext()
           break
+        case 'first':
+          handleFirst()
+          break
+        case 'last':
+          handleLast()
+          break
         case 'approve':
           void handleApprove()
           break
@@ -335,7 +382,7 @@ export function ImageLightbox({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handlePrev, handleNext, handleApprove, handleReject, handleDownload, handleCopyPrompt, handleRequestChanges, handlePermanentDelete, isRejected, onDelete])
+  }, [handlePrev, handleNext, handleFirst, handleLast, handleApprove, handleReject, handleDownload, handleCopyPrompt, handleRequestChanges, handlePermanentDelete, isRejected, onDelete])
 
   // Fetch signed URLs when the current image changes and has no displayable URL
   useEffect(() => {
@@ -344,6 +391,51 @@ export function ImageLightbox({
       void onRequestSignedUrls(currentImage.id)
     }
   }, [currentImage, onRequestSignedUrls])
+
+  // Start with a fast preview/thumbnail, then upgrade to full resolution only after it has decoded.
+  useEffect(() => {
+    if (!currentImage) {
+      setResolvedImageUrl(null)
+      return
+    }
+
+    const previewUrl = getPreviewImageUrl(currentImage)
+    const fullUrl = getFullImageUrl(currentImage)
+    const immediateUrl = previewUrl || fullUrl
+    let cancelled = false
+
+    setResolvedImageUrl(immediateUrl)
+
+    if (fullUrl && fullUrl !== immediateUrl) {
+      void preloadImage(fullUrl).then(() => {
+        if (!cancelled) setResolvedImageUrl(fullUrl)
+      })
+    }
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    currentImage,
+    currentImage?.id,
+    currentImage?.preview_signed_url,
+    currentImage?.preview_public_url,
+    currentImage?.thumb_signed_url,
+    currentImage?.thumb_public_url,
+    currentImage?.signed_url,
+    currentImage?.public_url,
+    preloadImage,
+  ])
+
+  useEffect(() => {
+    const indexesToWarm = [currentIndex, currentIndex - 1, currentIndex + 1, currentIndex - 2, currentIndex + 2]
+    for (const index of indexesToWarm) {
+      const image = images[index]
+      if (!image) continue
+      void preloadImage(getDisplayImageUrl(image))
+      void preloadImage(getFullImageUrl(image))
+    }
+  }, [currentIndex, images, preloadImage])
 
   const thumbnailItems = useMemo(
     () =>
@@ -359,7 +451,7 @@ export function ImageLightbox({
 
   if (!currentImage) return null
 
-  const imageUrl = getDisplayImageUrl(currentImage)
+  const imageUrl = resolvedImageUrl ?? getDisplayImageUrl(currentImage)
   const safeFixProjectId = sanitizeRouteSegment(projectId)
   const safeFixProductId = sanitizeRouteSegment(currentImage.productId)
   const safeFixImageId = sanitizeRouteSegment(currentImage.id)
@@ -376,8 +468,10 @@ export function ImageLightbox({
     >
       <div className="fixed inset-0 bg-black/90" onClick={onClose} />
       <div
+        ref={dialogRef}
         className="relative z-10 flex h-full max-h-[90vh] w-full max-w-6xl flex-col"
         onClick={(e) => e.stopPropagation()}
+        tabIndex={-1}
       >
         {/* Header */}
         <div className="flex items-center justify-between rounded-t-xl bg-zinc-900/80 px-3 py-2 sm:px-4 sm:py-3">

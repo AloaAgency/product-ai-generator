@@ -40,8 +40,6 @@ export async function GET(
     }
 
     const productIds = products.map((p) => p.id)
-    const productNameMap = new Map(products.map((p) => [p.id, p.name]))
-
     // 2. Fetch all generation_jobs for these products
     const { data: jobs } = await supabase
       .from(T.generation_jobs)
@@ -133,39 +131,32 @@ export async function GET(
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
     }
 
-    // 5. Sign only thumbnail URLs for images (full-size signed on demand by lightbox)
+    // 5. Sign only lightweight image assets for gallery/list rendering.
+    // Full-size originals are signed on demand by the lightbox.
     const imageItems = (images || []).filter((img) => img.media_type !== 'video')
     const thumbPaths = imageItems
       .map((img) => img.thumb_storage_path)
       .filter(Boolean) as string[]
+    const previewPaths = imageItems
+      .map((img) => img.preview_storage_path)
+      .filter(Boolean) as string[]
+    const fallbackPaths = imageItems
+      .filter((img) => !img.thumb_storage_path && !img.preview_storage_path && img.storage_path)
+      .map((img) => img.storage_path)
+      .filter(Boolean) as string[]
 
     let signedImageBucket = new Map<string, string>()
-    if (thumbPaths.length > 0) {
+    const lightweightImagePaths = Array.from(new Set([...thumbPaths, ...previewPaths, ...fallbackPaths]))
+    if (lightweightImagePaths.length > 0) {
       const { data: signed } = await supabase.storage
         .from('generated-images')
-        .createSignedUrls(thumbPaths, SIGNED_URL_TTL_SECONDS)
+        .createSignedUrls(lightweightImagePaths, SIGNED_URL_TTL_SECONDS)
       if (signed) {
         signedImageBucket = new Map(
           signed
             .filter((item) => item?.signedUrl && item?.path)
             .map((item) => [item.path!, item.signedUrl])
         )
-      }
-    }
-
-    // For images without thumbnails, sign the full path as fallback
-    const noThumbImages = imageItems.filter((img) => !img.thumb_storage_path && img.storage_path)
-    const fallbackPaths = noThumbImages.map((img) => img.storage_path).filter(Boolean) as string[]
-    if (fallbackPaths.length > 0) {
-      const { data: signed } = await supabase.storage
-        .from('generated-images')
-        .createSignedUrls(fallbackPaths, SIGNED_URL_TTL_SECONDS)
-      if (signed) {
-        for (const item of signed) {
-          if (item?.signedUrl && item?.path) {
-            signedImageBucket.set(item.path, item.signedUrl)
-          }
-        }
       }
     }
 
@@ -218,8 +209,10 @@ export async function GET(
         ...img,
         public_url: img.media_type === 'video'
           ? (signedVideos.get(img.storage_path) ?? null)
-          : (!img.thumb_storage_path ? (signedImageBucket.get(img.storage_path) ?? null) : null),
-        preview_public_url: null,
+          : (!img.thumb_storage_path && !img.preview_storage_path ? (signedImageBucket.get(img.storage_path) ?? null) : null),
+        preview_public_url: img.media_type === 'video'
+          ? null
+          : (img.preview_storage_path ? (signedImageBucket.get(img.preview_storage_path) ?? null) : null),
         thumb_public_url: img.media_type === 'video'
           ? (img.thumb_storage_path ? (signedVideos.get(img.thumb_storage_path) ?? null) : null)
           : (img.thumb_storage_path ? (signedImageBucket.get(img.thumb_storage_path) ?? null) : null),
