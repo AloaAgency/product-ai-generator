@@ -12,7 +12,6 @@ import {
   Upload,
   ToggleLeft,
   ToggleRight,
-  Check,
 } from 'lucide-react'
 import {
   VEO_RESOLUTIONS,
