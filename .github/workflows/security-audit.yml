@@ -16,7 +16,7 @@ jobs:
     # Non-blocking: continue-on-error means this check shows as warning, not failure
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v4
         with:
