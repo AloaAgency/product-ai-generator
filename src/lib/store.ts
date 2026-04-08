@@ -280,8 +280,8 @@ interface AppState {
   galleryHasMore: boolean
   loadingGallery: boolean
   loadingGalleryMore: boolean
-  fetchGallery: (productId: string, filters?: { job_id?: string; approval_status?: string; media_type?: string; scene_id?: string }) => Promise<void>
-  fetchGalleryMore: (productId: string, filters?: { job_id?: string; approval_status?: string; media_type?: string; scene_id?: string }) => Promise<void>
+  fetchGallery: (productId: string, filters?: { job_id?: string; approval_status?: string; media_type?: string; scene_id?: string; sort?: string }) => Promise<void>
+  fetchGalleryMore: (productId: string, filters?: { job_id?: string; approval_status?: string; media_type?: string; scene_id?: string; sort?: string }) => Promise<void>
   updateImageApproval: (imageId: string, approval_status: string | null, notes?: string) => Promise<void>
   deleteImage: (imageId: string) => Promise<void>
   bulkDeleteImages: (imageIds: string[]) => Promise<void>
@@ -947,6 +947,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (filters?.approval_status) params.set('approval_status', filters.approval_status.trim())
     if (filters?.media_type) params.set('media_type', filters.media_type.trim())
     if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
+    if (filters?.sort) params.set('sort', filters.sort.trim())
     params.set('limit', '48')
     params.set('offset', '0')
     const qs = params.toString()
@@ -986,6 +987,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (filters?.approval_status) params.set('approval_status', filters.approval_status.trim())
       if (filters?.media_type) params.set('media_type', filters.media_type.trim())
       if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
+      if (filters?.sort) params.set('sort', filters.sort.trim())
       params.set('limit', '48')
       params.set('offset', String(galleryImages.length))
       const qs = params.toString()

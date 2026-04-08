@@ -45,11 +45,9 @@ export async function GET(
     const [signedUrl, thumbSignedUrl, previewSignedUrl, downloadUrl] = image.media_type === 'video'
       ? [await signPath(image.storage_path), null, null, await signDownloadPath(image.storage_path)]
       : await Promise.all([
-          // For display: prefer preview > thumb > full-size as last resort
-          signPath(image.preview_storage_path ?? image.thumb_storage_path ?? image.storage_path),
+          signPath(image.storage_path),
           signPath(image.thumb_storage_path),
           signPath(image.preview_storage_path),
-          // Download always gets the full-size original
           signDownloadPath(image.storage_path),
         ])
 

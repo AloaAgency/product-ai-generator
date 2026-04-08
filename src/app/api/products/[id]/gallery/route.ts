@@ -15,6 +15,7 @@ export async function GET(
   const approvalStatus = searchParams.get('approval_status')
   const mediaType = searchParams.get('media_type') // 'all' | 'image' | 'video'
   const sceneId = searchParams.get('scene_id')
+  const sortParam = searchParams.get('sort') // 'newest' | 'oldest' | 'variation'
   const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_PAGE_SIZE, 1), 200)
   const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
 
@@ -110,9 +111,14 @@ export async function GET(
     let imagesQuery = applyFilters(
       supabase.from(T.generated_images).select('*')
     )
-    imagesQuery = imagesQuery
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1)
+    if (sortParam === 'oldest') {
+      imagesQuery = imagesQuery.order('created_at', { ascending: true })
+    } else if (sortParam === 'variation') {
+      imagesQuery = imagesQuery.order('variation_number', { ascending: true }).order('created_at', { ascending: false })
+    } else {
+      imagesQuery = imagesQuery.order('created_at', { ascending: false })
+    }
+    imagesQuery = imagesQuery.range(offset, offset + limit - 1)
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: images, error: imagesError } = await imagesQuery as { data: any[] | null; error: any }
@@ -121,17 +127,15 @@ export async function GET(
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
     }
 
-    // Sign only thumbnail URLs for images (full-size signed on demand by lightbox)
+    // Sign thumbnail URLs for images, plus full paths as fallback
     const imageItems = (images || []).filter((img) => img.media_type !== 'video')
     const thumbPaths = imageItems
       .map((img) => img.thumb_storage_path)
       .filter(Boolean) as string[]
-    // For images without thumbnails, sign the full path as fallback
-    const fallbackPaths = imageItems
-      .filter((img) => !img.thumb_storage_path && img.storage_path)
+    const fullPaths = imageItems
       .map((img) => img.storage_path)
       .filter(Boolean) as string[]
-    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...fallbackPaths]))
+    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...fullPaths]))
 
     const videoItems = (images || []).filter((img) => img.media_type === 'video')
     const videoPaths = videoItems
@@ -166,7 +170,7 @@ export async function GET(
       ...img,
       public_url: img.media_type === 'video'
         ? (signedVideos.get(img.storage_path) ?? null)
-        : (!img.thumb_storage_path ? (signedImageBucket.get(img.storage_path) ?? null) : null),
+        : (signedImageBucket.get(img.storage_path) ?? null),
       preview_public_url: null,
       thumb_public_url: img.media_type === 'video'
         ? (img.thumb_storage_path ? (signedVideos.get(img.thumb_storage_path) ?? null) : null)
