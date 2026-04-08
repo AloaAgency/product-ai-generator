@@ -6,6 +6,7 @@ import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { ProjectHeader } from '@/components/ProjectHeader'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
 import { GalleryContextMenu, type ContextMenuAction } from '@/components/GalleryContextMenu'
+import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
 import type { GeneratedImage } from '@/lib/types'
 import {
   Filter,
@@ -69,6 +70,8 @@ export default function ProjectGalleryPage({
   const [requestChangesCount, setRequestChangesCount] = useState(0)
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const signedUrlsRef = useRef(signedUrlsById)
+  const signedUrlRequestsRef = useRef<Record<string, Promise<SignedImageUrls | null>>>({})
+  const batchSignedUrlRequestsRef = useRef<Record<string, Promise<Record<string, SignedImageUrls>>>>({})
   const loadMoreRef = useRef<HTMLDivElement>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null } | null>(null)
 
@@ -196,6 +199,14 @@ export default function ProjectGalleryPage({
     return result
   }, [productGroups])
 
+  const imageIndexById = useMemo(() => {
+    const indexMap = new Map<string, number>()
+    allImageOnly.forEach((img, index) => {
+      indexMap.set(img.id, index)
+    })
+    return indexMap
+  }, [allImageOnly])
+
   const lightboxImages: LightboxImage[] = useMemo(() => {
     return allImageOnly.map((img) => ({
       id: img.id,
@@ -221,30 +232,101 @@ export default function ProjectGalleryPage({
       return cached
     }
 
-    const res = await fetch(`/api/images/${imageId}/signed`)
-    if (!res.ok) return null
-    const data = (await res.json()) as SignedImageUrls
-    const next = { ...signedUrlsRef.current, [imageId]: data }
-    signedUrlsRef.current = next
-    setSignedUrlsById(next)
-    return data
+    const inFlight = signedUrlRequestsRef.current[imageId]
+    if (inFlight) return inFlight
+
+    const request = fetch(`/api/images/${imageId}/signed`)
+      .then(async (res) => {
+        if (!res.ok) return null
+        const data = (await res.json()) as SignedImageUrls
+        const next = { ...signedUrlsRef.current, [imageId]: data }
+        signedUrlsRef.current = next
+        setSignedUrlsById(next)
+        return data
+      })
+      .finally(() => {
+        delete signedUrlRequestsRef.current[imageId]
+      })
+
+    signedUrlRequestsRef.current[imageId] = request
+    return request
   }, [])
+
+  const ensureSignedUrlsBatch = useCallback(async (imageIds: string[]) => {
+    const pendingIds = Array.from(new Set(imageIds)).filter((imageId) => {
+      const cached = signedUrlsRef.current[imageId]
+      return !(cached?.expires_at && cached.expires_at - Date.now() > 60_000)
+    })
+    if (pendingIds.length === 0) return {}
+
+    const requestKey = pendingIds.slice().sort().join(',')
+    const inFlight = batchSignedUrlRequestsRef.current[requestKey]
+    if (inFlight) return inFlight
+
+    const request = fetch('/api/images/signed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_ids: pendingIds }),
+    })
+      .then(async (res) => {
+        if (!res.ok) return {}
+        const data = await res.json() as { signed_urls?: Record<string, SignedImageUrls> }
+        const updates = data.signed_urls ?? {}
+        if (Object.keys(updates).length > 0) {
+          const next = { ...signedUrlsRef.current, ...updates }
+          signedUrlsRef.current = next
+          setSignedUrlsById(next)
+        }
+        return updates
+      })
+      .finally(() => {
+        delete batchSignedUrlRequestsRef.current[requestKey]
+      })
+
+    batchSignedUrlRequestsRef.current[requestKey] = request
+    return request
+  }, [])
+
+  useEffect(() => {
+    if (lightboxIndex !== null) return
+    if (allImageOnly.length === 0) return
+
+    const warmIds = allImageOnly.slice(0, 6).map((img) => img.id)
+    const timeout = window.setTimeout(() => {
+      void ensureSignedUrlsBatch(warmIds)
+    }, 150)
+
+    return () => window.clearTimeout(timeout)
+  }, [allImageOnly, ensureSignedUrlsBatch, lightboxIndex])
+
+  const warmLightboxAssets = useCallback((imageId: string) => {
+    const index = imageIndexById.get(imageId)
+    if (index === undefined) return
+
+    const warmIndexes = [index, index - 1, index + 1, index + 2]
+    const warmIds = warmIndexes
+      .map((warmIndex) => allImageOnly[warmIndex]?.id)
+      .filter((value): value is string => Boolean(value))
+    if (warmIds.length > 0) {
+      void ensureSignedUrlsBatch(warmIds)
+    }
+  }, [allImageOnly, ensureSignedUrlsBatch, imageIndexById])
 
   useModalShortcuts({
     isOpen: !!playingVideoUrl,
     onClose: () => setPlayingVideoUrl(null),
   })
 
-  const handleApprovalChange = async (imageId: string, status: ApprovalStatus, notes?: string) => {
+  const handleApprovalChange = useCallback(async (imageId: string, status: ApprovalStatus, notes?: string) => {
     await fetch(`/api/images/${imageId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ approval_status: status, ...(notes !== undefined ? { notes } : {}) }),
     })
     await fetchProjectGallery()
-  }
+  }, [fetchProjectGallery])
 
-  const handleDelete = async (imageId: string) => {
+  const handleDelete = useCallback(async (imageId: string) => {
     await fetch(`/api/images/${imageId}`, { method: 'DELETE' })
     await fetchProjectGallery()
     // Adjust lightbox after deletion
@@ -256,7 +338,7 @@ export default function ProjectGalleryPage({
         setLightboxIndex(newTotal - 1)
       }
     }
-  }
+  }, [allImageOnly, fetchProjectGallery, lightboxIndex])
 
   const handleBulkDelete = async () => {
     const rejectedIds = allImageOnly
@@ -279,7 +361,7 @@ export default function ProjectGalleryPage({
 
     switch (action) {
       case 'open': {
-        const idx = allImageOnly.findIndex((i) => i.id === imageId)
+        const idx = imageIndexById.get(imageId) ?? -1
         if (idx !== -1) setLightboxIndex(idx)
         break
       }
@@ -321,7 +403,7 @@ export default function ProjectGalleryPage({
         }
         break
     }
-  }, [allImageOnly, handleApprovalChange, ensureSignedUrls, handleDelete])
+  }, [allImageOnly, imageIndexById, handleApprovalChange, ensureSignedUrls, handleDelete])
 
   const handleNameSave = async (name: string) => {
     await updateProject(projectId, { name })
@@ -330,14 +412,14 @@ export default function ProjectGalleryPage({
   // Prefetch signed URLs around lightbox index
   useEffect(() => {
     if (lightboxIndex === null) return
-    const current = allImageOnly[lightboxIndex]
-    if (!current) return
-    void ensureSignedUrls(current.id)
-    const next = allImageOnly[lightboxIndex + 1]
-    if (next) void ensureSignedUrls(next.id)
-    const prev = allImageOnly[lightboxIndex - 1]
-    if (prev) void ensureSignedUrls(prev.id)
-  }, [lightboxIndex, allImageOnly, ensureSignedUrls])
+    const warmIndexes = [lightboxIndex, lightboxIndex - 1, lightboxIndex + 1, lightboxIndex - 2, lightboxIndex + 2]
+    const warmIds = warmIndexes
+      .map((index) => allImageOnly[index]?.id)
+      .filter((value): value is string => Boolean(value))
+    if (warmIds.length > 0) {
+      void ensureSignedUrlsBatch(warmIds)
+    }
+  }, [allImageOnly, ensureSignedUrlsBatch, lightboxIndex])
 
   const totalImages = productGroups.reduce((sum, g) => sum + g.images.length, 0)
 
@@ -503,14 +585,14 @@ export default function ProjectGalleryPage({
                   {group.images.length}
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-                {group.images.map((img) => {
+              <VirtualizedSquareGrid
+                items={group.images}
+                getItemKey={(img) => img.id}
+                renderItem={(img) => {
                   const isVideo = img.media_type === 'video'
                   const isRejected = img.approval_status === 'rejected'
                   const isChanges = img.approval_status === 'request_changes'
-                  const globalIndex = allImageOnly.findIndex(
-                    (item) => item.id === img.id
-                  )
+                  const globalIndex = imageIndexById.get(img.id) ?? -1
                   return (
                     <button
                       key={img.id}
@@ -525,6 +607,12 @@ export default function ProjectGalleryPage({
                         if (isVideo) return
                         e.preventDefault()
                         setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status })
+                      }}
+                      onMouseEnter={() => {
+                        if (!isVideo) warmLightboxAssets(img.id)
+                      }}
+                      onFocus={() => {
+                        if (!isVideo) warmLightboxAssets(img.id)
                       }}
                       className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
                         isRejected
@@ -563,7 +651,7 @@ export default function ProjectGalleryPage({
                       ) : (
                         /* eslint-disable-next-line @next/next/no-img-element */
                         <img
-                          src={img.thumb_public_url ?? img.public_url ?? undefined}
+                          src={img.thumb_public_url ?? img.preview_public_url ?? img.public_url ?? undefined}
                           alt={`Variation ${img.variation_number}`}
                           loading="lazy"
                           decoding="async"
@@ -588,8 +676,8 @@ export default function ProjectGalleryPage({
                       )}
                     </button>
                   )
-                })}
-              </div>
+                }}
+              />
             </div>
           ))}
         </div>

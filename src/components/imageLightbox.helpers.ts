@@ -23,16 +23,25 @@ export const sanitizeRouteSegment = (value?: string | null) => {
   return trimmed ? encodeURIComponent(trimmed) : null
 }
 
-export const getDisplayImageUrl = (image: LightboxImage) =>
+export const getPreviewImageUrl = (image: LightboxImage) =>
   sanitizeUrlCandidate(
-    image.signed_url ||
-    image.public_url ||
     image.preview_signed_url ||
     image.preview_public_url ||
     image.thumb_signed_url ||
     image.thumb_public_url ||
     null
   )
+
+export const getFullImageUrl = (image: LightboxImage) =>
+  sanitizeUrlCandidate(
+    image.signed_url ||
+    image.public_url ||
+    null
+  )
+
+export const getDisplayImageUrl = (image: LightboxImage) =>
+  getPreviewImageUrl(image) ||
+  getFullImageUrl(image)
 
 export const getDownloadImageUrl = (
   image: LightboxImage,
@@ -64,6 +73,8 @@ export type LightboxKeyboardAction =
   | 'close'
   | 'prev'
   | 'next'
+  | 'first'
+  | 'last'
   | 'approve'
   | 'reject'
   | 'download'
@@ -94,9 +105,13 @@ export const getKeyboardAction = ({
     case 'Escape':
       return { action: 'close', preventDefault: false }
     case 'ArrowLeft':
-      return { action: 'prev', preventDefault: false }
+      return { action: 'prev', preventDefault: true }
     case 'ArrowRight':
-      return { action: 'next', preventDefault: false }
+      return { action: 'next', preventDefault: true }
+    case 'Home':
+      return { action: 'first', preventDefault: true }
+    case 'End':
+      return { action: 'last', preventDefault: true }
     case 'Enter':
       return { action: 'approve', preventDefault: true }
     case 'Delete':
