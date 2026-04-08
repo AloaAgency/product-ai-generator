@@ -8,6 +8,7 @@ import { GalleryContextMenu, type ContextMenuAction } from '@/components/Gallery
 import type { PromptTemplate } from '@/lib/types'
 import {
   ArrowLeft,
+  ArrowUpDown,
   Filter,
   Download,
   ImageIcon,
@@ -25,6 +26,7 @@ import {
 import Link from 'next/link'
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'request_changes'
+type SortOption = 'newest' | 'oldest' | 'variation'
 
 const STATUS_FILTERS: { label: string; value: StatusFilter }[] = [
   { label: 'All', value: 'all' },
@@ -64,6 +66,7 @@ export default function GalleryPage({
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [mediaFilter, setMediaFilter] = useState<'all' | 'image' | 'video'>('all')
   const [jobFilter, setJobFilter] = useState<string>('all')
+  const [sortOption, setSortOption] = useState<SortOption>('newest')
   const [groupByScene, setGroupByScene] = useState(false)
   const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null)
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
@@ -90,14 +93,14 @@ export default function GalleryPage({
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting && galleryHasMore && !loadingGalleryMore) {
-          fetchGalleryMore(id)
+          fetchGalleryMore(id, { sort: sortOption })
         }
       },
       { rootMargin: '400px' }
     )
     observer.observe(sentinel)
     return () => observer.disconnect()
-  }, [galleryHasMore, loadingGalleryMore, fetchGalleryMore, id])
+  }, [galleryHasMore, loadingGalleryMore, fetchGalleryMore, id, sortOption])
 
   async function handleGalleryUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const fileList = e.target.files
@@ -140,7 +143,7 @@ export default function GalleryPage({
         }).catch(() => {})
       }
       // Refresh gallery
-      await fetchGallery(id)
+      await fetchGallery(id, { sort: sortOption })
     } catch (err) {
       console.error('[GalleryUpload] Error:', err)
     } finally {
@@ -150,13 +153,13 @@ export default function GalleryPage({
   }
 
   useEffect(() => {
-    fetchGallery(id)
+    fetchGallery(id, { sort: sortOption })
     fetchGenerationJobs(id)
     fetch(`/api/products/${id}/prompts`)
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setPromptTemplates(data) })
       .catch(() => {})
-  }, [id, fetchGallery, fetchGenerationJobs])
+  }, [id, sortOption, fetchGallery, fetchGenerationJobs])
 
   // Unique job IDs for filter dropdown
   const jobIds = useMemo(() => {
@@ -374,7 +377,7 @@ export default function GalleryPage({
     setBulkDeleting(true)
     try {
       await bulkDeleteImages(Array.from(selectedIds))
-      await fetchGallery(id)
+      await fetchGallery(id, { sort: sortOption })
       setSelectedIds(new Set())
       setSelectMode(false)
     } finally {
@@ -391,7 +394,7 @@ export default function GalleryPage({
     setBulkDeleting(true)
     try {
       await bulkDeleteImages(rejectedIds)
-      await fetchGallery(id)
+      await fetchGallery(id, { sort: sortOption })
     } finally {
       setBulkDeleting(false)
     }
@@ -436,9 +439,9 @@ export default function GalleryPage({
       const hasActive = hasActiveJobs()
       if (!isMounted) return
       if (hasActive) {
-        await fetchGallery(id)
+        await fetchGallery(id, { sort: sortOption })
       } else if (prevHadActive && !hasActive) {
-        await fetchGallery(id)
+        await fetchGallery(id, { sort: sortOption })
       }
       prevHadActive = hasActive
     }
@@ -453,13 +456,13 @@ export default function GalleryPage({
       isMounted = false
       clearInterval(interval)
     }
-  }, [id, fetchGallery, fetchGenerationJobs])
+  }, [id, sortOption, fetchGallery, fetchGenerationJobs])
 
   // Clear selection when filters change
   useEffect(() => {
     setSelectedIds(new Set())
     setSelectMode(false)
-  }, [statusFilter, mediaFilter, jobFilter])
+  }, [statusFilter, mediaFilter, jobFilter, sortOption])
 
   useEffect(() => {
     if (lightboxIndex === null) return
@@ -632,6 +635,21 @@ export default function GalleryPage({
             <CheckSquare className="h-3.5 w-3.5" />
             Select
           </button>
+
+          <div className="mx-2 hidden sm:block h-5 w-px bg-zinc-700" />
+
+          <div className="flex items-center gap-1.5">
+            <ArrowUpDown className="h-4 w-4 text-zinc-500" />
+            <select
+              value={sortOption}
+              onChange={(e) => setSortOption(e.target.value as SortOption)}
+              className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 outline-none focus:border-zinc-500"
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="variation">Variation #</option>
+            </select>
+          </div>
 
           {jobIds.length > 1 && (
             <select

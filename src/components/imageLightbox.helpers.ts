@@ -25,12 +25,12 @@ export const sanitizeRouteSegment = (value?: string | null) => {
 
 export const getDisplayImageUrl = (image: LightboxImage) =>
   sanitizeUrlCandidate(
+    image.signed_url ||
+    image.public_url ||
     image.preview_signed_url ||
     image.preview_public_url ||
     image.thumb_signed_url ||
     image.thumb_public_url ||
-    image.signed_url ||
-    image.public_url ||
     null
   )
 
@@ -51,7 +51,8 @@ export const getDownloadImageUrl = (
 
 export const shouldRequestSignedUrls = (image: LightboxImage, hasRequester: boolean) => {
   if (!hasRequester) return false
-  return !getDisplayImageUrl(image)
+  // Request full-size signed URL if we don't have one yet (even if a thumbnail is available)
+  return !sanitizeUrlCandidate(image.signed_url) && !sanitizeUrlCandidate(image.public_url)
 }
 
 export const getNextApprovalStatus = (
