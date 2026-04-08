@@ -71,6 +71,7 @@ export const slugify = (text: string, maxLength = 50): string => {
 export const resolveExtension = (mimeType: string): string => {
   if (mimeType === 'image/jpeg') return 'jpg'
   if (mimeType === 'image/webp') return 'webp'
+  if (mimeType === 'image/heic' || mimeType === 'image/heif') return 'heic'
   return 'png'
 }
 
@@ -175,6 +176,9 @@ export type CompressResult = {
  * Returns the original buffer unchanged when already within limits.
  */
 export const compressReferenceImage = async (buffer: Buffer): Promise<CompressResult> => {
+  if (buffer.length === 0) {
+    throw new Error('compressReferenceImage: buffer is empty')
+  }
   const originalSize = buffer.length
   const meta = await sharp(buffer).metadata()
   const w = meta.width ?? 0
