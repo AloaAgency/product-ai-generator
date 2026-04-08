@@ -25,10 +25,10 @@ export default function GeneratePage({
       <h1 className="text-2xl font-bold">Generate</h1>
 
       {/* Tab Toggle */}
-      <div className="flex gap-1 rounded-lg border border-zinc-800 bg-zinc-800/50 p-1 w-fit">
+      <div className="grid w-full max-w-sm grid-cols-2 gap-1 rounded-lg border border-zinc-800 bg-zinc-800/50 p-1 sm:inline-grid sm:w-auto">
         <button
           onClick={() => setActiveTab('image')}
-          className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+          className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
             activeTab === 'image'
               ? 'bg-blue-600 text-white'
               : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'
@@ -39,7 +39,7 @@ export default function GeneratePage({
         </button>
         <button
           onClick={() => setActiveTab('video')}
-          className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+          className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
             activeTab === 'video'
               ? 'bg-purple-600 text-white'
               : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700'
