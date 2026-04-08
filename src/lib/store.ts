@@ -276,8 +276,12 @@ interface AppState {
 
   // Gallery
   galleryImages: GeneratedImage[]
+  galleryTotal: number
+  galleryHasMore: boolean
   loadingGallery: boolean
+  loadingGalleryMore: boolean
   fetchGallery: (productId: string, filters?: { job_id?: string; approval_status?: string; media_type?: string; scene_id?: string }) => Promise<void>
+  fetchGalleryMore: (productId: string, filters?: { job_id?: string; approval_status?: string; media_type?: string; scene_id?: string }) => Promise<void>
   updateImageApproval: (imageId: string, approval_status: string | null, notes?: string) => Promise<void>
   deleteImage: (imageId: string) => Promise<void>
   bulkDeleteImages: (imageIds: string[]) => Promise<void>
@@ -933,13 +937,18 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Gallery
   galleryImages: [],
+  galleryTotal: 0,
+  galleryHasMore: false,
   loadingGallery: false,
+  loadingGalleryMore: false,
   fetchGallery: async (productId, filters) => {
     const params = new URLSearchParams()
     if (filters?.job_id) params.set('job_id', filters.job_id.trim())
     if (filters?.approval_status) params.set('approval_status', filters.approval_status.trim())
     if (filters?.media_type) params.set('media_type', filters.media_type.trim())
     if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
+    params.set('limit', '48')
+    params.set('offset', '0')
     const qs = params.toString()
     const requestKey = buildRequestKey('gallery', productId, qs)
     const requestVersion = beginTrackedRequest(requestKey)
@@ -947,20 +956,53 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (shouldShowLoading) set({ loadingGallery: true })
     try {
       const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(productId)}/gallery${qs ? `?${qs}` : ''}`)
+        api(`/api/products/${buildApiPath(productId)}/gallery?${qs}`)
       )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
-      set({ galleryImages: data.images ?? data })
+      set({
+        galleryImages: data.images ?? data,
+        galleryTotal: data.total ?? 0,
+        galleryHasMore: data.has_more ?? false,
+      })
     } catch (error) {
       if (isLatestRequest(requestKey, requestVersion) && !shouldPreserveStateOnFetchError(requestKey)) {
-        set({ galleryImages: [] })
+        set({ galleryImages: [], galleryTotal: 0, galleryHasMore: false })
       }
       logStoreError('Gallery', error)
     } finally {
       if (shouldShowLoading && isLatestRequest(requestKey, requestVersion)) {
         set({ loadingGallery: false })
       }
+    }
+  },
+  fetchGalleryMore: async (productId, filters) => {
+    const { galleryImages, galleryHasMore, loadingGalleryMore } = get()
+    if (!galleryHasMore || loadingGalleryMore) return
+    set({ loadingGalleryMore: true })
+    try {
+      const params = new URLSearchParams()
+      if (filters?.job_id) params.set('job_id', filters.job_id.trim())
+      if (filters?.approval_status) params.set('approval_status', filters.approval_status.trim())
+      if (filters?.media_type) params.set('media_type', filters.media_type.trim())
+      if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
+      params.set('limit', '48')
+      params.set('offset', String(galleryImages.length))
+      const qs = params.toString()
+      const data = await api(`/api/products/${buildApiPath(productId)}/gallery?${qs}`)
+      const newImages = data.images ?? []
+      // Deduplicate by id
+      const existingIds = new Set(galleryImages.map((img) => img.id))
+      const unique = newImages.filter((img: GeneratedImage) => !existingIds.has(img.id))
+      set({
+        galleryImages: [...galleryImages, ...unique],
+        galleryTotal: data.total ?? galleryImages.length + unique.length,
+        galleryHasMore: data.has_more ?? false,
+      })
+    } catch (error) {
+      logStoreError('GalleryMore', error)
+    } finally {
+      set({ loadingGalleryMore: false })
     }
   },
   updateImageApproval: async (imageId, approval_status, notes) => {

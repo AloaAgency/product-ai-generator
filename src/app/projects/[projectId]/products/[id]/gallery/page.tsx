@@ -50,8 +50,12 @@ export default function GalleryPage({
   const { projectId, id } = use(params)
 
   const galleryImages = useAppStore((state) => state.galleryImages)
+  const galleryTotal = useAppStore((state) => state.galleryTotal)
+  const galleryHasMore = useAppStore((state) => state.galleryHasMore)
   const loadingGallery = useAppStore((state) => state.loadingGallery)
+  const loadingGalleryMore = useAppStore((state) => state.loadingGalleryMore)
   const fetchGallery = useAppStore((state) => state.fetchGallery)
+  const fetchGalleryMore = useAppStore((state) => state.fetchGalleryMore)
   const updateImageApproval = useAppStore((state) => state.updateImageApproval)
   const deleteImage = useAppStore((state) => state.deleteImage)
   const bulkDeleteImages = useAppStore((state) => state.bulkDeleteImages)
@@ -73,10 +77,27 @@ export default function GalleryPage({
   const [uploadingGallery, setUploadingGallery] = useState(false)
   const galleryFileInputRef = useRef<HTMLInputElement>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null } | null>(null)
+  const loadMoreRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     signedUrlsRef.current = signedUrlsById
   }, [signedUrlsById])
+
+  // Infinite scroll observer
+  useEffect(() => {
+    const sentinel = loadMoreRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && galleryHasMore && !loadingGalleryMore) {
+          fetchGalleryMore(id)
+        }
+      },
+      { rootMargin: '400px' }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [galleryHasMore, loadingGalleryMore, fetchGalleryMore, id])
 
   async function handleGalleryUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const fileList = e.target.files
@@ -98,6 +119,7 @@ export default function GalleryPage({
 
       // Upload each file to its signed URL
       const fileArray = Array.from(fileList)
+      const uploadedImageIds: string[] = []
       for (let i = 0; i < results.length; i++) {
         const result = results[i]
         if (!result.signed_url) continue
@@ -107,6 +129,15 @@ export default function GalleryPage({
           headers: { 'Content-Type': file.type || 'application/octet-stream' },
           body: file,
         })
+        if (result.image?.id) uploadedImageIds.push(result.image.id)
+      }
+      // Generate thumbnails for uploaded images
+      if (uploadedImageIds.length > 0) {
+        await fetch('/api/images/generate-thumbs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_ids: uploadedImageIds }),
+        }).catch(() => {})
       }
       // Refresh gallery
       await fetchGallery(id)
@@ -486,7 +517,7 @@ export default function GalleryPage({
             </Link>
             <h1 className="text-xl font-semibold">Image Gallery</h1>
             <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm text-zinc-400">
-              {filteredImages.length} image{filteredImages.length !== 1 ? 's' : ''}
+              {galleryTotal > filteredImages.length ? `${filteredImages.length} of ${galleryTotal}` : filteredImages.length} image{galleryTotal !== 1 ? 's' : ''}
             </span>
           </div>
 
@@ -833,6 +864,13 @@ export default function GalleryPage({
           </div>
         )
       }
+
+      {/* Infinite scroll sentinel */}
+      {!loadingGallery && galleryHasMore && (
+        <div ref={loadMoreRef} className="flex items-center justify-center py-8">
+          {loadingGalleryMore && <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />}
+        </div>
+      )}
 
       {/* Selection action bar */}
       {selectMode && selectedIds.size > 0 && (

@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
+const DEFAULT_PAGE_SIZE = 48
 
 export async function GET(
   request: NextRequest,
@@ -13,6 +14,8 @@ export async function GET(
   const approvalStatus = searchParams.get('approval_status')
   const mediaType = searchParams.get('media_type')
   const productIdFilter = searchParams.get('product_id')
+  const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_PAGE_SIZE, 1), 200)
+  const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
 
   try {
     const supabase = createServiceClient()
@@ -80,40 +83,52 @@ export async function GET(
     if (jobIds.length === 0 && sceneIds.length === 0) {
       return NextResponse.json({
         products: products.map((p) => ({ product_id: p.id, product_name: p.name, images: [] })),
+        total: 0,
       })
     }
 
-    let imagesQuery = supabase
-      .from(T.generated_images)
-      .select('*')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const applyFilters = (q: any): any => {
+      let result = q
+      if (jobIds.length > 0 && sceneIds.length > 0) {
+        result = result.or(
+          `job_id.in.(${jobIds.join(',')}),scene_id.in.(${sceneIds.join(',')})`
+        )
+      } else if (jobIds.length > 0) {
+        result = result.in('job_id', jobIds)
+      } else {
+        result = result.in('scene_id', sceneIds)
+      }
 
-    if (jobIds.length > 0 && sceneIds.length > 0) {
-      imagesQuery = imagesQuery.or(
-        `job_id.in.(${jobIds.join(',')}),scene_id.in.(${sceneIds.join(',')})`
-      )
-    } else if (jobIds.length > 0) {
-      imagesQuery = imagesQuery.in('job_id', jobIds)
-    } else {
-      imagesQuery = imagesQuery.in('scene_id', sceneIds)
+      if (approvalStatus === 'rejected') {
+        result = result.eq('approval_status', 'rejected')
+      } else if (approvalStatus === 'request_changes') {
+        result = result.eq('approval_status', 'request_changes')
+      } else if (approvalStatus) {
+        result = result.eq('approval_status', approvalStatus)
+      } else {
+        result = result.or('approval_status.is.null,approval_status.in.(approved,pending)')
+      }
+      if (mediaType && mediaType !== 'all') {
+        result = result.eq('media_type', mediaType)
+      }
+      return result
     }
 
-    if (approvalStatus === 'rejected') {
-      imagesQuery = imagesQuery.eq('approval_status', 'rejected')
-    } else if (approvalStatus === 'request_changes') {
-      imagesQuery = imagesQuery.eq('approval_status', 'request_changes')
-    } else if (approvalStatus) {
-      imagesQuery = imagesQuery.eq('approval_status', approvalStatus)
-    } else {
-      // Default: exclude rejected and request_changes images
-      imagesQuery = imagesQuery.or('approval_status.is.null,approval_status.in.(approved,pending)')
-    }
-    if (mediaType && mediaType !== 'all') {
-      imagesQuery = imagesQuery.eq('media_type', mediaType)
-    }
+    // Get total count
+    const { count: totalCount } = await applyFilters(
+      supabase.from(T.generated_images).select('id', { count: 'exact', head: true })
+    )
 
-    imagesQuery = imagesQuery.order('created_at', { ascending: false })
+    // Fetch paginated images
+    const imagesQuery = applyFilters(
+      supabase.from(T.generated_images).select('*')
+    )
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
 
-    const { data: images, error: imagesError } = await imagesQuery
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: images, error: imagesError } = await imagesQuery as { data: any[] | null; error: any }
     if (imagesError) {
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
     }
@@ -240,7 +255,16 @@ export async function GET(
     const rejectedCount = rejectedResult.count ?? 0
     const requestChangesCount = changesResult.count ?? 0
 
-    return NextResponse.json({ products: filtered, rejected_count: rejectedCount, request_changes_count: requestChangesCount })
+    const total = totalCount ?? (images || []).length
+    return NextResponse.json({
+      products: filtered,
+      total,
+      offset,
+      limit,
+      has_more: offset + (images || []).length < total,
+      rejected_count: rejectedCount,
+      request_changes_count: requestChangesCount,
+    })
   } catch (err) {
     console.error('[ProjectGallery] Error:', err)
     return NextResponse.json(

@@ -118,7 +118,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
     setPickerTab('gallery')
     setLoadingGallery(true)
     try {
-      const data = await api(`/api/products/${productId}/gallery?media_type=image&approval_status=approved`)
+      const data = await api(`/api/products/${productId}/gallery?media_type=image&approval_status=approved&limit=200`)
       setGalleryImages(data.images ?? data)
     } catch {
       setGalleryImages([])

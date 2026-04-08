@@ -34,7 +34,7 @@ export function ReferenceImagePicker({ isOpen, onClose, onSelect, productId }: R
     if (!isOpen) return
     setTab('gallery')
     setLoadingGallery(true)
-    api(`/api/products/${productId}/gallery?media_type=image&approval_status=approved`)
+    api(`/api/products/${productId}/gallery?media_type=image&approval_status=approved&limit=200`)
       .then((data) => setGalleryImages(data.images ?? data))
       .catch(() => setGalleryImages([]))
       .finally(() => setLoadingGallery(false))

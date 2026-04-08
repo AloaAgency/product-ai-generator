@@ -55,6 +55,10 @@ export default function ProjectGalleryPage({
 
   const [productGroups, setProductGroups] = useState<ProductGroup[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [galleryTotal, setGalleryTotal] = useState(0)
+  const [currentOffset, setCurrentOffset] = useState(0)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [mediaFilter, setMediaFilter] = useState<'all' | 'image' | 'video'>('all')
   const [productFilter, setProductFilter] = useState<string>('all')
@@ -65,6 +69,7 @@ export default function ProjectGalleryPage({
   const [requestChangesCount, setRequestChangesCount] = useState(0)
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const signedUrlsRef = useRef(signedUrlsById)
+  const loadMoreRef = useRef<HTMLDivElement>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null } | null>(null)
 
   useEffect(() => {
@@ -75,18 +80,27 @@ export default function ProjectGalleryPage({
     fetchProject(projectId)
   }, [projectId, fetchProject])
 
+  const buildParams = useCallback((extraOffset?: number) => {
+    const params = new URLSearchParams()
+    if (statusFilter !== 'all') params.set('approval_status', statusFilter)
+    if (mediaFilter !== 'all') params.set('media_type', mediaFilter)
+    if (productFilter !== 'all') params.set('product_id', productFilter)
+    params.set('limit', '48')
+    params.set('offset', String(extraOffset ?? 0))
+    return params
+  }, [statusFilter, mediaFilter, productFilter])
+
   const fetchProjectGallery = useCallback(async () => {
     setLoading(true)
     try {
-      const params = new URLSearchParams()
-      if (statusFilter !== 'all') params.set('approval_status', statusFilter)
-      if (mediaFilter !== 'all') params.set('media_type', mediaFilter)
-      if (productFilter !== 'all') params.set('product_id', productFilter)
-
+      const params = buildParams(0)
       const res = await fetch(`/api/projects/${projectId}/gallery?${params}`)
       if (!res.ok) throw new Error('Failed to fetch')
       const data = await res.json()
       setProductGroups(data.products || [])
+      setGalleryTotal(data.total ?? 0)
+      setHasMore(data.has_more ?? false)
+      setCurrentOffset((data.products || []).reduce((sum: number, g: ProductGroup) => sum + g.images.length, 0))
       if (typeof data.rejected_count === 'number') {
         setRejectedCount(data.rejected_count)
       }
@@ -99,11 +113,62 @@ export default function ProjectGalleryPage({
     } finally {
       setLoading(false)
     }
-  }, [projectId, statusFilter, mediaFilter, productFilter])
+  }, [projectId, buildParams])
+
+  const fetchMore = useCallback(async () => {
+    if (!hasMore || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const params = buildParams(currentOffset)
+      const res = await fetch(`/api/projects/${projectId}/gallery?${params}`)
+      if (!res.ok) throw new Error('Failed to fetch more')
+      const data = await res.json()
+      const newGroups: ProductGroup[] = data.products || []
+      // Merge into existing groups by product_id
+      setProductGroups((prev) => {
+        const merged = new Map<string, ProductGroup>()
+        for (const g of prev) merged.set(g.product_id, { ...g, images: [...g.images] })
+        for (const g of newGroups) {
+          const existing = merged.get(g.product_id)
+          if (existing) {
+            const existingIds = new Set(existing.images.map((img) => img.id))
+            const unique = g.images.filter((img) => !existingIds.has(img.id))
+            existing.images.push(...unique)
+          } else {
+            merged.set(g.product_id, g)
+          }
+        }
+        return Array.from(merged.values())
+      })
+      const newImageCount = newGroups.reduce((sum, g) => sum + g.images.length, 0)
+      setCurrentOffset((prev) => prev + newImageCount)
+      setHasMore(data.has_more ?? false)
+    } catch (err) {
+      console.error('[ProjectGallery] Fetch more error:', err)
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [projectId, buildParams, currentOffset, hasMore, loadingMore])
 
   useEffect(() => {
     fetchProjectGallery()
   }, [fetchProjectGallery])
+
+  // Infinite scroll observer
+  useEffect(() => {
+    const sentinel = loadMoreRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasMore && !loadingMore) {
+          fetchMore()
+        }
+      },
+      { rootMargin: '400px' }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMore, loadingMore, fetchMore])
 
   // All unique product names for filter dropdown
   const allProducts = useMemo(() => {
@@ -401,7 +466,7 @@ export default function ProjectGalleryPage({
               </button>
             )}
             <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm text-zinc-400">
-              {totalImages} item{totalImages !== 1 ? 's' : ''}
+              {galleryTotal > totalImages ? `${totalImages} of ${galleryTotal}` : totalImages} item{galleryTotal !== 1 ? 's' : ''}
             </span>
           </div>
         </div>
@@ -527,6 +592,13 @@ export default function ProjectGalleryPage({
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Infinite scroll sentinel */}
+      {!loading && hasMore && (
+        <div ref={loadMoreRef} className="flex items-center justify-center py-8">
+          {loadingMore && <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />}
         </div>
       )}
 

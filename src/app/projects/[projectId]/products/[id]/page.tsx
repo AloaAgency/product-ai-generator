@@ -27,6 +27,7 @@ export default function ProductDashboard({
   const promptTemplates = useAppStore((state) => state.promptTemplates)
   const generationJobs = useAppStore((state) => state.generationJobs)
   const galleryImages = useAppStore((state) => state.galleryImages)
+  const galleryTotal = useAppStore((state) => state.galleryTotal)
   const loadingJobs = useAppStore((state) => state.loadingJobs)
   const fetchReferenceSets = useAppStore((state) => state.fetchReferenceSets)
   const fetchPromptTemplates = useAppStore((state) => state.fetchPromptTemplates)
@@ -47,7 +48,7 @@ export default function ProductDashboard({
   const stats = [
     { label: 'Reference Sets', value: referenceSets.length, icon: Images },
     { label: 'Prompts', value: promptTemplates.length, icon: FileText },
-    { label: 'Generated Images', value: galleryImages.length, icon: Sparkles },
+    { label: 'Generated Images', value: galleryTotal || galleryImages.length, icon: Sparkles },
   ]
 
   const actions = [
