@@ -94,12 +94,8 @@ export async function processReferenceImageCompression(
     }
   }
 
-  // Delete old file if the path changed (different extension)
-  if (newStoragePath !== storagePath) {
-    await supabase.storage.from(BUCKET).remove([storagePath])
-  }
-
-  // Update DB record
+  // Update DB record before deleting the old file so a delete failure
+  // never leaves the DB pointing at a path that no longer exists.
   const { error: dbError } = await supabase
     .from(T.reference_images)
     .update({
@@ -118,6 +114,12 @@ export async function processReferenceImageCompression(
       newStoragePath,
       error: `DB update failed: ${dbError.message}`,
     }
+  }
+
+  // Best-effort cleanup: remove old file if the extension changed.
+  // A failure here only orphans a file in storage — the DB is already correct.
+  if (newStoragePath !== storagePath) {
+    await supabase.storage.from(BUCKET).remove([storagePath])
   }
 
   return {
