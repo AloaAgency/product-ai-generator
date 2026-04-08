@@ -507,7 +507,7 @@ function SourceImagePicker({
     setTab('gallery')
     setLoadingGallery(true)
     // Fetch ALL images (no approval filter) for source selection
-    fetch(`/api/products/${productId}/gallery?media_type=image`)
+    fetch(`/api/products/${productId}/gallery?media_type=image&limit=200`)
       .then((r) => r.json())
       .then((data) => setGalleryImages(data.images ?? data))
       .catch(() => setGalleryImages([]))

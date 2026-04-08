@@ -28,6 +28,7 @@ export default function ProductDashboard({
     promptTemplates,
     generationJobs,
     galleryImages,
+    galleryTotal,
     loadingJobs,
     fetchReferenceSets,
     fetchPromptTemplates,
@@ -49,7 +50,7 @@ export default function ProductDashboard({
   const stats = [
     { label: 'Reference Sets', value: referenceSets.length, icon: Images },
     { label: 'Prompts', value: promptTemplates.length, icon: FileText },
-    { label: 'Generated Images', value: galleryImages.length, icon: Sparkles },
+    { label: 'Generated Images', value: galleryTotal || galleryImages.length, icon: Sparkles },
   ]
 
   const actions = [

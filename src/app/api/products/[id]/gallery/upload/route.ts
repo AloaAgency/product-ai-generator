@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { createThumbnail, buildThumbnailPath } from '@/lib/image-utils'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -93,6 +95,9 @@ export async function POST(request: NextRequest, { params }: Params) {
       })
     }
 
+    // Return results immediately so client can start uploading.
+    // After response, we'll generate thumbnails asynchronously via a separate call.
+    // The client must call POST /api/images/generate-thumbs after uploading files.
     return NextResponse.json(results, { status: 201 })
   } catch (err) {
     console.error('[GalleryUpload] Error:', err)

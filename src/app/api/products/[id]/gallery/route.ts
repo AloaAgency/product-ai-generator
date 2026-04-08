@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
+const DEFAULT_PAGE_SIZE = 48
 
 export async function GET(
   request: NextRequest,
@@ -14,6 +15,8 @@ export async function GET(
   const approvalStatus = searchParams.get('approval_status')
   const mediaType = searchParams.get('media_type') // 'all' | 'image' | 'video'
   const sceneId = searchParams.get('scene_id')
+  const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_PAGE_SIZE, 1), 200)
+  const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
 
   try {
     const supabase = createServiceClient()
@@ -43,23 +46,46 @@ export async function GET(
     const jobTextureImageCountMap = new Map((jobs || []).map((j) => [j.id, j.texture_image_count as number | null]))
 
     // Fetch generated images - include both job-based and scene-based (job_id is null)
-    let imagesQuery = supabase
-      .from(T.generated_images)
-      .select('*')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const applyScope = (q: any): any => {
+      if (sceneId) {
+        return q.eq('scene_id', sceneId)
+      }
+      if (productSceneIds.length > 0 && jobIds.length > 0) {
+        return q.or(
+          `job_id.in.(${jobIds.join(',')}),scene_id.in.(${productSceneIds.join(',')})`
+        )
+      }
+      if (jobIds.length > 0) {
+        return q.in('job_id', jobIds)
+      }
+      if (productSceneIds.length > 0) {
+        return q.in('scene_id', productSceneIds)
+      }
+      return q
+    }
 
-    if (sceneId) {
-      // Filter by scene
-      imagesQuery = imagesQuery.eq('scene_id', sceneId)
-    } else if (jobIds.length > 0) {
-      // Include job-based images OR scene-based images for this product's scenes
-      // We need to get scene IDs from this product's storyboards
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const applyFilters = (q: any): any => {
+      let result = applyScope(q)
+      if (approvalStatus) {
+        result = result.eq('approval_status', approvalStatus)
+      }
+      if (mediaType && mediaType !== 'all') {
+        result = result.eq('media_type', mediaType)
+      }
+      return result
+    }
+
+    // Resolve scene IDs for this product
+    let productSceneIds: string[] = []
+    if (!sceneId) {
       const { data: boards } = await supabase
         .from(T.storyboards)
         .select('id')
         .eq('product_id', productId)
       const boardIds = (boards || []).map((b) => b.id)
 
-      let productSceneIds: string[] = []
       if (boardIds.length > 0) {
         const { data: scenes } = await supabase
           .from(T.storyboard_scenes)
@@ -67,50 +93,29 @@ export async function GET(
           .in('storyboard_id', boardIds)
         productSceneIds = (scenes || []).map((s) => s.id)
       }
-
-      // Use OR filter: job_id in jobIds OR scene_id in productSceneIds
-      if (productSceneIds.length > 0) {
-        imagesQuery = imagesQuery.or(
-          `job_id.in.(${jobIds.join(',')}),scene_id.in.(${productSceneIds.join(',')})`
-        )
-      } else {
-        imagesQuery = imagesQuery.in('job_id', jobIds)
-      }
-    } else {
-      // No jobs - check for scene-based videos only
-      const { data: boards } = await supabase
-        .from(T.storyboards)
-        .select('id')
-        .eq('product_id', productId)
-      const boardIds = (boards || []).map((b) => b.id)
-
-      if (boardIds.length > 0) {
-        const { data: scenes } = await supabase
-          .from(T.storyboard_scenes)
-          .select('id')
-          .in('storyboard_id', boardIds)
-        const productSceneIds = (scenes || []).map((s) => s.id)
-        if (productSceneIds.length > 0) {
-          imagesQuery = imagesQuery.in('scene_id', productSceneIds)
-        } else {
-          return NextResponse.json({ images: [] })
-        }
-      } else {
-        return NextResponse.json({ images: [] })
-      }
     }
 
-    if (approvalStatus) {
-      imagesQuery = imagesQuery.eq('approval_status', approvalStatus)
+    // Early exit if no scope filters match
+    if (!sceneId && jobIds.length === 0 && productSceneIds.length === 0) {
+      return NextResponse.json({ images: [], total: 0 })
     }
 
-    if (mediaType && mediaType !== 'all') {
-      imagesQuery = imagesQuery.eq('media_type', mediaType)
-    }
+    // Get total count (head-only query)
+    const countQuery = applyFilters(
+      supabase.from(T.generated_images).select('id', { count: 'exact', head: true })
+    )
+    const { count: totalCount } = await countQuery
 
-    imagesQuery = imagesQuery.order('created_at', { ascending: false })
+    // Fetch paginated images
+    let imagesQuery = applyFilters(
+      supabase.from(T.generated_images).select('*')
+    )
+    imagesQuery = imagesQuery
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
 
-    const { data: images, error: imagesError } = await imagesQuery
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: images, error: imagesError } = await imagesQuery as { data: any[] | null; error: any }
 
     if (imagesError) {
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
@@ -174,7 +179,13 @@ export async function GET(
       texture_image_count: img.job_id ? (jobTextureImageCountMap.get(img.job_id) ?? null) : null,
     }))
 
-    return NextResponse.json({ images: signedImages })
+    return NextResponse.json({
+      images: signedImages,
+      total: totalCount ?? signedImages.length,
+      offset,
+      limit,
+      has_more: offset + signedImages.length < (totalCount ?? signedImages.length),
+    })
   } catch (err) {
     console.error('[Gallery] Error:', err)
     return NextResponse.json(
