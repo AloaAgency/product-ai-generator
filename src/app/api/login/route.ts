@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
 
   if (safeCompare(password ?? '', PASSWORD)) {
     const response = NextResponse.redirect(new URL(safeRedirect, request.url))
-    response.cookies.set(AUTH_COOKIE_NAME, deriveAuthToken(PASSWORD), {
+    response.cookies.set(AUTH_COOKIE_NAME, await deriveAuthToken(PASSWORD), {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',

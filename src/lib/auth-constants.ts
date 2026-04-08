@@ -1,5 +1,3 @@
-import { createHmac } from 'crypto'
-
 /** Cookie name used by the site-password auth layer. */
 export const AUTH_COOKIE_NAME = 'site-auth'
 
@@ -11,8 +9,22 @@ export const AUTH_COOKIE_NAME = 'site-auth'
  * SITE_PASSWORD. An attacker must know the actual password to forge a
  * valid cookie value.
  *
- * Returns null when SITE_PASSWORD is not set so callers can fail closed.
+ * Uses the Web Crypto API (crypto.subtle) so this module works in both
+ * Node.js and the Edge Runtime (Next.js middleware runs on Edge).
+ *
+ * Returns the hex-encoded HMAC digest.
  */
-export function deriveAuthToken(password: string): string {
-  return createHmac('sha256', password).update('site-auth-v1').digest('hex')
+export async function deriveAuthToken(password: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(password),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode('site-auth-v1'))
+  return Array.from(new Uint8Array(signature))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
 }

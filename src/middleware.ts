@@ -62,7 +62,7 @@ function loginPage(showError: boolean, redirectPath: string) {
   )
 }
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   // Login endpoint must be public so unauthenticated users can submit credentials.
@@ -81,7 +81,7 @@ export function middleware(request: NextRequest) {
   const password = process.env.SITE_PASSWORD
   if (password) {
     const auth = request.cookies.get(AUTH_COOKIE_NAME)
-    if (auth?.value === deriveAuthToken(password)) {
+    if (auth?.value === await deriveAuthToken(password)) {
       return NextResponse.next()
     }
   }
