@@ -3,6 +3,8 @@
  * Uses Claude to refine user prompts with global product style settings
  */
 
+import type { GlobalStyleSettings } from './types'
+
 /** Maximum character lengths for AI-interpolated fields — guards against injection and oversized API payloads */
 export const MAX_PRODUCT_NAME_LEN = 200
 export const MAX_PRODUCT_DESC_LEN = 500
@@ -10,18 +12,38 @@ export const MAX_USER_PROMPT_LEN = 2000
 export const MAX_STYLE_VALUE_LEN = 500
 export const MAX_SUGGESTION_COUNT = 20
 
-export interface GlobalStyleSettings {
-  subject_rule?: string
-  lens?: string
-  camera_height?: string
-  color_grading?: string
-  lighting?: string
-  style?: string
-  constraints?: string
-  reference_rule?: string
-  default_resolution?: '2K' | '4K'
-  default_aspect_ratio?: '16:9' | '1:1' | '9:16'
-  custom_suffix?: string
+/**
+ * Allowlist of GlobalStyleSettings keys that are safe and relevant to include in
+ * AI prompts. Excludes API keys, internal IDs, and UI-only fields like counts
+ * and fidelity that must never appear in Claude or Gemini requests.
+ */
+const STYLE_PROMPT_KEYS: ReadonlyArray<keyof GlobalStyleSettings> = [
+  'subject_rule',
+  'lens',
+  'camera_height',
+  'color_grading',
+  'lighting',
+  'style',
+  'constraints',
+  'reference_rule',
+  'default_resolution',
+  'default_aspect_ratio',
+  'custom_suffix',
+]
+
+/**
+ * Build a bullet-point style block from settings.
+ * Only includes fields from the safe allowlist — API keys, internal IDs,
+ * and non-visual fields are never interpolated into AI prompts.
+ */
+export function buildStyleBlock(settings: GlobalStyleSettings): string {
+  return STYLE_PROMPT_KEYS
+    .filter(k => {
+      const v = settings[k]
+      return typeof v === 'string' && (v as string).trim()
+    })
+    .map(k => `• ${k}: ${(settings[k] as string).slice(0, MAX_STYLE_VALUE_LEN)}`)
+    .join('\n')
 }
 
 /**
@@ -89,10 +111,7 @@ export function buildPromptSuggestionSystemPrompt(
   const safeDesc = productDescription ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN) : null
   const safeCount = Math.max(1, Math.min(Math.floor(count), MAX_SUGGESTION_COUNT))
 
-  const styleBlock = Object.entries(settings)
-    .filter(([, v]) => typeof v === 'string' && (v as string).trim())
-    .map(([k, v]) => `• ${k}: ${(v as string).slice(0, MAX_STYLE_VALUE_LEN)}`)
-    .join('\n')
+  const styleBlock = buildStyleBlock(settings)
 
   return `You are a product photography director. Generate exactly ${safeCount} unique image prompt ideas for the product "${safeName}"${safeDesc ? ` (${safeDesc})` : ''}.
 
