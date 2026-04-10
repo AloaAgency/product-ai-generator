@@ -247,6 +247,7 @@ export function BugReportWidget() {
                   <button
                     type="button"
                     onClick={() => setType('bug')}
+                    aria-pressed={type === 'bug'}
                     className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
                       type === 'bug'
                         ? 'border-red-800 bg-red-950/30 text-red-300'
@@ -259,6 +260,7 @@ export function BugReportWidget() {
                   <button
                     type="button"
                     onClick={() => setType('feature')}
+                    aria-pressed={type === 'feature'}
                     className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
                       type === 'feature'
                         ? 'border-blue-800 bg-blue-950/30 text-blue-300'
