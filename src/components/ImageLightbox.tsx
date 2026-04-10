@@ -29,7 +29,7 @@ import {
   sanitizeRouteSegment,
   shouldRequestSignedUrls,
 } from './imageLightbox.helpers'
-import { getSafeDownloadErrorMessage } from './errorDisplay.helpers'
+import { getSafeDownloadErrorMessage, getSafeErrorMessage } from './errorDisplay.helpers'
 
 export type ApprovalStatus = 'approved' | 'rejected' | 'pending' | 'request_changes' | null
 
@@ -161,7 +161,7 @@ export function ImageLightbox({
   const [isUpdating, setIsUpdating] = useState(false)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [downloadNotice, setDownloadNotice] = useState<string | null>(null)
+  const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [notesValue, setNotesValue] = useState('')
   const [resolvedImageUrl, setResolvedImageUrl] = useState<string | null>(null)
   const notesInputRef = useRef<HTMLInputElement>(null)
@@ -177,14 +177,14 @@ export function ImageLightbox({
     setNotesValue(currentImage?.notes || '')
     setPromptExpanded(false)
     setCopied(false)
-    setDownloadNotice(null)
+    setActionNotice(null)
   }, [currentImage?.id, currentImage?.notes])
 
   useEffect(() => {
-    if (!downloadNotice) return
-    const timeout = window.setTimeout(() => setDownloadNotice(null), 4000)
+    if (!actionNotice) return
+    const timeout = window.setTimeout(() => setActionNotice(null), 4000)
     return () => window.clearTimeout(timeout)
-  }, [downloadNotice])
+  }, [actionNotice])
 
   const preloadImage = useCallback((url: string | null) => {
     if (!url) return Promise.resolve()
@@ -236,6 +236,12 @@ export function ImageLightbox({
     try {
       const newStatus = getNextApprovalStatus(currentImage.approval_status, 'approved')
       await onApprovalChange(currentImage.id, newStatus)
+      setActionNotice(null)
+    } catch (error) {
+      setActionNotice({
+        type: 'error',
+        message: getSafeErrorMessage(error instanceof Error ? error.message : null, 'Failed to update approval. Please try again.'),
+      })
     } finally {
       setIsUpdating(false)
     }
@@ -247,6 +253,12 @@ export function ImageLightbox({
     try {
       const newStatus = getNextApprovalStatus(currentImage.approval_status, 'rejected')
       await onApprovalChange(currentImage.id, newStatus)
+      setActionNotice(null)
+    } catch (error) {
+      setActionNotice({
+        type: 'error',
+        message: getSafeErrorMessage(error instanceof Error ? error.message : null, 'Failed to update approval. Please try again.'),
+      })
     } finally {
       setIsUpdating(false)
     }
@@ -258,6 +270,12 @@ export function ImageLightbox({
     try {
       const newStatus = getNextApprovalStatus(currentImage.approval_status, 'request_changes')
       await onApprovalChange(currentImage.id, newStatus)
+      setActionNotice(null)
+    } catch (error) {
+      setActionNotice({
+        type: 'error',
+        message: getSafeErrorMessage(error instanceof Error ? error.message : null, 'Failed to update approval. Please try again.'),
+      })
     } finally {
       setIsUpdating(false)
     }
@@ -269,6 +287,12 @@ export function ImageLightbox({
     setIsUpdating(true)
     try {
       await onDelete(currentImage.id)
+      setActionNotice(null)
+    } catch (error) {
+      setActionNotice({
+        type: 'error',
+        message: getSafeErrorMessage(error instanceof Error ? error.message : null, 'Failed to delete image. Please try again.'),
+      })
     } finally {
       setIsUpdating(false)
     }
@@ -278,8 +302,17 @@ export function ImageLightbox({
     if (!currentImage) return
     const status = currentImage.approval_status
     if (status !== 'rejected' && status !== 'request_changes') return
-    if (notesValue === (currentImage.notes || '')) return
-    await onApprovalChange(currentImage.id, status, notesValue)
+    const trimmedNotes = notesValue.trim()
+    if (trimmedNotes === (currentImage.notes || '').trim()) return
+    try {
+      await onApprovalChange(currentImage.id, status, trimmedNotes)
+      setActionNotice(trimmedNotes ? { type: 'success', message: 'Notes saved.' } : null)
+    } catch (error) {
+      setActionNotice({
+        type: 'error',
+        message: getSafeErrorMessage(error instanceof Error ? error.message : null, 'Failed to save notes. Please try again.'),
+      })
+    }
   }, [currentImage, notesValue, onApprovalChange])
 
   const handleDownload = useCallback(async () => {
@@ -289,7 +322,10 @@ export function ImageLightbox({
       const signed = await onRequestSignedUrls(currentImage.id)
       url = getDownloadImageUrl(currentImage, signed)
     }
-    if (!url) return
+    if (!url) {
+      setActionNotice({ type: 'error', message: 'Download is unavailable for this image right now.' })
+      return
+    }
 
     try {
       const fileName = currentImage.file_name || `product-gen-${currentImage.variation_number || 0}.png`
@@ -304,8 +340,12 @@ export function ImageLightbox({
       link.click()
       document.body.removeChild(link)
       URL.revokeObjectURL(blobUrl)
+      setActionNotice(null)
     } catch (error) {
-      setDownloadNotice(getSafeDownloadErrorMessage(error instanceof Error ? error.message : null))
+      setActionNotice({
+        type: 'error',
+        message: getSafeDownloadErrorMessage(error instanceof Error ? error.message : null),
+      })
     }
   }, [currentImage, onRequestSignedUrls])
 
@@ -314,9 +354,13 @@ export function ImageLightbox({
     try {
       await navigator.clipboard.writeText(currentImage.prompt)
       setCopied(true)
+      setActionNotice({ type: 'success', message: 'Prompt copied.' })
       setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Fallback: ignore clipboard errors
+    } catch (error) {
+      setActionNotice({
+        type: 'error',
+        message: getSafeErrorMessage(error instanceof Error ? error.message : null, 'Copy failed. Please copy the prompt manually.'),
+      })
     }
   }, [currentImage?.prompt])
 
@@ -622,11 +666,27 @@ export function ImageLightbox({
           </div>
         )}
 
-        {downloadNotice && (
-          <div className="border-t border-red-900/30 bg-red-950/20 px-4 py-3" role="status" aria-live="polite">
-            <div className="flex items-start gap-2 text-sm text-red-200">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-              <span>{downloadNotice}</span>
+        {actionNotice && (
+          <div
+            className={`border-t px-4 py-3 ${
+              actionNotice.type === 'error'
+                ? 'border-red-900/30 bg-red-950/20'
+                : 'border-emerald-900/30 bg-emerald-950/20'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            <div
+              className={`flex items-start gap-2 text-sm ${
+                actionNotice.type === 'error' ? 'text-red-200' : 'text-emerald-200'
+              }`}
+            >
+              <AlertCircle
+                className={`mt-0.5 h-4 w-4 shrink-0 ${
+                  actionNotice.type === 'error' ? 'text-red-400' : 'text-emerald-400'
+                }`}
+              />
+              <span>{actionNotice.message}</span>
             </div>
           </div>
         )}
