@@ -29,8 +29,12 @@ export async function POST(request: NextRequest) {
   }
 
   const formData = await request.formData()
-  const password = formData.get('password') as string
-  const redirectPath = (formData.get('redirect') as string) || '/'
+  // formData.get() returns string | File | null — guard against File objects
+  // (e.g. multipart abuse) before passing to safeCompare.
+  const rawPassword = formData.get('password')
+  const password = typeof rawPassword === 'string' ? rawPassword : ''
+  const rawRedirect = formData.get('redirect')
+  const redirectPath = typeof rawRedirect === 'string' ? rawRedirect : '/'
 
   // Validate redirect path: must be a simple relative path starting with /
   // and NOT a protocol-relative URL (//host) to prevent open-redirect attacks.
@@ -39,7 +43,7 @@ export async function POST(request: NextRequest) {
       ? redirectPath
       : '/'
 
-  if (safeCompare(password ?? '', PASSWORD)) {
+  if (safeCompare(password, PASSWORD)) {
     const response = NextResponse.redirect(new URL(safeRedirect, request.url), 303)
     response.cookies.set(AUTH_COOKIE_NAME, await deriveAuthToken(PASSWORD), {
       httpOnly: true,
@@ -50,6 +54,11 @@ export async function POST(request: NextRequest) {
     })
     return response
   }
+
+  // Slow brute-force attempts with a fixed artificial delay before responding.
+  // This doesn't require shared state and doesn't reveal whether the password
+  // was close — it just makes rapid successive attempts meaningfully slower.
+  await new Promise<void>((resolve) => setTimeout(resolve, 150))
 
   // Wrong password — redirect back to the same page to show login with error
   const errorUrl = new URL(safeRedirect, request.url)

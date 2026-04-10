@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { timingSafeEqual } from 'crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { processGenerationJob } from '@/lib/generation-worker'
 import { logError } from '@/lib/error-logger'
@@ -17,14 +18,30 @@ export const runtime = 'nodejs'
 export const maxDuration = 800
 export const dynamic = 'force-dynamic'
 
+/** Compare two strings in constant time to mitigate timing attacks. */
+function secretsEqual(a: string, b: string): boolean {
+  try {
+    const bufA = Buffer.from(a, 'utf8')
+    const bufB = Buffer.from(b, 'utf8')
+    if (bufA.length !== bufB.length) return false
+    return timingSafeEqual(bufA, bufB)
+  } catch {
+    return false
+  }
+}
+
 function isAuthorized(request: NextRequest) {
   const secret = process.env.CRON_SECRET
-  if (!secret) return false
-  const headerSecret = request.headers.get('x-cron-secret')
-  const auth = request.headers.get('authorization') || ''
+  if (!secret) {
+    console.error('[Worker] CRON_SECRET is not set — all requests denied')
+    return false
+  }
+  const headerSecret = request.headers.get('x-cron-secret') ?? ''
+  const auth = request.headers.get('authorization') ?? ''
   const bearerSecret = auth.startsWith('Bearer ') ? auth.slice(7) : ''
 
-  return headerSecret === secret || bearerSecret === secret
+  return (headerSecret.length > 0 && secretsEqual(headerSecret, secret)) ||
+    (bearerSecret.length > 0 && secretsEqual(bearerSecret, secret))
 }
 
 export async function GET(request: NextRequest) {
