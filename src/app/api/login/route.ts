@@ -51,6 +51,11 @@ export async function POST(request: NextRequest) {
     return response
   }
 
+  // Slow brute-force attempts with a fixed artificial delay before responding.
+  // This doesn't require shared state and doesn't reveal whether the password
+  // was close — it just makes rapid successive attempts meaningfully slower.
+  await new Promise<void>((resolve) => setTimeout(resolve, 150))
+
   // Wrong password — redirect back to the same page to show login with error
   const errorUrl = new URL(safeRedirect, request.url)
   errorUrl.searchParams.set('error', '1')
