@@ -42,3 +42,6 @@ next-env.d.ts
 
 # MCP config (local)
 .mcp.json
+
+# Playwright MCP session logs
+.playwright-mcp/

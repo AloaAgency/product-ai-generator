@@ -1,7 +1,0 @@
-- generic [ref=e2]:
-  - heading "Aloa AI Product Imager" [level=1] [ref=e3]
-  - generic [ref=e4]:
-    - generic [ref=e5]: Password
-    - textbox "Password" [ref=e6]:
-      - /placeholder: Enter password
-    - button "Sign In" [ref=e7] [cursor=pointer]
