@@ -239,11 +239,14 @@ async function markClaimedJobFailed(
   job: GenerationJobRecord,
   message: string
 ) {
+  const { completed, failed } = await getCurrentJobCounts(supabase, job)
+
   await updateGenerationJob(
     supabase,
     job.id,
     {
-      failed_count: getJobCounts(job).failed + 1,
+      completed_count: completed,
+      failed_count: failed + 1,
       status: 'failed',
       error_message: message,
       completed_at: new Date().toISOString(),
@@ -271,11 +274,15 @@ async function loadGenerationJob(supabase: WorkerSupabase, jobId: string): Promi
 }
 
 async function getLatestJobResult(supabase: WorkerSupabase, jobId: string): Promise<WorkerResult> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from(T.generation_jobs)
     .select('status, completed_count, failed_count')
     .eq('id', jobId)
     .single()
+
+  if (error || !data) {
+    throw new Error(`Failed to load latest generation job state: ${error?.message || 'job not found'}`)
+  }
 
   const counts = getJobCounts({
     completed_count: data?.completed_count ?? 0,
@@ -461,6 +468,29 @@ function limitReferenceImages(
 ): WorkerReferenceImage[] {
   const maxImages = limit ?? images.length
   return images.slice(0, maxImages)
+}
+
+async function getCurrentJobCounts(
+  supabase: WorkerSupabase,
+  job: GenerationJobRecord
+): Promise<JobCounts> {
+  const fallbackCounts = getJobCounts(job)
+
+  const { data, error } = await supabase
+    .from(T.generation_jobs)
+    .select('completed_count, failed_count')
+    .eq('id', job.id)
+    .maybeSingle()
+
+  if (error || !data) {
+    return fallbackCounts
+  }
+
+  const latestCounts = getJobCounts(data as Pick<GenerationJobRecord, 'completed_count' | 'failed_count'>)
+  return {
+    completed: Math.max(fallbackCounts.completed, latestCounts.completed),
+    failed: Math.max(fallbackCounts.failed, latestCounts.failed),
+  }
 }
 
 async function downloadStorageBase64(

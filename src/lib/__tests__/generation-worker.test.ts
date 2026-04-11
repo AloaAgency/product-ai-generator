@@ -291,9 +291,14 @@ describe('processGenerationJob', () => {
         },
         {
           table: 'prodai_generation_jobs',
-        type: 'update-maybeSingle',
-        data: { id: jobId },
-      },
+          type: 'select-maybeSingle',
+          data: { completed_count: 0, failed_count: 0 },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
     ])
 
     const { processGenerationJob } = await import('../generation-worker')
@@ -430,6 +435,11 @@ describe('processGenerationJob', () => {
         },
         {
           table: 'prodai_generation_jobs',
+          type: 'select-maybeSingle',
+          data: { completed_count: 1, failed_count: 0 },
+        },
+        {
+          table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
           data: { id: jobId },
         },
@@ -465,6 +475,7 @@ describe('processGenerationJob', () => {
 
     await expect(processGenerationJob(jobId)).rejects.toThrow('Failed to persist generation job progress: write conflict')
     expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
+      completed_count: 1,
       status: 'failed',
       failed_count: 1,
       error_message: 'Failed to persist generation job progress: write conflict',
@@ -900,5 +911,32 @@ describe('processGenerationJob', () => {
       failed_count: 1,
       error_message: 'upstream failed with Bearer [redacted]',
     })
+  })
+
+  it('fails when it cannot load the latest job state after another worker claims the job first', async () => {
+    const jobId = '13131313-1313-4313-8313-131313131313'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: null,
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        error: { message: 'read timeout' },
+      },
+    ])
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).rejects.toThrow(
+      'Failed to load latest generation job state: read timeout'
+    )
   })
 })
