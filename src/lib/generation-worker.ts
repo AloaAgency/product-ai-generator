@@ -912,8 +912,18 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
       return processVideoJob(claimedJob, supabase)
     }
 
-    const resources = await loadImageJobResources(supabase, claimedJob)
     const plan = createVariationPlan(claimedJob, config.batchSize)
+    if (plan.variationNumbers.length === 0) {
+      return persistFinalImageJobState(supabase, claimedJob, {
+        processed: 0,
+        completedCount: plan.startingCompleted,
+        failedCount: plan.startingFailed,
+        lastError: claimedJob.error_message,
+        cancelled: false,
+      })
+    }
+
+    const resources = await loadImageJobResources(supabase, claimedJob)
     const variationResult = await processVariations(supabase, claimedJob, plan, resources, config)
     return persistFinalImageJobState(supabase, claimedJob, variationResult)
   } catch (err) {

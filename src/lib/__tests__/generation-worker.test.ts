@@ -482,6 +482,43 @@ describe('processGenerationJob', () => {
     })
   })
 
+  it('finalizes claimed image jobs with no remaining variations without loading resources', async () => {
+    const jobId = '12121212-1212-4212-8212-121212121212'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { id: jobId, status: 'pending', completed_count: 1, failed_count: 0 },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId, {
+          variation_count: 1,
+          completed_count: 1,
+        }),
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 0,
+      completed: 1,
+      failed: 0,
+      status: 'completed',
+    })
+    expect(generateGeminiImage).not.toHaveBeenCalled()
+    expect(serviceClientState.current?.updates).toHaveLength(2)
+  })
+
   it('retries retriable image generation errors and completes the job after a later success', async () => {
     const jobId = '44444444-4444-4444-8444-444444444444'
     process.env.GENERATION_VARIATION_RETRIES = '1'
