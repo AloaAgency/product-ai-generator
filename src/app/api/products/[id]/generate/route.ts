@@ -11,27 +11,41 @@ import { kickWorkerForJob } from '@/lib/video-job-request'
 export const runtime = 'nodejs'
 export const maxDuration = 300
 
+const MAX_PROMPT_LENGTH = 10000
+const DEFAULT_JOBS_LIMIT = 50
+const MAX_JOBS_LIMIT = 200
+
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: productId } = await params
   try {
+    const { searchParams } = new URL(request.url)
+    const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_JOBS_LIMIT, 1), MAX_JOBS_LIMIT)
+    const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
+    const status = searchParams.get('status') // optional filter
+
     const supabase = createServiceClient()
-    const { data, error } = await supabase
+    let query = supabase
       .from(T.generation_jobs)
       .select('*')
       .eq('product_id', productId)
       .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
+
+    if (status) {
+      query = query.eq('status', status)
+    }
+
+    const { data, error } = await query
     if (error) {
       return NextResponse.json({ error: 'Failed to fetch jobs' }, { status: 500 })
     }
     return NextResponse.json(data || [])
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('[Generate GET]', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
@@ -66,6 +80,9 @@ export async function POST(
 
     if (!prompt_text) {
       return NextResponse.json({ error: 'prompt_text is required' }, { status: 400 })
+    }
+    if (typeof prompt_text === 'string' && prompt_text.length > MAX_PROMPT_LENGTH) {
+      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
     }
 
     const parsedVariationCount = Number(variation_count)
@@ -291,10 +308,7 @@ export async function POST(
       errorMessage: err instanceof Error ? err.message : 'Internal server error',
       errorSource: 'api/products/generate',
     })
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
@@ -329,7 +343,8 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        console.error('[Generate DELETE cancel]', error)
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       cancelled = data?.length || 0
     }
@@ -343,7 +358,8 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        console.error('[Generate DELETE failed]', error)
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       clearedFailed = data?.length || 0
     }
@@ -358,16 +374,15 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        console.error('[Generate DELETE log]', error)
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       clearedLog = data?.length || 0
     }
 
     return NextResponse.json({ cancelled, cleared_failed: clearedFailed, cleared_log: clearedLog })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('[Generate DELETE]', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

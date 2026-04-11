@@ -6,6 +6,9 @@ import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 
 const anthropic = new Anthropic()
 
+const MAX_NAME_LENGTH = 500
+const MAX_PROMPT_LENGTH = 10000
+
 async function generateSceneTitle(promptText: string): Promise<string> {
   try {
     const response = await anthropic.messages.create({
@@ -34,7 +37,7 @@ export async function GET(
       .eq('product_id', id)
       .order('created_at', { ascending: false })
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[Prompts GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -54,6 +57,12 @@ export async function POST(
     if (!name || !prompt_text) {
       return NextResponse.json({ error: 'name and prompt_text are required' }, { status: 400 })
     }
+    if (typeof name === 'string' && name.length > MAX_NAME_LENGTH) {
+      return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (typeof prompt_text === 'string' && prompt_text.length > MAX_PROMPT_LENGTH) {
+      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+    }
 
     const { data, error } = await supabase
       .from(T.prompt_templates)
@@ -67,7 +76,7 @@ export async function POST(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[Prompts POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     // Generate scene title asynchronously then update
     const sceneTitle = await generateSceneTitle(prompt_text)

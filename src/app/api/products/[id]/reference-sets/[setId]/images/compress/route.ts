@@ -22,7 +22,8 @@ export async function POST(
       .order('display_order', { ascending: true })
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      console.error('[ReferenceImagesCompress GET]', error)
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
     if (!images || images.length === 0) {

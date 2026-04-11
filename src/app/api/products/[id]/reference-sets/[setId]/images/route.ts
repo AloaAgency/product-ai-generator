@@ -10,6 +10,14 @@ export const dynamic = 'force-dynamic'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const MAX_REFERENCE_IMAGES = 14
+const ALLOWED_IMAGE_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/avif',
+])
+const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50 MB
 
 export async function POST(
   request: NextRequest,
@@ -90,6 +98,15 @@ export async function POST(
 
     if (!files.length) {
       return NextResponse.json({ error: 'No files provided' }, { status: 400 })
+    }
+
+    for (const file of files) {
+      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+        return NextResponse.json({ error: `File type "${file.type}" is not allowed. Allowed types: JPEG, PNG, WebP, GIF, AVIF` }, { status: 400 })
+      }
+      if (file.size > MAX_FILE_SIZE_BYTES) {
+        return NextResponse.json({ error: `File "${file.name}" exceeds the 50 MB size limit` }, { status: 400 })
+      }
     }
 
     // Get current image count and max display_order
@@ -173,7 +190,7 @@ export async function GET(
       .eq('reference_set_id', setId)
       .order('display_order', { ascending: true })
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[ReferenceImages GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     const paths = (data || [])
       .map((img) => img.storage_path)

@@ -8,6 +8,16 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
+const ALLOWED_IMAGE_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/avif',
+])
+const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50 MB
+const MAX_FILES_PER_REQUEST = 50
+
 type Params = { params: Promise<{ id: string }> }
 
 export async function POST(request: NextRequest, { params }: Params) {
@@ -19,6 +29,17 @@ export async function POST(request: NextRequest, { params }: Params) {
     const files = body.files as Array<{ file_name: string; mime_type: string; file_size: number }>
     if (!Array.isArray(files) || files.length === 0) {
       return NextResponse.json({ error: 'No files provided' }, { status: 400 })
+    }
+    if (files.length > MAX_FILES_PER_REQUEST) {
+      return NextResponse.json({ error: `Cannot upload more than ${MAX_FILES_PER_REQUEST} files at once` }, { status: 400 })
+    }
+    for (const file of files) {
+      if (!ALLOWED_IMAGE_TYPES.has(file.mime_type)) {
+        return NextResponse.json({ error: `File type "${file.mime_type}" is not allowed. Allowed types: JPEG, PNG, WebP, GIF, AVIF` }, { status: 400 })
+      }
+      if (typeof file.file_size === 'number' && file.file_size > MAX_FILE_SIZE_BYTES) {
+        return NextResponse.json({ error: `File "${file.file_name}" exceeds the 50 MB size limit` }, { status: 400 })
+      }
     }
 
     // Find or create a "manual upload" placeholder job so the gallery query picks up these images

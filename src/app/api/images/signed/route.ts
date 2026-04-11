@@ -92,9 +92,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ signed_urls: signedUrls })
   } catch (err) {
     console.error('[ImagesSignedBatch] Error:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
