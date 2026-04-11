@@ -199,9 +199,6 @@ export async function GET(
     })
   } catch (err) {
     console.error('[Gallery] Error:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

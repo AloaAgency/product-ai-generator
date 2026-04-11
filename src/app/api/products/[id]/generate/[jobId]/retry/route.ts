@@ -59,9 +59,6 @@ export async function POST(
     return NextResponse.json({ job: updated }, { status: 200 })
   } catch (err) {
     console.error('[RetryGeneration] Error:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

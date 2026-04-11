@@ -18,7 +18,7 @@ export async function PATCH(
         .update({ is_active: false })
         .eq('product_id', productId)
 
-      if (deactivateError) return NextResponse.json({ error: deactivateError.message }, { status: 500 })
+      if (deactivateError) { console.error('[SettingsTemplate PATCH deactivate]', deactivateError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     }
 
     const updates: Record<string, unknown> = {}
@@ -35,7 +35,7 @@ export async function PATCH(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[SettingsTemplate PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     // When activating, sync settings to product
     if (body.is_active === true) {
@@ -66,7 +66,7 @@ export async function DELETE(
       .eq('id', templateId)
       .eq('product_id', productId)
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[SettingsTemplate DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

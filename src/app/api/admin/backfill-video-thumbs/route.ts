@@ -37,7 +37,8 @@ export async function POST(request: NextRequest) {
       .limit(limit)
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      console.error('[Admin BackfillVideoThumbs]', error)
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
     if (!videos || videos.length === 0) {

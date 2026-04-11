@@ -253,9 +253,6 @@ export async function POST(
     return NextResponse.json(updated)
   } catch (err) {
     console.error('[Scene Generate] Error:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

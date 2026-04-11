@@ -48,7 +48,8 @@ export async function POST(request: NextRequest, { params }: Params) {
       .createSignedUploadUrl(storagePath, { upsert: true })
 
     if (signError || !signedData?.signedUrl) {
-      return NextResponse.json({ error: signError?.message || 'Failed to create upload URL' }, { status: 500 })
+      console.error('[UploadFrame] sign error', signError)
+      return NextResponse.json({ error: 'Failed to create upload URL' }, { status: 500 })
     }
 
     // Create the image record
@@ -68,7 +69,8 @@ export async function POST(request: NextRequest, { params }: Params) {
       .single()
 
     if (insertError || !image) {
-      return NextResponse.json({ error: insertError?.message || 'Failed to create image record' }, { status: 500 })
+      console.error('[UploadFrame] insert error', insertError)
+      return NextResponse.json({ error: 'Failed to create image record' }, { status: 500 })
     }
 
     // Update the scene's frame ID

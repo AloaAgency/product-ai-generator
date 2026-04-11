@@ -23,7 +23,7 @@ export async function GET(
     }
 
     const { data, error } = await query
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[Scenes GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -89,7 +89,7 @@ export async function POST(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[Scenes POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

@@ -173,7 +173,7 @@ export async function GET(
       .eq('reference_set_id', setId)
       .order('display_order', { ascending: true })
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[ReferenceImages GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     const paths = (data || [])
       .map((img) => img.storage_path)

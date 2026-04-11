@@ -1,0 +1,53 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - heading "Aloa AI Product Imager" [level=1] [ref=e5]
+        - button "New Project" [ref=e6]:
+          - img [ref=e7]
+          - text: New Project
+    - main [ref=e8]:
+      - generic [ref=e9]:
+        - generic [ref=e10]:
+          - link "Aloa Logo Experiments with the Aloa Logo Created 3/12/2026" [ref=e11] [cursor=pointer]:
+            - /url: /projects/d0606d1c-f0a0-4b3a-925e-f8cf731e18ec
+            - heading "Aloa Logo" [level=3] [ref=e12]
+            - paragraph [ref=e13]: Experiments with the Aloa Logo
+            - paragraph [ref=e14]: Created 3/12/2026
+          - generic [ref=e15]:
+            - button "Rename" [ref=e16]:
+              - img [ref=e17]
+              - text: Rename
+            - button "Delete" [ref=e20]:
+              - img [ref=e21]
+              - text: Delete
+        - generic [ref=e24]:
+          - link "\"Me Roll\" Created 2/19/2026" [ref=e25] [cursor=pointer]:
+            - /url: /projects/b39bb09d-0d4e-41a6-9986-ff790aac59d8
+            - heading "\"Me Roll\"" [level=3] [ref=e26]
+            - paragraph [ref=e27]: Created 2/19/2026
+          - generic [ref=e28]:
+            - button "Rename" [ref=e29]:
+              - img [ref=e30]
+              - text: Rename
+            - button "Delete" [ref=e33]:
+              - img [ref=e34]
+              - text: Delete
+        - generic [ref=e37]:
+          - link "Glīd Auto-created project for existing products Created 2/2/2026" [ref=e38] [cursor=pointer]:
+            - /url: /projects/b8302b2b-e476-4d86-816b-b56bba1c7a90
+            - heading "Glīd" [level=3] [ref=e39]
+            - paragraph [ref=e40]: Auto-created project for existing products
+            - paragraph [ref=e41]: Created 2/2/2026
+          - generic [ref=e42]:
+            - button "Rename" [ref=e43]:
+              - img [ref=e44]
+              - text: Rename
+            - button "Delete" [ref=e47]:
+              - img [ref=e48]
+              - text: Delete
+  - button "Report a bug or request a feature" [ref=e51]:
+    - img [ref=e52]
+  - button "Open Next.js Dev Tools" [ref=e59] [cursor=pointer]:
+    - img [ref=e60]
+  - alert [ref=e63]

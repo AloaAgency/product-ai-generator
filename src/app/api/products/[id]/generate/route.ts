@@ -28,10 +28,8 @@ export async function GET(
     }
     return NextResponse.json(data || [])
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('[Generate GET]', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
@@ -291,10 +289,7 @@ export async function POST(
       errorMessage: err instanceof Error ? err.message : 'Internal server error',
       errorSource: 'api/products/generate',
     })
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
@@ -329,7 +324,8 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        console.error('[Generate DELETE cancel]', error)
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       cancelled = data?.length || 0
     }
@@ -343,7 +339,8 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        console.error('[Generate DELETE failed]', error)
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       clearedFailed = data?.length || 0
     }
@@ -358,16 +355,15 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        console.error('[Generate DELETE log]', error)
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       clearedLog = data?.length || 0
     }
 
     return NextResponse.json({ cancelled, cleared_failed: clearedFailed, cleared_log: clearedLog })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('[Generate DELETE]', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
