@@ -12,19 +12,33 @@ export const runtime = 'nodejs'
 export const maxDuration = 300
 
 const MAX_PROMPT_LENGTH = 10000
+const DEFAULT_JOBS_LIMIT = 50
+const MAX_JOBS_LIMIT = 200
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: productId } = await params
   try {
+    const { searchParams } = new URL(request.url)
+    const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_JOBS_LIMIT, 1), MAX_JOBS_LIMIT)
+    const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
+    const status = searchParams.get('status') // optional filter
+
     const supabase = createServiceClient()
-    const { data, error } = await supabase
+    let query = supabase
       .from(T.generation_jobs)
       .select('*')
       .eq('product_id', productId)
       .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
+
+    if (status) {
+      query = query.eq('status', status)
+    }
+
+    const { data, error } = await query
     if (error) {
       return NextResponse.json({ error: 'Failed to fetch jobs' }, { status: 500 })
     }
