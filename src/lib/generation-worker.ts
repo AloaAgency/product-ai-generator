@@ -70,6 +70,7 @@ type WorkerConfig = {
   variationTimeoutMs: number
   maxVariationRetries: number
   retryBaseMs: number
+  statusRefreshIntervalMs: number
 }
 
 type JobCounts = {
@@ -110,6 +111,8 @@ type ProgressState = {
   lastError: string | null
 }
 
+type ProgressSnapshot = Omit<ProgressState, 'processed'>
+
 type VariationProcessingResult = {
   processed: number
   completedCount: number
@@ -123,7 +126,7 @@ const MAX_TIME_BUDGET_MS = 800000
 const DEFAULT_VARIATION_TIMEOUT_MS = 300000
 const DEFAULT_VARIATION_RETRIES = 2
 const DEFAULT_RETRY_BASE_MS = 1500
-const STATUS_REFRESH_INTERVAL_MS = 3000
+const DEFAULT_STATUS_REFRESH_INTERVAL_MS = 3000
 
 const GENERATION_JOB_SELECT = [
   'id',
@@ -183,6 +186,7 @@ function parseWorkerConfig(options: WorkerOptions): WorkerConfig {
   const variationTimeoutMsRaw = Number(process.env.GENERATION_VARIATION_TIMEOUT_MS)
   const maxVariationRetriesRaw = Number(process.env.GENERATION_VARIATION_RETRIES)
   const retryBaseMsRaw = Number(process.env.GENERATION_RETRY_BASE_MS)
+  const statusRefreshIntervalMsRaw = Number(process.env.GENERATION_STATUS_REFRESH_INTERVAL_MS)
 
   return {
     batchSize: parseWorkerPositiveInteger(options.batchSize, 1, { max: MAX_GENERATION_BATCH_SIZE }),
@@ -197,6 +201,9 @@ function parseWorkerConfig(options: WorkerOptions): WorkerConfig {
     retryBaseMs: Number.isFinite(retryBaseMsRaw) && retryBaseMsRaw > 0
       ? retryBaseMsRaw
       : DEFAULT_RETRY_BASE_MS,
+    statusRefreshIntervalMs: Number.isFinite(statusRefreshIntervalMsRaw) && statusRefreshIntervalMsRaw > 0
+      ? statusRefreshIntervalMsRaw
+      : DEFAULT_STATUS_REFRESH_INTERVAL_MS,
   }
 }
 
@@ -617,7 +624,7 @@ function isRetriableError(err: unknown) {
 async function persistProgress(
   supabase: WorkerSupabase,
   jobId: string,
-  progress: ProgressState,
+  progress: ProgressSnapshot,
   plan: VariationPlan
 ) {
   await updateGenerationJob(
@@ -634,6 +641,24 @@ async function persistProgress(
       context: 'Failed to persist generation job progress',
     }
   )
+}
+
+function createProgressPersister(
+  supabase: WorkerSupabase,
+  jobId: string,
+  plan: VariationPlan
+) {
+  let pendingWrite = Promise.resolve()
+
+  return {
+    persist(progress: ProgressSnapshot) {
+      pendingWrite = pendingWrite.then(() => persistProgress(supabase, jobId, progress, plan))
+      return pendingWrite
+    },
+    flush() {
+      return pendingWrite
+    },
+  }
 }
 
 async function runVariation(
@@ -749,7 +774,8 @@ async function runVariationWithRetry(
 function createShouldStopChecker(
   supabase: WorkerSupabase,
   jobId: string,
-  timeBudgetMs: number
+  timeBudgetMs: number,
+  statusRefreshIntervalMs: number
 ) {
   const startedAt = Date.now()
   let cancelled = false
@@ -757,7 +783,7 @@ function createShouldStopChecker(
 
   const shouldStop = async () => {
     if (Date.now() - startedAt > timeBudgetMs) return true
-    if (Date.now() - lastStatusCheckAt < STATUS_REFRESH_INTERVAL_MS) return cancelled
+    if (Date.now() - lastStatusCheckAt < statusRefreshIntervalMs) return cancelled
 
     lastStatusCheckAt = Date.now()
     const { data, error } = await supabase
@@ -795,7 +821,13 @@ async function processVariations(
   }
 
   let nextIndex = 0
-  const stopChecker = createShouldStopChecker(supabase, job.id, config.timeBudgetMs)
+  const stopChecker = createShouldStopChecker(
+    supabase,
+    job.id,
+    config.timeBudgetMs,
+    config.statusRefreshIntervalMs
+  )
+  const progressPersister = createProgressPersister(supabase, job.id, plan)
 
   const worker = async () => {
     while (nextIndex < plan.variationNumbers.length) {
@@ -814,7 +846,11 @@ async function processVariations(
         progress.lastError = sanitizeWorkerErrorMessage(err, 'Variation failed')
       } finally {
         progress.processed += 1
-        await persistProgress(supabase, job.id, progress, plan)
+        await progressPersister.persist({
+          successCount: progress.successCount,
+          failCount: progress.failCount,
+          lastError: progress.lastError,
+        })
       }
     }
   }
@@ -825,6 +861,8 @@ async function processVariations(
       () => worker()
     )
   )
+
+  await progressPersister.flush()
 
   return {
     processed: progress.processed,

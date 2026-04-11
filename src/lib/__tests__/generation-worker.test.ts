@@ -216,6 +216,7 @@ describe('processGenerationJob', () => {
     delete process.env.GENERATION_VARIATION_RETRIES
     delete process.env.GENERATION_RETRY_BASE_MS
     delete process.env.GENERATION_VARIATION_TIMEOUT_MS
+    delete process.env.GENERATION_STATUS_REFRESH_INTERVAL_MS
   })
 
   afterEach(() => {
@@ -791,6 +792,86 @@ describe('processGenerationJob', () => {
       completed_count: 1,
       failed_count: 0,
     })
+  })
+
+  it('uses a configurable status refresh interval when checking for cancellation', async () => {
+    const jobId = '67676767-6767-4676-8676-676767676767'
+    process.env.GENERATION_STATUS_REFRESH_INTERVAL_MS = '1'
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-01-01T00:00:00.000Z'))
+
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId, { variation_count: 2 }),
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: null, global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running' },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'cancelled' },
+        },
+      ],
+      [
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockImplementationOnce(async () => {
+      vi.setSystemTime(new Date('2025-01-01T00:00:00.002Z'))
+      return {
+        mimeType: 'image/png',
+        base64Data: Buffer.from('image').toString('base64'),
+        requestId: 'req-fast-cancelled',
+        raw: {},
+      }
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId, { batchSize: 2, parallelism: 1 })).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 1,
+      failed: 0,
+      status: 'cancelled',
+    })
+
+    expect(generateGeminiImage).toHaveBeenCalledTimes(1)
   })
 
   it('leaves partially processed image jobs pending so another worker tick can continue them', async () => {
