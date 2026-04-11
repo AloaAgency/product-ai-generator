@@ -6,6 +6,9 @@ import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 
 const anthropic = new Anthropic()
 
+const MAX_NAME_LENGTH = 500
+const MAX_PROMPT_LENGTH = 10000
+
 async function generateSceneTitle(promptText: string): Promise<string> {
   try {
     const response = await anthropic.messages.create({
@@ -53,6 +56,12 @@ export async function POST(
 
     if (!name || !prompt_text) {
       return NextResponse.json({ error: 'name and prompt_text are required' }, { status: 400 })
+    }
+    if (typeof name === 'string' && name.length > MAX_NAME_LENGTH) {
+      return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (typeof prompt_text === 'string' && prompt_text.length > MAX_PROMPT_LENGTH) {
+      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
     }
 
     const { data, error } = await supabase

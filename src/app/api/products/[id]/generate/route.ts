@@ -11,6 +11,8 @@ import { kickWorkerForJob } from '@/lib/video-job-request'
 export const runtime = 'nodejs'
 export const maxDuration = 300
 
+const MAX_PROMPT_LENGTH = 10000
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -64,6 +66,9 @@ export async function POST(
 
     if (!prompt_text) {
       return NextResponse.json({ error: 'prompt_text is required' }, { status: 400 })
+    }
+    if (typeof prompt_text === 'string' && prompt_text.length > MAX_PROMPT_LENGTH) {
+      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
     }
 
     const parsedVariationCount = Number(variation_count)

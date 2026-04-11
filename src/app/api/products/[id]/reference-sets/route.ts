@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 
+const MAX_NAME_LENGTH = 500
+const MAX_DESCRIPTION_LENGTH = 5000
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -35,6 +38,12 @@ export async function POST(
 
     if (!name) {
       return NextResponse.json({ error: 'name is required' }, { status: 400 })
+    }
+    if (typeof name === 'string' && name.length > MAX_NAME_LENGTH) {
+      return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (typeof description === 'string' && description.length > MAX_DESCRIPTION_LENGTH) {
+      return NextResponse.json({ error: `description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer` }, { status: 400 })
     }
 
     if (type !== 'product' && type !== 'texture') {
