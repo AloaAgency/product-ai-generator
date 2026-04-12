@@ -3,8 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { buildFullPrompt } from '@/lib/prompt-builder'
 import { generateGeminiImage } from '@/lib/gemini'
 import {
-  createThumbnail,
-  createPreview,
+  createThumbnailAndPreview,
   buildImageStoragePath,
   buildThumbnailPath,
   buildPreviewPath,
@@ -26,18 +25,19 @@ async function generateAndStoreImage(
   sceneName?: string | null,
   geminiApiKey?: string,
 ) {
-  // Download reference images
-  const refImagesBase64: { mimeType: string; base64: string }[] = []
-  for (const refImg of referenceImages) {
-    const { data: fileData } = await supabase.storage
-      .from('reference-images')
-      .download(refImg.storage_path)
-    if (fileData) {
-      const arrayBuffer = await fileData.arrayBuffer()
-      const base64 = Buffer.from(arrayBuffer).toString('base64')
-      refImagesBase64.push({ mimeType: refImg.mime_type, base64 })
-    }
-  }
+  // Download reference images in parallel
+  const refImagesBase64: { mimeType: string; base64: string }[] = (
+    await Promise.all(
+      referenceImages.map(async (refImg) => {
+        const { data: fileData } = await supabase.storage
+          .from('reference-images')
+          .download(refImg.storage_path)
+        if (!fileData) return null
+        const base64 = Buffer.from(await fileData.arrayBuffer()).toString('base64')
+        return { mimeType: refImg.mime_type, base64 }
+      })
+    )
+  ).filter((x): x is { mimeType: string; base64: string } => x !== null)
 
   // Add extra reference (e.g. start frame for end frame generation)
   if (extraReferenceBase64) {
@@ -56,8 +56,7 @@ async function generateAndStoreImage(
 
   const imageBuffer = Buffer.from(result.base64Data, 'base64')
   const ext = resolveExtension(result.mimeType)
-  const thumb = await createThumbnail(imageBuffer)
-  const preview = await createPreview(imageBuffer)
+  const [thumb, preview] = await createThumbnailAndPreview(imageBuffer)
 
   // Use a dummy job id for scene-generated images
   const jobId = 'scene-gen'
@@ -66,9 +65,11 @@ async function generateAndStoreImage(
   const thumbPath = buildThumbnailPath(storagePath, thumb.extension)
   const previewPath = buildPreviewPath(storagePath, preview.extension)
 
-  await supabase.storage.from('generated-images').upload(storagePath, imageBuffer, { contentType: result.mimeType })
-  await supabase.storage.from('generated-images').upload(thumbPath, thumb.buffer, { contentType: thumb.mimeType })
-  await supabase.storage.from('generated-images').upload(previewPath, preview.buffer, { contentType: preview.mimeType })
+  await Promise.all([
+    supabase.storage.from('generated-images').upload(storagePath, imageBuffer, { contentType: result.mimeType }),
+    supabase.storage.from('generated-images').upload(thumbPath, thumb.buffer, { contentType: thumb.mimeType }),
+    supabase.storage.from('generated-images').upload(previewPath, preview.buffer, { contentType: preview.mimeType }),
+  ])
 
   const { data: imgRecord, error: imgError } = await supabase
     .from(T.generated_images)
@@ -110,23 +111,18 @@ export async function POST(
 
     const supabase = createServiceClient()
 
-    // Fetch scene
-    const { data: scene, error: sceneError } = await supabase
-      .from(T.storyboard_scenes)
-      .select('*')
-      .eq('id', sceneId)
-      .single()
+    // Fetch scene and product in parallel — independent queries
+    const [
+      { data: scene, error: sceneError },
+      { data: product },
+    ] = await Promise.all([
+      supabase.from(T.storyboard_scenes).select('*').eq('id', sceneId).single(),
+      supabase.from(T.products).select('*').eq('id', productId).single(),
+    ])
 
     if (sceneError || !scene) {
       return NextResponse.json({ error: 'Scene not found' }, { status: 404 })
     }
-
-    // Fetch product
-    const { data: product } = await supabase
-      .from(T.products)
-      .select('*')
-      .eq('id', productId)
-      .single()
 
     if (!product) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })

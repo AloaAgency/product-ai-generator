@@ -158,6 +158,18 @@ export const createPreview = (
   width = 1600
 ): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => resizeToWebP(buffer, width, 82)
 
+/**
+ * Generate thumbnail and preview in parallel from the same source buffer.
+ * Equivalent to calling createThumbnail + createPreview concurrently —
+ * cuts Sharp processing time roughly in half vs sequential calls.
+ */
+export const createThumbnailAndPreview = (
+  buffer: Buffer
+): Promise<[
+  { buffer: Buffer; mimeType: string; extension: string },
+  { buffer: Buffer; mimeType: string; extension: string }
+]> => Promise.all([createThumbnail(buffer), createPreview(buffer)])
+
 /** Thresholds for reference image compression */
 const REF_MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
 const REF_MAX_DIMENSION = 4096             // px
@@ -238,13 +250,17 @@ export const extractVideoThumbnail = async (
     await writeFile(tmpVideo, videoBuffer)
 
     await new Promise<void>((resolve, reject) => {
-      ffmpeg(tmpVideo)
+      const ff = ffmpeg(tmpVideo)
         .seekInput(0.1)
         .frames(1)
         .outputOptions('-update', '1')
         .output(tmpFrame)
-        .on('end', () => resolve())
-        .on('error', (err: Error) => reject(err))
+      const timer = setTimeout(() => {
+        ff.kill('SIGKILL')
+        reject(new Error('extractVideoThumbnail: timed out after 30s'))
+      }, 30_000)
+      ff.on('end', () => { clearTimeout(timer); resolve() })
+        .on('error', (err: Error) => { clearTimeout(timer); reject(err) })
         .run()
     })
 
