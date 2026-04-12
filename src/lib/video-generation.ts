@@ -575,11 +575,13 @@ async function loadSceneGenerationContext(
   sceneId: string,
   model?: string
 ): Promise<SceneGenerationContext> {
-  const scene = await loadSceneOrThrow(supabase, sceneId)
+  const scenePromise = loadSceneOrThrow(supabase, sceneId)
+  const geminiApiKeyPromise = resolveSceneGeminiApiKey(supabase, productId)
+  const scene = await scenePromise
   const resolvedModel = model || scene.generation_model || 'veo3'
 
   const [geminiApiKey, frameRefs] = await Promise.all([
-    resolveSceneGeminiApiKey(supabase, productId),
+    geminiApiKeyPromise,
     resolveFrameRefs(supabase, scene, resolvedModel),
   ])
 
