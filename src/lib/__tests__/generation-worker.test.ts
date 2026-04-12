@@ -49,6 +49,10 @@ vi.mock('@/lib/image-utils', () => ({
     mimeType: 'image/webp',
     extension: 'webp',
   })),
+  createThumbnailAndPreview: vi.fn(async () => [
+    { buffer: Buffer.from('thumb'), mimeType: 'image/webp', extension: 'webp' },
+    { buffer: Buffer.from('preview'), mimeType: 'image/webp', extension: 'webp' },
+  ]),
   resolveExtension: vi.fn(() => 'png'),
   slugify: vi.fn(() => 'prompt'),
 }))
