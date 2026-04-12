@@ -44,7 +44,7 @@ type SceneVideoSettings = {
 
 type VideoGenerationResult = { buffer: Buffer; mimeType: string; extension: string }
 type FrameRefs = { start?: FrameRef; end?: FrameRef }
-type GeneratedImageFrame = { storage_path: string | null; mime_type: string | null }
+type GeneratedImageFrame = { id: string; storage_path: string | null; mime_type: string | null }
 type SceneRecord = {
   id: string
   title: string | null
@@ -264,31 +264,55 @@ function getBufferResult(buffer: Buffer, mimeType: string): VideoGenerationResul
   }
 }
 
-async function createFrameRef(supabase: ReturnType<typeof createServiceClient>, imageId: string) {
-  const { data: image, error: imageError } = await supabase
+async function loadFrameRefsByImageId(
+  supabase: ReturnType<typeof createServiceClient>,
+  imageIds: string[]
+) {
+  const uniqueImageIds = [...new Set(imageIds)]
+  if (uniqueImageIds.length === 0) return new Map<string, FrameRef>()
+
+  const { data: images, error: imageError } = await supabase
     .from(T.generated_images)
-    .select('storage_path, mime_type')
-    .eq('id', imageId)
-    .single<GeneratedImageFrame>()
+    .select('id, storage_path, mime_type')
+    .in('id', uniqueImageIds)
 
   if (imageError) {
     throw new Error(`Failed to load frame image: ${imageError.message}`)
   }
-  if (!image?.storage_path) return undefined
 
+  const frames = (images || []).filter(
+    (image): image is GeneratedImageFrame => Boolean(image?.id && image.storage_path)
+  )
+  if (frames.length === 0) return new Map<string, FrameRef>()
+
+  const storagePaths = frames.map((frame) => frame.storage_path as string)
   const { data: signed, error: signedError } = await supabase.storage
     .from('generated-images')
-    .createSignedUrl(image.storage_path, SIGNED_URL_TTL_SECONDS)
+    .createSignedUrls(storagePaths, SIGNED_URL_TTL_SECONDS)
 
   if (signedError) {
     throw new Error(`Failed to sign frame image: ${signedError.message}`)
   }
-  if (!signed?.signedUrl) return undefined
 
-  return {
-    url: signed.signedUrl,
-    mimeType: image.mime_type || 'image/png',
+  const signedUrlsByPath = new Map<string, string>()
+  for (const [index, storagePath] of storagePaths.entries()) {
+    const signedUrl = signed?.[index]?.signedUrl
+    if (signedUrl) signedUrlsByPath.set(storagePath, signedUrl)
   }
+
+  const frameRefs = new Map<string, FrameRef>()
+  for (const frame of frames) {
+    const storagePath = frame.storage_path as string
+    const signedUrl = signedUrlsByPath.get(storagePath)
+    if (!signedUrl) continue
+
+    frameRefs.set(frame.id, {
+      url: signedUrl,
+      mimeType: frame.mime_type || 'image/png',
+    })
+  }
+
+  return frameRefs
 }
 
 async function fetchFrameBytes(frameRef: FrameRef, label: 'start' | 'end') {
@@ -378,16 +402,25 @@ export async function buildVeoRequestParts(
   const instance: Record<string, unknown> = { prompt }
   const parameters: Record<string, unknown> = {}
 
-  if (frameRefs.start?.url) {
-    instance.image = await fetchFrameBytes(frameRefs.start, 'start')
-  }
-
   if (frameRefs.end?.url) {
     if (!frameRefs.start?.url) {
       console.warn('[Veo] Ignoring end frame because no start frame was provided.')
-    } else {
-      instance.lastFrame = await fetchFrameBytes(frameRefs.end, 'end')
     }
+  }
+
+  const [startFrame, endFrame] = await Promise.all([
+    frameRefs.start?.url ? fetchFrameBytes(frameRefs.start, 'start') : Promise.resolve(undefined),
+    frameRefs.start?.url && frameRefs.end?.url
+      ? fetchFrameBytes(frameRefs.end, 'end')
+      : Promise.resolve(undefined),
+  ])
+
+  if (startFrame) {
+    instance.image = startFrame
+  }
+
+  if (endFrame) {
+    instance.lastFrame = endFrame
   }
 
   const aspectRatio = settings.aspectRatio || process.env.VEO_ASPECT_RATIO
@@ -554,14 +587,19 @@ async function resolveFrameRefs(
   scene: SceneRecord,
   model: string
 ): Promise<FrameRefs> {
-  const [startFrameRef, endFrameRef] = await Promise.all([
-    scene.start_frame_image_id
-      ? createFrameRef(supabase, scene.start_frame_image_id)
-      : Promise.resolve(undefined),
-    scene.end_frame_image_id && !isLtxModel(model)
-      ? createFrameRef(supabase, scene.end_frame_image_id)
-      : Promise.resolve(undefined),
-  ])
+  const endFrameImageId = scene.end_frame_image_id && !isLtxModel(model)
+    ? scene.end_frame_image_id
+    : null
+  const frameRefsByImageId = await loadFrameRefsByImageId(
+    supabase,
+    [scene.start_frame_image_id, endFrameImageId].filter((imageId): imageId is string => Boolean(imageId))
+  )
+  const startFrameRef = scene.start_frame_image_id
+    ? frameRefsByImageId.get(scene.start_frame_image_id)
+    : undefined
+  const endFrameRef = endFrameImageId
+    ? frameRefsByImageId.get(endFrameImageId)
+    : undefined
 
   return {
     ...(startFrameRef ? { start: startFrameRef } : {}),
