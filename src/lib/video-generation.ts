@@ -19,6 +19,19 @@ const DEFAULT_LTX_API_BASE_URL = 'https://api.ltx.video/v1'
 const DEFAULT_LTX_MODEL = 'ltx-2-pro'
 const DEFAULT_LTX_DURATION_SECONDS = 8
 const DEFAULT_LTX_RESOLUTION = '1920x1080'
+const SCENE_SELECT_COLUMNS = [
+  'id',
+  'title',
+  'motion_prompt',
+  'generation_model',
+  'start_frame_image_id',
+  'end_frame_image_id',
+  'video_resolution',
+  'video_aspect_ratio',
+  'video_duration_seconds',
+  'video_fps',
+  'video_generate_audio',
+].join(', ')
 
 type FrameRef = { url: string; mimeType: string }
 type SceneVideoSettings = {
@@ -488,7 +501,7 @@ async function loadSceneOrThrow(
 ): Promise<SceneWithMotionPrompt> {
   const { data: scene, error: sceneErr } = await supabase
     .from(T.storyboard_scenes)
-    .select('*')
+    .select(SCENE_SELECT_COLUMNS)
     .eq('id', sceneId)
     .single<SceneRecord>()
 
