@@ -5,8 +5,7 @@ import {
   buildImageStoragePath,
   buildPreviewPath,
   buildThumbnailPath,
-  createPreview,
-  createThumbnail,
+  createThumbnailAndPreview,
   resolveExtension,
   slugify,
 } from '@/lib/image-utils'
@@ -685,8 +684,7 @@ async function runVariation(
 
     const imageBuffer = Buffer.from(result.base64Data, 'base64')
     const extension = resolveExtension(result.mimeType)
-    const thumbnail = await createThumbnail(imageBuffer)
-    const preview = await createPreview(imageBuffer)
+    const [thumbnail, preview] = await createThumbnailAndPreview(imageBuffer)
 
     const storagePath = buildImageStoragePath(job.product_id, job.id, variationNumber, promptSlug, extension)
     const thumbPath = buildThumbnailPath(storagePath, thumbnail.extension)
