@@ -19,10 +19,12 @@ const MAX_ERROR_MESSAGE_LENGTH = 200
 const MAX_SUGGESTED_PROMPT_COUNT = 10
 const MAX_API_RETRIES = 2
 const MAX_UPLOAD_RETRIES = 1
+const GALLERY_PAGE_SIZE = 48
 const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const requestVersions = new Map<string, number>()
 const successfulRequests = new Set<string>()
 const inFlightRequests = new Map<string, Promise<unknown>>()
+const sliceScopes = new Map<string, string>()
 let aiRequestCount = 0
 
 const sanitizePathSegment = (value: string) => encodeURIComponent(value.trim())
@@ -36,6 +38,16 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const buildRequestKey = (scope: string, ...parts: Array<string | undefined | null>) =>
   [scope, ...parts.map((part) => (part ?? '').trim() || '_')].join(':')
+
+const updateSliceScope = (slice: string, scope: string) => {
+  const normalizedScope = scope.trim() || '_'
+  const previousScope = sliceScopes.get(slice)
+  sliceScopes.set(slice, normalizedScope)
+  return previousScope !== normalizedScope
+}
+
+const isCurrentSliceScope = (slice: string, scope: string) =>
+  (sliceScopes.get(slice) ?? '_') === (scope.trim() || '_')
 
 const buildProjectScopedQuery = (projectId: string) => {
   const params = new URLSearchParams()
@@ -186,6 +198,63 @@ const removeImagesById = (images: GeneratedImage[], ids: Set<string>) => {
   const nextImages = images.filter((image) => !ids.has(image.id))
   return nextImages.length === images.length ? images : nextImages
 }
+
+const getProductScopedState = () => ({
+  referenceSets: [],
+  referenceImages: {},
+  promptTemplates: [],
+  generationJobs: [],
+  currentJob: null,
+  galleryImages: [],
+  galleryTotal: 0,
+  galleryHasMore: false,
+  loadingGalleryMore: false,
+  settingsTemplates: [],
+})
+
+const updateGalleryStateAfterRemoval = (state: Pick<AppState, 'galleryImages' | 'galleryTotal'>, ids: Set<string>) => {
+  const galleryImages = removeImagesById(state.galleryImages, ids)
+  const removedCount = state.galleryImages.length - galleryImages.length
+  const galleryTotal = Math.max(0, state.galleryTotal - removedCount)
+
+  return {
+    galleryImages,
+    galleryTotal,
+    galleryHasMore: galleryTotal > galleryImages.length,
+  }
+}
+
+const getGalleryQueryString = (
+  filters?: {
+    job_id?: string
+    approval_status?: string
+    media_type?: string
+    scene_id?: string
+    sort?: string
+  },
+  offset = 0
+) => {
+  const params = new URLSearchParams()
+  if (filters?.job_id) params.set('job_id', filters.job_id.trim())
+  if (filters?.approval_status) params.set('approval_status', filters.approval_status.trim())
+  if (filters?.media_type) params.set('media_type', filters.media_type.trim())
+  if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
+  if (filters?.sort) params.set('sort', filters.sort.trim())
+  params.set('limit', String(GALLERY_PAGE_SIZE))
+  params.set('offset', String(offset))
+  return params.toString()
+}
+
+const getGalleryRequestKey = (
+  productId: string,
+  filters?: {
+    job_id?: string
+    approval_status?: string
+    media_type?: string
+    scene_id?: string
+    sort?: string
+  }
+) => buildRequestKey('gallery', productId, getGalleryQueryString(filters))
 
 const beginAiRequest = (set: (partial: Partial<AppState>) => void) => {
   aiRequestCount += 1
@@ -385,6 +454,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   fetchProject: async (id) => {
+    if (updateSliceScope('currentProject', id)) {
+      set({ currentProject: null, errorLogs: [] })
+    }
     const requestKey = buildRequestKey('currentProject', id)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
@@ -443,6 +515,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentProduct: null,
   loadingProducts: false,
   fetchProducts: async (projectId) => {
+    const scopeToken = projectId?.trim() || '_'
+    if (updateSliceScope('products', scopeToken)) {
+      set({ products: [] })
+    }
     const requestKey = buildRequestKey('products', projectId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingProducts: true })
@@ -466,6 +542,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   fetchProduct: async (id) => {
+    if (updateSliceScope('currentProduct', id)) {
+      set({ currentProduct: null, ...getProductScopedState() })
+    }
     const requestKey = buildRequestKey('currentProduct', id)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
@@ -528,13 +607,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       products: s.products.filter((p) => p.id !== id),
       currentProduct: s.currentProduct?.id === id ? null : s.currentProduct,
-      referenceSets: s.currentProduct?.id === id ? [] : s.referenceSets,
-      referenceImages: s.currentProduct?.id === id ? {} : s.referenceImages,
-      promptTemplates: s.currentProduct?.id === id ? [] : s.promptTemplates,
-      generationJobs: s.currentProduct?.id === id ? [] : s.generationJobs,
-      currentJob: s.currentProduct?.id === id ? null : s.currentJob,
-      galleryImages: s.currentProduct?.id === id ? [] : s.galleryImages,
-      settingsTemplates: s.currentProduct?.id === id ? [] : s.settingsTemplates,
+      ...(s.currentProduct?.id === id ? getProductScopedState() : {}),
     }))
   },
 
@@ -542,6 +615,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   referenceSets: [],
   loadingRefSets: false,
   fetchReferenceSets: async (productId) => {
+    if (updateSliceScope('referenceSets', productId)) {
+      set({ referenceSets: [], referenceImages: {} })
+    }
     const requestKey = buildRequestKey('referenceSets', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingRefSets: true })
@@ -773,6 +849,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Prompt Templates
   promptTemplates: [],
   fetchPromptTemplates: async (productId) => {
+    if (updateSliceScope('promptTemplates', productId)) {
+      set({ promptTemplates: [] })
+    }
     const requestKey = buildRequestKey('promptTemplates', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
@@ -942,16 +1021,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadingGallery: false,
   loadingGalleryMore: false,
   fetchGallery: async (productId, filters) => {
-    const params = new URLSearchParams()
-    if (filters?.job_id) params.set('job_id', filters.job_id.trim())
-    if (filters?.approval_status) params.set('approval_status', filters.approval_status.trim())
-    if (filters?.media_type) params.set('media_type', filters.media_type.trim())
-    if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
-    if (filters?.sort) params.set('sort', filters.sort.trim())
-    params.set('limit', '48')
-    params.set('offset', '0')
-    const qs = params.toString()
-    const requestKey = buildRequestKey('gallery', productId, qs)
+    const requestKey = getGalleryRequestKey(productId, filters)
+    const qs = getGalleryQueryString(filters)
+    if (updateSliceScope('gallery', requestKey)) {
+      set({ loadingGalleryMore: false })
+    }
     const requestVersion = beginTrackedRequest(requestKey)
     const shouldShowLoading = get().galleryImages.length === 0
     if (shouldShowLoading) set({ loadingGallery: true })
@@ -980,31 +1054,34 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchGalleryMore: async (productId, filters) => {
     const { galleryImages, galleryHasMore, loadingGalleryMore } = get()
     if (!galleryHasMore || loadingGalleryMore) return
+
+    const requestKey = getGalleryRequestKey(productId, filters)
+    const requestVersion = requestVersions.get(requestKey) ?? 0
+    if (!isCurrentSliceScope('gallery', requestKey)) return
+
     set({ loadingGalleryMore: true })
     try {
-      const params = new URLSearchParams()
-      if (filters?.job_id) params.set('job_id', filters.job_id.trim())
-      if (filters?.approval_status) params.set('approval_status', filters.approval_status.trim())
-      if (filters?.media_type) params.set('media_type', filters.media_type.trim())
-      if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
-      if (filters?.sort) params.set('sort', filters.sort.trim())
-      params.set('limit', '48')
-      params.set('offset', String(galleryImages.length))
-      const qs = params.toString()
+      const qs = getGalleryQueryString(filters, galleryImages.length)
       const data = await api(`/api/products/${buildApiPath(productId)}/gallery?${qs}`)
+      if (!isCurrentSliceScope('gallery', requestKey) || !isLatestRequest(requestKey, requestVersion)) {
+        return
+      }
       const newImages = data.images ?? []
-      // Deduplicate by id
-      const existingIds = new Set(galleryImages.map((img) => img.id))
-      const unique = newImages.filter((img: GeneratedImage) => !existingIds.has(img.id))
-      set({
-        galleryImages: [...galleryImages, ...unique],
-        galleryTotal: data.total ?? galleryImages.length + unique.length,
-        galleryHasMore: data.has_more ?? false,
+      set((state) => {
+        const existingIds = new Set(state.galleryImages.map((img) => img.id))
+        const unique = newImages.filter((img: GeneratedImage) => !existingIds.has(img.id))
+        return {
+          galleryImages: [...state.galleryImages, ...unique],
+          galleryTotal: data.total ?? state.galleryImages.length + unique.length,
+          galleryHasMore: data.has_more ?? false,
+        }
       })
     } catch (error) {
       logStoreError('GalleryMore', error)
     } finally {
-      set({ loadingGalleryMore: false })
+      if (isCurrentSliceScope('gallery', requestKey)) {
+        set({ loadingGalleryMore: false })
+      }
     }
   },
   updateImageApproval: async (imageId, approval_status, notes) => {
@@ -1031,7 +1108,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api(`/api/images/${buildApiPath(imageId)}`, { method: 'DELETE' })
     const idSet = new Set([imageId])
     set((s) => ({
-      galleryImages: removeImagesById(s.galleryImages, idSet),
+      ...updateGalleryStateAfterRemoval(s, idSet),
       currentJob: s.currentJob?.images
         ? {
             ...s.currentJob,
@@ -1050,7 +1127,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const idSet = new Set(sanitizedIds)
     set((s) => ({
-      galleryImages: removeImagesById(s.galleryImages, idSet),
+      ...updateGalleryStateAfterRemoval(s, idSet),
       currentJob: s.currentJob?.images
         ? {
             ...s.currentJob,
@@ -1143,6 +1220,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   errorLogs: [],
   loadingErrorLogs: false,
   fetchErrorLogs: async (projectId) => {
+    if (updateSliceScope('errorLogs', projectId)) {
+      set({ errorLogs: [] })
+    }
     const requestKey = buildRequestKey('errorLogs', projectId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingErrorLogs: true })
