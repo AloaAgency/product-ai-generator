@@ -23,6 +23,7 @@ const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const requestVersions = new Map<string, number>()
 const successfulRequests = new Set<string>()
 const inFlightRequests = new Map<string, Promise<unknown>>()
+const sliceScopes = new Map<string, string>()
 let aiRequestCount = 0
 
 const sanitizePathSegment = (value: string) => encodeURIComponent(value.trim())
@@ -36,6 +37,13 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const buildRequestKey = (scope: string, ...parts: Array<string | undefined | null>) =>
   [scope, ...parts.map((part) => (part ?? '').trim() || '_')].join(':')
+
+const updateSliceScope = (slice: string, scope: string) => {
+  const normalizedScope = scope.trim() || '_'
+  const previousScope = sliceScopes.get(slice)
+  sliceScopes.set(slice, normalizedScope)
+  return previousScope !== normalizedScope
+}
 
 const buildProjectScopedQuery = (projectId: string) => {
   const params = new URLSearchParams()
@@ -186,6 +194,19 @@ const removeImagesById = (images: GeneratedImage[], ids: Set<string>) => {
   const nextImages = images.filter((image) => !ids.has(image.id))
   return nextImages.length === images.length ? images : nextImages
 }
+
+const getProductScopedState = () => ({
+  referenceSets: [],
+  referenceImages: {},
+  promptTemplates: [],
+  generationJobs: [],
+  currentJob: null,
+  galleryImages: [],
+  galleryTotal: 0,
+  galleryHasMore: false,
+  loadingGalleryMore: false,
+  settingsTemplates: [],
+})
 
 const beginAiRequest = (set: (partial: Partial<AppState>) => void) => {
   aiRequestCount += 1
@@ -385,6 +406,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   fetchProject: async (id) => {
+    if (updateSliceScope('currentProject', id)) {
+      set({ currentProject: null, errorLogs: [] })
+    }
     const requestKey = buildRequestKey('currentProject', id)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
@@ -443,6 +467,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentProduct: null,
   loadingProducts: false,
   fetchProducts: async (projectId) => {
+    const scopeToken = projectId?.trim() || '_'
+    if (updateSliceScope('products', scopeToken)) {
+      set({ products: [] })
+    }
     const requestKey = buildRequestKey('products', projectId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingProducts: true })
@@ -466,6 +494,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   fetchProduct: async (id) => {
+    if (updateSliceScope('currentProduct', id)) {
+      set({ currentProduct: null, ...getProductScopedState() })
+    }
     const requestKey = buildRequestKey('currentProduct', id)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
@@ -528,13 +559,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       products: s.products.filter((p) => p.id !== id),
       currentProduct: s.currentProduct?.id === id ? null : s.currentProduct,
-      referenceSets: s.currentProduct?.id === id ? [] : s.referenceSets,
-      referenceImages: s.currentProduct?.id === id ? {} : s.referenceImages,
-      promptTemplates: s.currentProduct?.id === id ? [] : s.promptTemplates,
-      generationJobs: s.currentProduct?.id === id ? [] : s.generationJobs,
-      currentJob: s.currentProduct?.id === id ? null : s.currentJob,
-      galleryImages: s.currentProduct?.id === id ? [] : s.galleryImages,
-      settingsTemplates: s.currentProduct?.id === id ? [] : s.settingsTemplates,
+      ...(s.currentProduct?.id === id ? getProductScopedState() : {}),
     }))
   },
 
@@ -542,6 +567,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   referenceSets: [],
   loadingRefSets: false,
   fetchReferenceSets: async (productId) => {
+    if (updateSliceScope('referenceSets', productId)) {
+      set({ referenceSets: [], referenceImages: {} })
+    }
     const requestKey = buildRequestKey('referenceSets', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingRefSets: true })
@@ -773,6 +801,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Prompt Templates
   promptTemplates: [],
   fetchPromptTemplates: async (productId) => {
+    if (updateSliceScope('promptTemplates', productId)) {
+      set({ promptTemplates: [] })
+    }
     const requestKey = buildRequestKey('promptTemplates', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
@@ -1143,6 +1174,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   errorLogs: [],
   loadingErrorLogs: false,
   fetchErrorLogs: async (projectId) => {
+    if (updateSliceScope('errorLogs', projectId)) {
+      set({ errorLogs: [] })
+    }
     const requestKey = buildRequestKey('errorLogs', projectId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingErrorLogs: true })
