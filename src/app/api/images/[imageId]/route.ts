@@ -29,7 +29,8 @@ export async function PATCH(
       .from(T.generated_images)
       .update(updates)
       .eq('id', imageId)
-      .select()
+      // Return only the mutable fields we changed so client-side signed URLs stay intact.
+      .select('id, approval_status, notes')
       .single()
 
     if (error || !image) {
