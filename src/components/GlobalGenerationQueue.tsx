@@ -39,6 +39,7 @@ export default function GlobalGenerationQueue({
     overallProgress,
     hasActiveJobs,
   } = useMemo(() => deriveGenerationQueueState(generationJobs), [generationJobs])
+  const showIndeterminateOverallBar = hasActiveJobs && totals.totalCompleted === 0
 
   useEffect(() => {
     let cancelled = false
@@ -206,10 +207,14 @@ export default function GlobalGenerationQueue({
           <span>Updates every {POLL_MS / 1000}s</span>
         </div>
         <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-zinc-800">
-          <div
-            className="h-full rounded-full bg-blue-500 transition-all duration-500"
-            style={{ width: `${overallProgress}%` }}
-          />
+          {showIndeterminateOverallBar ? (
+            <div className="h-full w-1/3 rounded-full bg-blue-500 animate-pulse-bar" />
+          ) : (
+            <div
+              className="h-full rounded-full bg-blue-500 transition-all duration-500"
+              style={{ width: `${overallProgress}%` }}
+            />
+          )}
         </div>
 
         {expanded && (
@@ -217,6 +222,7 @@ export default function GlobalGenerationQueue({
             {hasActiveJobs ? (
               activeJobs.map((job) => {
                 const jobProgress = getGenerationJobProgress(job)
+                const showIndeterminateJobBar = job.status === 'pending' || (job.status === 'running' && (job.completed_count ?? 0) === 0)
 
                 const unitLabel = job.job_type === 'video'
                   ? (job.variation_count === 1 ? 'video' : 'videos')
@@ -248,10 +254,14 @@ export default function GlobalGenerationQueue({
                       </p>
                     )}
                     <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
-                      <div
-                        className="h-full rounded-full bg-blue-500/80 transition-all duration-500"
-                        style={{ width: `${jobProgress}%` }}
-                      />
+                      {showIndeterminateJobBar ? (
+                        <div className="h-full w-1/3 rounded-full bg-blue-500/80 animate-pulse-bar" />
+                      ) : (
+                        <div
+                          className="h-full rounded-full bg-blue-500/80 transition-all duration-500"
+                          style={{ width: `${jobProgress}%` }}
+                        />
+                      )}
                     </div>
                   </div>
                 )
