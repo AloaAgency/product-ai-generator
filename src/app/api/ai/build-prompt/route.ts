@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
-import { MAX_PRODUCT_NAME_LEN, MAX_PRODUCT_DESC_LEN, MAX_USER_PROMPT_LEN, buildStyleBlock } from '@/lib/prompt-builder'
+import { buildRefinedPromptUserMessage } from '@/lib/prompt-builder'
 import type { GlobalStyleSettings } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
@@ -52,15 +52,7 @@ export async function POST(request: NextRequest) {
     const projectStyles = product.prodai_projects?.global_style_settings ?? {}
     const settings = mergeStyles(projectStyles, product.global_style_settings ?? undefined)
 
-    // Truncate user-controlled and DB-sourced fields before AI interpolation to
-    // prevent oversized payloads and limit prompt injection surface area
-    const safeName = product.name.slice(0, MAX_PRODUCT_NAME_LEN)
-    const safeDesc = product.description ? product.description.slice(0, MAX_PRODUCT_DESC_LEN) : null
-    const safePrompt = user_prompt.slice(0, MAX_USER_PROMPT_LEN)
-
-    const styleBlock = buildStyleBlock(settings)
-
-    const userMessage = `Product: ${safeName}${safeDesc ? `\nDescription: ${safeDesc}` : ''}${styleBlock ? `\n\nStyle settings:\n${styleBlock}` : ''}\n\nUser's prompt idea:\n${safePrompt}`
+    const userMessage = buildRefinedPromptUserMessage(product.name, product.description, settings, user_prompt)
 
     const anthropic = new Anthropic()
     const response = await anthropic.messages.create({

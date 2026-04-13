@@ -3,13 +3,89 @@ import { describe, it, expect } from 'vitest'
 import {
   buildFullPrompt,
   buildPromptSuggestionSystemPrompt,
+  buildRefinedPromptUserMessage,
   MAX_PRODUCT_DESC_LEN,
   MAX_PRODUCT_NAME_LEN,
   MAX_STYLE_VALUE_LEN,
   MAX_SUGGESTION_COUNT,
   MAX_USER_PROMPT_LEN,
   parsePromptSuggestions,
+  SCENE_TITLE_SYSTEM_PROMPT,
 } from '../prompt-builder'
+
+// ---------------------------------------------------------------------------
+// SCENE_TITLE_SYSTEM_PROMPT
+// ---------------------------------------------------------------------------
+
+describe('SCENE_TITLE_SYSTEM_PROMPT', () => {
+  it('is a non-empty string', () => {
+    expect(typeof SCENE_TITLE_SYSTEM_PROMPT).toBe('string')
+    expect(SCENE_TITLE_SYSTEM_PROMPT.length).toBeGreaterThan(0)
+  })
+
+  it('instructs Claude to produce only the title with no extra output', () => {
+    expect(SCENE_TITLE_SYSTEM_PROMPT).toContain('Output ONLY the title')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// buildRefinedPromptUserMessage
+// ---------------------------------------------------------------------------
+
+describe('buildRefinedPromptUserMessage', () => {
+  it('includes the product name', () => {
+    const msg = buildRefinedPromptUserMessage('Shampoo', null, {}, 'Dark background')
+    expect(msg).toContain('Product: Shampoo')
+  })
+
+  it('includes the description when provided', () => {
+    const msg = buildRefinedPromptUserMessage('Shampoo', 'A premium shampoo', {}, 'Dark background')
+    expect(msg).toContain('Description: A premium shampoo')
+  })
+
+  it('omits the description line when null', () => {
+    const msg = buildRefinedPromptUserMessage('Shampoo', null, {}, 'Dark background')
+    expect(msg).not.toContain('Description:')
+    expect(msg).not.toContain('null')
+  })
+
+  it('includes the user prompt', () => {
+    const msg = buildRefinedPromptUserMessage('Shampoo', null, {}, 'Moody forest scene')
+    expect(msg).toContain("User's prompt idea:\nMoody forest scene")
+  })
+
+  it('includes style settings when present', () => {
+    const msg = buildRefinedPromptUserMessage('Shampoo', null, { lens: '50mm', lighting: 'ring' }, 'Hero shot')
+    expect(msg).toContain('Style settings:')
+    expect(msg).toContain('• lens: 50mm')
+  })
+
+  it('omits the style settings block when settings are empty', () => {
+    const msg = buildRefinedPromptUserMessage('Shampoo', null, {}, 'Hero shot')
+    expect(msg).not.toContain('Style settings:')
+  })
+
+  it('truncates product name at MAX_PRODUCT_NAME_LEN', () => {
+    const longName = 'N'.repeat(MAX_PRODUCT_NAME_LEN + 50)
+    const msg = buildRefinedPromptUserMessage(longName, null, {}, 'Shot')
+    const nameInMsg = msg.split('\n')[0].replace('Product: ', '')
+    expect(nameInMsg.length).toBe(MAX_PRODUCT_NAME_LEN)
+  })
+
+  it('truncates description at MAX_PRODUCT_DESC_LEN', () => {
+    const longDesc = 'D'.repeat(MAX_PRODUCT_DESC_LEN + 50)
+    const msg = buildRefinedPromptUserMessage('Bottle', longDesc, {}, 'Shot')
+    expect(msg.includes(longDesc)).toBe(false)
+    expect(msg.includes('D'.repeat(MAX_PRODUCT_DESC_LEN))).toBe(true)
+  })
+
+  it('truncates user prompt at MAX_USER_PROMPT_LEN', () => {
+    const longPrompt = 'P'.repeat(MAX_USER_PROMPT_LEN + 100)
+    const msg = buildRefinedPromptUserMessage('Bottle', null, {}, longPrompt)
+    const promptSection = msg.split("User's prompt idea:\n")[1] ?? ''
+    expect(promptSection.length).toBe(MAX_USER_PROMPT_LEN)
+  })
+})
 
 // ---------------------------------------------------------------------------
 // buildFullPrompt

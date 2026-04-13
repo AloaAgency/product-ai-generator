@@ -5,6 +5,14 @@
 
 import type { GlobalStyleSettings } from './types'
 
+/**
+ * Shared system prompt for generating short scene titles from a prompt text.
+ * Used by both the dedicated /api/ai/scene-title route and inline title generation
+ * in /api/products/[id]/prompts — kept here so both callers stay in sync.
+ */
+export const SCENE_TITLE_SYSTEM_PROMPT =
+  'Generate a short (3-6 word) descriptive title for this product photography scene. Output ONLY the title.'
+
 /** Maximum character lengths for AI-interpolated fields — guards against injection and oversized API payloads */
 export const MAX_PRODUCT_NAME_LEN = 200
 export const MAX_PRODUCT_DESC_LEN = 500
@@ -44,6 +52,30 @@ export function buildStyleBlock(settings: GlobalStyleSettings): string {
     })
     .map(k => `• ${k}: ${(settings[k] as string).slice(0, MAX_STYLE_VALUE_LEN)}`)
     .join('\n')
+}
+
+/**
+ * Build the user message for Claude's prompt-refinement call.
+ * Sanitizes all user-controlled and DB-sourced fields before AI interpolation.
+ * Mirrors the truncation applied in buildPromptSuggestionSystemPrompt so that
+ * both AI endpoints enforce identical injection / payload limits.
+ */
+export function buildRefinedPromptUserMessage(
+  productName: string,
+  productDescription: string | null,
+  settings: GlobalStyleSettings,
+  userPrompt: string
+): string {
+  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN)
+  const safeDesc = productDescription ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN) : null
+  const safePrompt = userPrompt.slice(0, MAX_USER_PROMPT_LEN)
+  const styleBlock = buildStyleBlock(settings)
+  return (
+    `Product: ${safeName}` +
+    (safeDesc ? `\nDescription: ${safeDesc}` : '') +
+    (styleBlock ? `\n\nStyle settings:\n${styleBlock}` : '') +
+    `\n\nUser's prompt idea:\n${safePrompt}`
+  )
 }
 
 /**
