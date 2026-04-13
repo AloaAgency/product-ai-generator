@@ -212,6 +212,18 @@ const getProductScopedState = () => ({
   settingsTemplates: [],
 })
 
+const updateGalleryStateAfterRemoval = (state: Pick<AppState, 'galleryImages' | 'galleryTotal'>, ids: Set<string>) => {
+  const galleryImages = removeImagesById(state.galleryImages, ids)
+  const removedCount = state.galleryImages.length - galleryImages.length
+  const galleryTotal = Math.max(0, state.galleryTotal - removedCount)
+
+  return {
+    galleryImages,
+    galleryTotal,
+    galleryHasMore: galleryTotal > galleryImages.length,
+  }
+}
+
 const getGalleryQueryString = (
   filters?: {
     job_id?: string
@@ -1096,7 +1108,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api(`/api/images/${buildApiPath(imageId)}`, { method: 'DELETE' })
     const idSet = new Set([imageId])
     set((s) => ({
-      galleryImages: removeImagesById(s.galleryImages, idSet),
+      ...updateGalleryStateAfterRemoval(s, idSet),
       currentJob: s.currentJob?.images
         ? {
             ...s.currentJob,
@@ -1115,7 +1127,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const idSet = new Set(sanitizedIds)
     set((s) => ({
-      galleryImages: removeImagesById(s.galleryImages, idSet),
+      ...updateGalleryStateAfterRemoval(s, idSet),
       currentJob: s.currentJob?.images
         ? {
             ...s.currentJob,
