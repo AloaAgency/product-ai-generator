@@ -50,6 +50,7 @@ describe('buildSceneVideoSettings', () => {
   it('applies Veo duration constraints from stored scene settings', () => {
     const constrained = buildSceneVideoSettings({
       id: 'scene-1',
+      product_id: 'product-1',
       title: 'Launch shot',
       motion_prompt: 'Orbit around the product',
       generation_model: 'veo3',
@@ -70,6 +71,7 @@ describe('buildSceneVideoSettings', () => {
   it('preserves raw durations for LTX scenes', () => {
     const settings = buildSceneVideoSettings({
       id: 'scene-2',
+      product_id: 'product-1',
       title: 'Closeup',
       motion_prompt: 'Slow pan',
       generation_model: 'ltx',

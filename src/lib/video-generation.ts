@@ -47,6 +47,7 @@ type FrameRefs = { start?: FrameRef; end?: FrameRef }
 type GeneratedImageFrame = { id: string; storage_path: string | null; mime_type: string | null }
 type SceneRecord = {
   id: string
+  product_id: string
   title: string | null
   motion_prompt: string | null
   generation_model: string | null
@@ -686,6 +687,7 @@ async function createGeneratedVideoRecord(
   const { data: record, error: insertErr } = await supabase
     .from(T.generated_images)
     .insert({
+      product_id: scene.product_id,
       job_id: jobId || null,
       variation_number: 1,
       storage_path: storagePath,
