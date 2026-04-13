@@ -74,6 +74,7 @@ async function generateAndStoreImage(
   const { data: imgRecord, error: imgError } = await supabase
     .from(T.generated_images)
     .insert({
+      product_id: productId,
       job_id: null,
       variation_number: 1,
       storage_path: storagePath,

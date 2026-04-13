@@ -29,6 +29,17 @@ export default function GlobalGenerationQueue({
   const [clearingFailures, setClearingFailures] = useState(false)
   const isPollingRef = useRef(false)
 
+  const {
+    activeJobs,
+    pendingCount,
+    runningCount,
+    failedCount,
+    recentFailedJobs,
+    totals,
+    overallProgress,
+    hasActiveJobs,
+  } = useMemo(() => deriveGenerationQueueState(generationJobs), [generationJobs])
+
   useEffect(() => {
     let cancelled = false
 
@@ -43,6 +54,12 @@ export default function GlobalGenerationQueue({
     }
 
     void runPoll()
+    if (!hasActiveJobs) {
+      return () => {
+        cancelled = true
+      }
+    }
+
     const interval = window.setInterval(() => {
       void runPoll()
     }, POLL_MS)
@@ -58,18 +75,13 @@ export default function GlobalGenerationQueue({
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.clearInterval(interval)
     }
-  }, [productId, fetchGenerationJobs])
+  }, [productId, fetchGenerationJobs, hasActiveJobs])
 
-  const {
-    activeJobs,
-    pendingCount,
-    runningCount,
-    failedCount,
-    recentFailedJobs,
-    totals,
-    overallProgress,
-    hasActiveJobs,
-  } = useMemo(() => deriveGenerationQueueState(generationJobs), [generationJobs])
+  useEffect(() => {
+    if (!hasActiveJobs) {
+      setExpanded(false)
+    }
+  }, [hasActiveJobs])
 
   const handleToggleExpanded = useCallback(() => {
     setExpanded((prev) => !prev)
@@ -105,6 +117,10 @@ export default function GlobalGenerationQueue({
       setClearingFailures(false)
     }
   }, [clearGenerationFailures, clearingFailures, productId])
+
+  if (!hasActiveJobs) {
+    return null
+  }
 
   return (
     <section

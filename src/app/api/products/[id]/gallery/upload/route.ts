@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { createThumbnail, buildThumbnailPath } from '@/lib/image-utils'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -94,6 +93,7 @@ export async function POST(request: NextRequest, { params }: Params) {
         .from(T.generated_images)
         .insert({
           id: imageId,
+          product_id: productId,
           job_id: jobId,
           storage_path: storagePath,
           mime_type: file.mime_type,

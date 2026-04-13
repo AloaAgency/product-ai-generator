@@ -19,7 +19,7 @@ type Params = { params: Promise<{ id: string; sceneId: string }> }
 
 export async function POST(request: NextRequest, { params }: Params) {
   try {
-    const { sceneId } = await params
+    const { id: productId, sceneId } = await params
     const supabase = createServiceClient()
     const body = await request.json()
 
@@ -72,6 +72,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       .from(T.generated_images)
       .insert({
         id: randomUUID(),
+        product_id: productId,
         scene_id: sceneId,
         storage_path: storagePath,
         file_name: fileName,

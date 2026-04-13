@@ -4,6 +4,68 @@ import { T } from '@/lib/db-tables'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const DEFAULT_PAGE_SIZE = 48
+const GALLERY_IMAGE_SELECT = [
+  'id',
+  'product_id',
+  'job_id',
+  'scene_id',
+  'scene_name',
+  'variation_number',
+  'storage_path',
+  'thumb_storage_path',
+  'preview_storage_path',
+  'mime_type',
+  'file_size',
+  'approval_status',
+  'notes',
+  'media_type',
+  'created_at',
+].join(', ')
+
+type GalleryImageRecord = {
+  id: string
+  product_id: string | null
+  job_id: string | null
+  scene_id: string | null
+  scene_name: string | null
+  variation_number: number | null
+  storage_path: string | null
+  thumb_storage_path: string | null
+  preview_storage_path: string | null
+  mime_type: string | null
+  file_size: number | null
+  approval_status: string | null
+  notes: string | null
+  media_type: string | null
+  created_at: string | null
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applyImageFilters(q: any, {
+  productId,
+  sceneId,
+  approvalStatus,
+  mediaType,
+}: {
+  productId: string
+  sceneId: string | null
+  approvalStatus: string | null
+  mediaType: string | null
+}) {
+  let result = q.eq('product_id', productId)
+
+  if (sceneId) {
+    result = result.eq('scene_id', sceneId)
+  }
+  if (approvalStatus) {
+    result = result.eq('approval_status', approvalStatus)
+  }
+  if (mediaType && mediaType !== 'all') {
+    result = result.eq('media_type', mediaType)
+  }
+
+  return result
+}
 
 export async function GET(
   request: NextRequest,
@@ -11,124 +73,75 @@ export async function GET(
 ) {
   const { id: productId } = await params
   const { searchParams } = request.nextUrl
-  const jobId = searchParams.get('job_id')
-  const approvalStatus = searchParams.get('approval_status')
-  const mediaType = searchParams.get('media_type') // 'all' | 'image' | 'video'
   const sceneId = searchParams.get('scene_id')
-  const sortParam = searchParams.get('sort') // 'newest' | 'oldest' | 'variation'
+  const approvalStatus = searchParams.get('approval_status')
+  const mediaType = searchParams.get('media_type')
+  const sortParam = searchParams.get('sort')
   const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_PAGE_SIZE, 1), 200)
   const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
 
   try {
     const supabase = createServiceClient()
 
-    // Get all job IDs (and prompt_template_id + final_prompt + settings) for this product
-    let jobsQuery = supabase
-      .from(T.generation_jobs)
-      .select('id, prompt_template_id, final_prompt, reference_set_id, texture_set_id, product_image_count, texture_image_count')
-      .eq('product_id', productId)
-
-    if (jobId) {
-      jobsQuery = jobsQuery.eq('id', jobId)
-    }
-
-    const { data: jobs, error: jobsError } = await jobsQuery
-
-    if (jobsError) {
-      return NextResponse.json({ error: 'Failed to fetch jobs' }, { status: 500 })
-    }
-
-    const jobIds = (jobs || []).map((j) => j.id)
-    const jobTemplateMap = new Map((jobs || []).map((j) => [j.id, j.prompt_template_id]))
-    const jobPromptMap = new Map((jobs || []).map((j) => [j.id, j.final_prompt as string | null]))
-    const jobRefSetMap = new Map((jobs || []).map((j) => [j.id, j.reference_set_id as string | null]))
-    const jobTextureSetMap = new Map((jobs || []).map((j) => [j.id, j.texture_set_id as string | null]))
-    const jobProductImageCountMap = new Map((jobs || []).map((j) => [j.id, j.product_image_count as number | null]))
-    const jobTextureImageCountMap = new Map((jobs || []).map((j) => [j.id, j.texture_image_count as number | null]))
-
-    // Fetch generated images - include both job-based and scene-based (job_id is null)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const applyScope = (q: any): any => {
-      if (sceneId) {
-        return q.eq('scene_id', sceneId)
-      }
-      if (productSceneIds.length > 0 && jobIds.length > 0) {
-        return q.or(
-          `job_id.in.(${jobIds.join(',')}),scene_id.in.(${productSceneIds.join(',')})`
-        )
-      }
-      if (jobIds.length > 0) {
-        return q.in('job_id', jobIds)
-      }
-      if (productSceneIds.length > 0) {
-        return q.in('scene_id', productSceneIds)
-      }
-      return q
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const applyFilters = (q: any): any => {
-      let result = applyScope(q)
-      if (approvalStatus) {
-        result = result.eq('approval_status', approvalStatus)
-      }
-      if (mediaType && mediaType !== 'all') {
-        result = result.eq('media_type', mediaType)
-      }
-      return result
-    }
-
-    // Resolve scene IDs for this product
-    let productSceneIds: string[] = []
-    if (!sceneId) {
-      const { data: boards } = await supabase
-        .from(T.storyboards)
-        .select('id')
-        .eq('product_id', productId)
-      const boardIds = (boards || []).map((b) => b.id)
-
-      if (boardIds.length > 0) {
-        const { data: scenes } = await supabase
-          .from(T.storyboard_scenes)
-          .select('id')
-          .in('storyboard_id', boardIds)
-        productSceneIds = (scenes || []).map((s) => s.id)
-      }
-    }
-
-    // Early exit if no scope filters match
-    if (!sceneId && jobIds.length === 0 && productSceneIds.length === 0) {
-      return NextResponse.json({ images: [], total: 0 })
-    }
-
-    // Get total count (head-only query)
-    const countQuery = applyFilters(
-      supabase.from(T.generated_images).select('id', { count: 'exact', head: true })
+    const countQuery = applyImageFilters(
+      supabase.from(T.generated_images).select('id', { count: 'exact', head: true }),
+      { productId, sceneId, approvalStatus, mediaType }
     )
-    const { count: totalCount } = await countQuery
+    const { count: totalCount, error: countError } = await countQuery
 
-    // Fetch paginated images
-    let imagesQuery = applyFilters(
-      supabase.from(T.generated_images).select('*')
+    if (countError) {
+      return NextResponse.json({ error: 'Failed to count images' }, { status: 500 })
+    }
+
+    let imagesQuery = applyImageFilters(
+      supabase.from(T.generated_images).select(GALLERY_IMAGE_SELECT),
+      { productId, sceneId, approvalStatus, mediaType }
     )
+
     if (sortParam === 'oldest') {
       imagesQuery = imagesQuery.order('created_at', { ascending: true })
     } else if (sortParam === 'variation') {
-      imagesQuery = imagesQuery.order('variation_number', { ascending: true }).order('created_at', { ascending: false })
+      imagesQuery = imagesQuery
+        .order('variation_number', { ascending: true })
+        .order('created_at', { ascending: false })
     } else {
       imagesQuery = imagesQuery.order('created_at', { ascending: false })
     }
+
     imagesQuery = imagesQuery.range(offset, offset + limit - 1)
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: images, error: imagesError } = await imagesQuery as { data: any[] | null; error: any }
+    const { data: images, error: imagesError } = await imagesQuery as {
+      data: GalleryImageRecord[] | null
+      error: { message: string } | null
+    }
 
     if (imagesError) {
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
     }
 
-    // Sign lightweight image assets for gallery/list rendering.
-    // Full-size originals are fetched on demand by the lightbox.
+    const jobIds = Array.from(
+      new Set((images || []).map((image) => image.job_id).filter((value): value is string => Boolean(value)))
+    )
+
+    const { data: jobs, error: jobsError } = jobIds.length > 0
+      ? await supabase
+          .from(T.generation_jobs)
+          .select('id, prompt_template_id, final_prompt, reference_set_id, texture_set_id, product_image_count, texture_image_count')
+          .eq('product_id', productId)
+          .in('id', jobIds)
+      : { data: [], error: null }
+
+    if (jobsError) {
+      return NextResponse.json({ error: 'Failed to fetch job metadata' }, { status: 500 })
+    }
+
+    const jobTemplateMap = new Map((jobs || []).map((job) => [job.id, job.prompt_template_id]))
+    const jobPromptMap = new Map((jobs || []).map((job) => [job.id, job.final_prompt as string | null]))
+    const jobRefSetMap = new Map((jobs || []).map((job) => [job.id, job.reference_set_id as string | null]))
+    const jobTextureSetMap = new Map((jobs || []).map((job) => [job.id, job.texture_set_id as string | null]))
+    const jobProductImageCountMap = new Map((jobs || []).map((job) => [job.id, job.product_image_count as number | null]))
+    const jobTextureImageCountMap = new Map((jobs || []).map((job) => [job.id, job.texture_image_count as number | null]))
+
     const imageItems = (images || []).filter((img) => img.media_type !== 'video')
     const thumbPaths = imageItems
       .map((img) => img.thumb_storage_path)
@@ -144,12 +157,12 @@ export async function GET(
 
     const videoItems = (images || []).filter((img) => img.media_type === 'video')
     const videoPaths = videoItems
-      .map((v) => v.storage_path)
+      .map((video) => video.storage_path)
       .filter(Boolean) as string[]
     const videoThumbPaths = videoItems
-      .map((v) => v.thumb_storage_path)
+      .map((video) => video.thumb_storage_path)
       .filter(Boolean) as string[]
-    const allVideoBucketPaths = [...videoPaths, ...videoThumbPaths]
+    const allVideoBucketPaths = Array.from(new Set([...videoPaths, ...videoThumbPaths]))
 
     const [signedImageResult, signedVideoResult] = await Promise.all([
       allImageBucketPaths.length > 0
@@ -174,8 +187,10 @@ export async function GET(
     const signedImages = (images || []).map((img) => ({
       ...img,
       public_url: img.media_type === 'video'
-        ? (signedVideos.get(img.storage_path) ?? null)
-        : (!img.thumb_storage_path && !img.preview_storage_path ? (signedImageBucket.get(img.storage_path) ?? null) : null),
+        ? (img.storage_path ? (signedVideos.get(img.storage_path) ?? null) : null)
+        : (!img.thumb_storage_path && !img.preview_storage_path && img.storage_path
+            ? (signedImageBucket.get(img.storage_path) ?? null)
+            : null),
       preview_public_url: img.media_type === 'video'
         ? null
         : (img.preview_storage_path ? (signedImageBucket.get(img.preview_storage_path) ?? null) : null),

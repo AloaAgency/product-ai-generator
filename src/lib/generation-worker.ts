@@ -506,21 +506,34 @@ async function downloadStorageBase64(
   mimeType: string,
   context: string
 ): Promise<Base64ReferenceImage | null> {
-  const { data, error } = await supabase.storage
-    .from(bucket)
-    .download(storagePath)
+  const MAX_RETRIES = 3
+  let lastError: Error | null = null
 
-  if (error) {
-    throw new Error(`${context}: ${error.message}`)
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .download(storagePath)
+
+    if (error) {
+      lastError = new Error(`${context}: ${error.message}`)
+      const isRetryable = /bad gateway|gateway timeout|service unavailable|timeout|502|503|504/i.test(error.message)
+      if (isRetryable && attempt < MAX_RETRIES - 1) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)))
+        continue
+      }
+      throw lastError
+    }
+
+    if (!data) return null
+
+    const arrayBuffer = await data.arrayBuffer()
+    return {
+      mimeType,
+      base64: Buffer.from(arrayBuffer).toString('base64'),
+    }
   }
 
-  if (!data) return null
-
-  const arrayBuffer = await data.arrayBuffer()
-  return {
-    mimeType,
-    base64: Buffer.from(arrayBuffer).toString('base64'),
-  }
+  throw lastError ?? new Error(`${context}: download failed after ${MAX_RETRIES} attempts`)
 }
 
 async function buildReferenceImagePayloads(
@@ -717,6 +730,7 @@ async function runVariation(
     }
 
     const { error: insertError } = await supabase.from(T.generated_images).insert({
+      product_id: job.product_id,
       job_id: job.id,
       variation_number: variationNumber,
       storage_path: storagePath,
