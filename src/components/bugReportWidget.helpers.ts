@@ -14,7 +14,9 @@ export interface SelectedBugReportImage {
 
 export const clampBugReportText = (value: string, maxLength: number) => value.slice(0, maxLength)
 
-const trimAndStripControlChars = (value: string) => value.replace(CONTROL_CHARS, '').trim()
+export const stripBugReportControlChars = (value: string) => value.replace(CONTROL_CHARS, '')
+
+const trimAndStripControlChars = (value: string) => stripBugReportControlChars(value).trim()
 
 export const normalizeBugReportSingleLine = (value: string, maxLength: number) =>
   clampBugReportText(trimAndStripControlChars(value).replace(/\s+/g, ' '), maxLength)
@@ -86,4 +88,44 @@ export const parseBugReportResponse = (raw: string) => {
   } catch {
     return null
   }
+}
+
+export const buildSelectedBugReportImages = (files: File[]): SelectedBugReportImage[] =>
+  files.map((file) => ({
+    file,
+    preview: URL.createObjectURL(file),
+    caption: '',
+  }))
+
+export const releaseBugReportImagePreviews = (images: Pick<SelectedBugReportImage, 'preview'>[]) => {
+  images.forEach((image) => URL.revokeObjectURL(image.preview))
+}
+
+export const createBugReportFormData = ({
+  type,
+  title,
+  description,
+  images,
+}: {
+  type: 'bug' | 'feature'
+  title: string
+  description: string
+  images: SelectedBugReportImage[]
+}) => {
+  const submission = buildBugReportSubmission({
+    type,
+    title,
+    description,
+    images,
+  })
+  const formData = new FormData()
+  formData.append('type', submission.type)
+  formData.append('title', submission.title)
+  formData.append('description', submission.description)
+  submission.imageEntries.forEach((entry) => {
+    formData.append(entry.imageField, entry.file)
+    formData.append(entry.captionField, entry.caption)
+  })
+  formData.append('imageCount', submission.imageCount)
+  return formData
 }
