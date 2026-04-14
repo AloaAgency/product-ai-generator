@@ -20,10 +20,14 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import {
+  getFixImageHref,
   getFullImageUrl,
   getDisplayImageUrl,
   getDownloadImageUrl,
   getKeyboardAction,
+  getLightboxDisplayName,
+  getLightboxThumbnailUrl,
+  getLightboxWarmupIndexes,
   getNextApprovalStatus,
   getPreviewImageUrl,
   sanitizeRouteSegment,
@@ -230,73 +234,54 @@ export function ImageLightbox({
     if (currentIndex < images.length - 1) onNavigate(images.length - 1)
   }, [currentIndex, images.length, onNavigate])
 
-  const handleApprove = useCallback(async () => {
+  const setErrorNotice = useCallback((error: unknown, fallback: string) => {
+    setActionNotice({
+      type: 'error',
+      message: getSafeErrorMessage(error instanceof Error ? error.message : null, fallback),
+    })
+  }, [])
+
+  const runUpdatingAction = useCallback(async (action: () => Promise<void>) => {
     if (!currentImage || isUpdating) return
     setIsUpdating(true)
     try {
-      const newStatus = getNextApprovalStatus(currentImage.approval_status, 'approved')
-      await onApprovalChange(currentImage.id, newStatus)
+      await action()
       setActionNotice(null)
     } catch (error) {
-      setActionNotice({
-        type: 'error',
-        message: getSafeErrorMessage(error instanceof Error ? error.message : null, 'Failed to update approval. Please try again.'),
-      })
+      setErrorNotice(error, 'Failed to update approval. Please try again.')
     } finally {
       setIsUpdating(false)
     }
-  }, [currentImage, isUpdating, onApprovalChange])
+  }, [currentImage, isUpdating, setErrorNotice])
+
+  const handleApprovalAction = useCallback(async (targetStatus: Exclude<ApprovalStatus, 'pending' | null>) => {
+    if (!currentImage) return
+
+    await runUpdatingAction(async () => {
+      const newStatus = getNextApprovalStatus(currentImage.approval_status, targetStatus)
+      await onApprovalChange(currentImage.id, newStatus)
+    })
+  }, [currentImage, onApprovalChange, runUpdatingAction])
+
+  const handleApprove = useCallback(async () => {
+    await handleApprovalAction('approved')
+  }, [handleApprovalAction])
 
   const handleReject = useCallback(async () => {
-    if (!currentImage || isUpdating) return
-    setIsUpdating(true)
-    try {
-      const newStatus = getNextApprovalStatus(currentImage.approval_status, 'rejected')
-      await onApprovalChange(currentImage.id, newStatus)
-      setActionNotice(null)
-    } catch (error) {
-      setActionNotice({
-        type: 'error',
-        message: getSafeErrorMessage(error instanceof Error ? error.message : null, 'Failed to update approval. Please try again.'),
-      })
-    } finally {
-      setIsUpdating(false)
-    }
-  }, [currentImage, isUpdating, onApprovalChange])
+    await handleApprovalAction('rejected')
+  }, [handleApprovalAction])
 
   const handleRequestChanges = useCallback(async () => {
-    if (!currentImage || isUpdating) return
-    setIsUpdating(true)
-    try {
-      const newStatus = getNextApprovalStatus(currentImage.approval_status, 'request_changes')
-      await onApprovalChange(currentImage.id, newStatus)
-      setActionNotice(null)
-    } catch (error) {
-      setActionNotice({
-        type: 'error',
-        message: getSafeErrorMessage(error instanceof Error ? error.message : null, 'Failed to update approval. Please try again.'),
-      })
-    } finally {
-      setIsUpdating(false)
-    }
-  }, [currentImage, isUpdating, onApprovalChange])
+    await handleApprovalAction('request_changes')
+  }, [handleApprovalAction])
 
   const handlePermanentDelete = useCallback(async () => {
     if (!currentImage || isUpdating || !onDelete) return
     if (!window.confirm('Permanently delete this image? This cannot be undone.')) return
-    setIsUpdating(true)
-    try {
+    await runUpdatingAction(async () => {
       await onDelete(currentImage.id)
-      setActionNotice(null)
-    } catch (error) {
-      setActionNotice({
-        type: 'error',
-        message: getSafeErrorMessage(error instanceof Error ? error.message : null, 'Failed to delete image. Please try again.'),
-      })
-    } finally {
-      setIsUpdating(false)
-    }
-  }, [currentImage, isUpdating, onDelete])
+    })
+  }, [currentImage, isUpdating, onDelete, runUpdatingAction])
 
   const handleSaveNotes = useCallback(async () => {
     if (!currentImage) return
@@ -308,12 +293,9 @@ export function ImageLightbox({
       await onApprovalChange(currentImage.id, status, trimmedNotes)
       setActionNotice(trimmedNotes ? { type: 'success', message: 'Notes saved.' } : null)
     } catch (error) {
-      setActionNotice({
-        type: 'error',
-        message: getSafeErrorMessage(error instanceof Error ? error.message : null, 'Failed to save notes. Please try again.'),
-      })
+      setErrorNotice(error, 'Failed to save notes. Please try again.')
     }
-  }, [currentImage, notesValue, onApprovalChange])
+  }, [currentImage, notesValue, onApprovalChange, setErrorNotice])
 
   const handleDownload = useCallback(async () => {
     if (!currentImage) return
@@ -357,12 +339,9 @@ export function ImageLightbox({
       setActionNotice({ type: 'success', message: 'Prompt copied.' })
       setTimeout(() => setCopied(false), 2000)
     } catch (error) {
-      setActionNotice({
-        type: 'error',
-        message: getSafeErrorMessage(error instanceof Error ? error.message : null, 'Copy failed. Please copy the prompt manually.'),
-      })
+      setErrorNotice(error, 'Copy failed. Please copy the prompt manually.')
     }
-  }, [currentImage?.prompt])
+  }, [currentImage?.prompt, setErrorNotice])
 
   const isRejected = currentImage?.approval_status === 'rejected'
   const isApproved = currentImage?.approval_status === 'approved'
@@ -472,8 +451,7 @@ export function ImageLightbox({
   ])
 
   useEffect(() => {
-    const indexesToWarm = [currentIndex, currentIndex - 1, currentIndex + 1, currentIndex - 2, currentIndex + 2]
-    for (const index of indexesToWarm) {
+    for (const index of getLightboxWarmupIndexes(currentIndex)) {
       const image = images[index]
       if (!image) continue
       void preloadImage(getDisplayImageUrl(image))
@@ -486,7 +464,7 @@ export function ImageLightbox({
       images.map((img, index) => ({
         id: img.id,
         index,
-        thumbUrl: img.thumb_signed_url || img.thumb_public_url || img.signed_url || img.public_url || null,
+        thumbUrl: getLightboxThumbnailUrl(img),
         approvalStatus: img.approval_status,
         isActive: index === currentIndex,
       })),
@@ -496,12 +474,16 @@ export function ImageLightbox({
   if (!currentImage) return null
 
   const imageUrl = resolvedImageUrl ?? getDisplayImageUrl(currentImage)
-  const safeFixProjectId = sanitizeRouteSegment(projectId)
-  const safeFixProductId = sanitizeRouteSegment(currentImage.productId)
-  const safeFixImageId = sanitizeRouteSegment(currentImage.id)
-  const fixImageHref = safeFixProjectId && safeFixProductId && safeFixImageId
-    ? `/projects/${safeFixProjectId}/products/${safeFixProductId}/fix-image?sourceImageId=${safeFixImageId}`
-    : null
+  const displayName = getLightboxDisplayName({
+    fileName: currentImage.file_name,
+    variationNumber: currentImage.variation_number,
+    currentIndex,
+  })
+  const fixImageHref = getFixImageHref({
+    projectId,
+    productId: currentImage.productId,
+    imageId: currentImage.id,
+  })
 
   return (
     <div
@@ -521,7 +503,7 @@ export function ImageLightbox({
         <div className="flex items-center justify-between rounded-t-xl bg-zinc-900/80 px-3 py-2 sm:px-4 sm:py-3">
           <div className="flex min-w-0 items-center gap-2 sm:gap-4">
             <span id={dialogTitleId} className="whitespace-nowrap text-sm font-medium text-zinc-100 sm:text-base">
-              {currentImage.file_name || `Variation ${currentImage.variation_number ?? currentIndex + 1}`}
+              {displayName}
             </span>
             {promptName && (
               <span className="hidden max-w-[120px] truncate text-sm text-zinc-400 sm:inline sm:max-w-[300px]">
@@ -604,7 +586,7 @@ export function ImageLightbox({
           {imageUrl ? (
             <img
               src={imageUrl}
-              alt={currentImage.file_name || `Variation ${currentImage.variation_number}`}
+              alt={displayName}
               className="max-w-full max-h-full object-contain"
             />
           ) : (

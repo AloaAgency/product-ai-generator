@@ -2,10 +2,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { LightboxImage } from '../ImageLightbox'
 import {
+  getFixImageHref,
   getDisplayImageUrl,
   getDownloadImageUrl,
   getFullImageUrl,
   getKeyboardAction,
+  getLightboxDisplayName,
+  getLightboxThumbnailUrl,
+  getLightboxWarmupIndexes,
   getNextApprovalStatus,
   getPreviewImageUrl,
   sanitizeRouteSegment,
@@ -48,6 +52,10 @@ test('image URL helpers reject unsafe protocols and preserve safe absolute or re
   assert.equal(
     getDisplayImageUrl(buildImage({ preview_public_url: '/api/images/123' })),
     '/api/images/123'
+  )
+  assert.equal(
+    getLightboxThumbnailUrl(buildImage({ thumb_public_url: 'https://example.com/thumb.png' })),
+    'https://example.com/thumb.png'
   )
 })
 
@@ -102,4 +110,24 @@ test('approval toggles clear an already-selected status', () => {
 test('sanitizeRouteSegment encodes reserved characters and rejects blank values', () => {
   assert.equal(sanitizeRouteSegment('product/../1'), 'product%2F..%2F1')
   assert.equal(sanitizeRouteSegment('  '), null)
+})
+
+test('lightbox view helpers derive labels, warmup indexes, and fix-image hrefs safely', () => {
+  assert.equal(
+    getLightboxDisplayName({ fileName: 'named.png', variationNumber: 3, currentIndex: 0 }),
+    'named.png'
+  )
+  assert.equal(
+    getLightboxDisplayName({ fileName: null, variationNumber: 3, currentIndex: 0 }),
+    'Variation 3'
+  )
+  assert.deepEqual(getLightboxWarmupIndexes(5), [5, 4, 6, 3, 7])
+  assert.equal(
+    getFixImageHref({ projectId: 'proj', productId: 'product', imageId: 'image' }),
+    '/projects/proj/products/product/fix-image?sourceImageId=image'
+  )
+  assert.equal(
+    getFixImageHref({ projectId: ' ', productId: 'product', imageId: 'image' }),
+    null
+  )
 })
