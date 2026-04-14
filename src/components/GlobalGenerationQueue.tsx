@@ -5,41 +5,26 @@ import { useAppStore } from '@/lib/store'
 import { AlertTriangle, ChevronDown, ChevronUp, Inbox, Loader2 } from 'lucide-react'
 import {
   deriveGenerationQueueState,
+  getGenerationJobUnitLabel,
+  getGenerationQueueOutputLabel,
+  getGenerationQueueSummary,
   getFailureTimestamp,
   getGenerationJobProgress,
   POLL_MS,
+  shouldShowIndeterminateJobProgress,
 } from './globalGenerationQueue.helpers'
 import { getSafeQueueErrorMessage } from './errorDisplay.helpers'
 
-export default function GlobalGenerationQueue({
+function useGenerationQueuePolling({
   productId,
+  fetchGenerationJobs,
+  hasActiveJobs,
 }: {
   productId: string
+  fetchGenerationJobs: (productId: string) => Promise<void>
+  hasActiveJobs: boolean
 }) {
-  const detailsId = useId()
-  const generationJobs = useAppStore((state) => state.generationJobs)
-  const loadingJobs = useAppStore((state) => state.loadingJobs)
-  const fetchGenerationJobs = useAppStore((state) => state.fetchGenerationJobs)
-  const clearGenerationQueue = useAppStore((state) => state.clearGenerationQueue)
-  const clearGenerationFailures = useAppStore((state) => state.clearGenerationFailures)
-  const devParallelGeneration = useAppStore((state) => state.devParallelGeneration)
-  const setDevParallelGeneration = useAppStore((state) => state.setDevParallelGeneration)
-  const [expanded, setExpanded] = useState(false)
-  const [clearing, setClearing] = useState(false)
-  const [clearingFailures, setClearingFailures] = useState(false)
   const isPollingRef = useRef(false)
-
-  const {
-    activeJobs,
-    pendingCount,
-    runningCount,
-    failedCount,
-    recentFailedJobs,
-    totals,
-    overallProgress,
-    hasActiveJobs,
-  } = useMemo(() => deriveGenerationQueueState(generationJobs), [generationJobs])
-  const showIndeterminateOverallBar = hasActiveJobs && totals.totalCompleted === 0
 
   useEffect(() => {
     let cancelled = false
@@ -76,7 +61,43 @@ export default function GlobalGenerationQueue({
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.clearInterval(interval)
     }
-  }, [productId, fetchGenerationJobs, hasActiveJobs])
+  }, [fetchGenerationJobs, hasActiveJobs, productId])
+}
+
+export default function GlobalGenerationQueue({
+  productId,
+}: {
+  productId: string
+}) {
+  const detailsId = useId()
+  const generationJobs = useAppStore((state) => state.generationJobs)
+  const loadingJobs = useAppStore((state) => state.loadingJobs)
+  const fetchGenerationJobs = useAppStore((state) => state.fetchGenerationJobs)
+  const clearGenerationQueue = useAppStore((state) => state.clearGenerationQueue)
+  const clearGenerationFailures = useAppStore((state) => state.clearGenerationFailures)
+  const devParallelGeneration = useAppStore((state) => state.devParallelGeneration)
+  const setDevParallelGeneration = useAppStore((state) => state.setDevParallelGeneration)
+  const [expanded, setExpanded] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const [clearingFailures, setClearingFailures] = useState(false)
+
+  const {
+    activeJobs,
+    pendingCount,
+    runningCount,
+    failedCount,
+    recentFailedJobs,
+    totals,
+    overallProgress,
+    hasActiveJobs,
+  } = useMemo(() => deriveGenerationQueueState(generationJobs), [generationJobs])
+  const showIndeterminateOverallBar = hasActiveJobs && totals.totalCompleted === 0
+
+  useGenerationQueuePolling({
+    productId,
+    fetchGenerationJobs,
+    hasActiveJobs,
+  })
 
   useEffect(() => {
     if (!hasActiveJobs) {
@@ -123,6 +144,20 @@ export default function GlobalGenerationQueue({
     return null
   }
 
+  const queueSummary = getGenerationQueueSummary({
+    loadingJobs,
+    generationJobCount: generationJobs.length,
+    hasActiveJobs,
+    pendingCount,
+    runningCount,
+    failedCount,
+  })
+  const outputLabel = getGenerationQueueOutputLabel({
+    hasActiveJobs,
+    failedCount,
+    totals,
+  })
+
   return (
     <section
       className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/70 backdrop-blur"
@@ -145,15 +180,7 @@ export default function GlobalGenerationQueue({
           </div>
           <div className="min-w-0">
             <p className="text-sm font-medium text-zinc-100">Generation queue</p>
-            <p className="break-words text-xs text-zinc-500" aria-live="polite">
-              {loadingJobs && generationJobs.length === 0
-                ? 'Checking queue...'
-                : hasActiveJobs
-                  ? `${pendingCount} pending · ${runningCount} running${failedCount ? ` · ${failedCount} failed` : ''}`
-                  : failedCount
-                    ? `No active generations · ${failedCount} failed recently`
-                    : 'No active generations'}
-            </p>
+            <p className="break-words text-xs text-zinc-500" aria-live="polite">{queueSummary}</p>
           </div>
         </button>
         <div className="flex w-full flex-wrap items-center gap-2 text-xs text-zinc-400 sm:w-auto sm:justify-end sm:gap-3">
@@ -186,13 +213,7 @@ export default function GlobalGenerationQueue({
               {clearingFailures ? 'Clearing failures…' : 'Clear failures'}
             </button>
           )}
-          <span className="min-h-11 min-w-0 content-center break-words text-left sm:text-right" aria-live="polite">
-            {hasActiveJobs
-              ? `${totals.totalCompleted}/${totals.totalVariations} outputs`
-              : failedCount
-                ? `${failedCount} failed`
-                : '0 outputs'}
-          </span>
+          <span className="min-h-11 min-w-0 content-center break-words text-left sm:text-right" aria-live="polite">{outputLabel}</span>
           {expanded ? (
             <ChevronUp className="h-4 w-4" />
           ) : (
@@ -222,11 +243,8 @@ export default function GlobalGenerationQueue({
             {hasActiveJobs ? (
               activeJobs.map((job) => {
                 const jobProgress = getGenerationJobProgress(job)
-                const showIndeterminateJobBar = job.status === 'pending' || (job.status === 'running' && (job.completed_count ?? 0) === 0)
-
-                const unitLabel = job.job_type === 'video'
-                  ? (job.variation_count === 1 ? 'video' : 'videos')
-                  : (job.variation_count === 1 ? 'image' : 'images')
+                const showIndeterminateJobBar = shouldShowIndeterminateJobProgress(job)
+                const unitLabel = getGenerationJobUnitLabel(job)
 
                 return (
                   <div

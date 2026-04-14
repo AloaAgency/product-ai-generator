@@ -14,8 +14,9 @@ import {
 } from 'lucide-react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import {
-  buildBugReportSubmission,
+  buildSelectedBugReportImages,
   clampBugReportText,
+  createBugReportFormData,
   MAX_BUG_REPORT_IMAGES,
   MAX_BUG_REPORT_CAPTION_LENGTH,
   MAX_BUG_REPORT_DESCRIPTION_LENGTH,
@@ -23,6 +24,8 @@ import {
   normalizeBugReportMultiline,
   normalizeBugReportSingleLine,
   parseBugReportResponse,
+  releaseBugReportImagePreviews,
+  stripBugReportControlChars,
   type SelectedBugReportImage,
   validateBugReportFiles,
 } from './bugReportWidget.helpers'
@@ -65,9 +68,7 @@ export function BugReportWidget() {
   }, [images])
 
   useEffect(() => {
-    return () => {
-      imagesRef.current.forEach((img) => URL.revokeObjectURL(img.preview))
-    }
+    return () => releaseBugReportImagePreviews(imagesRef.current)
   }, [])
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -78,32 +79,28 @@ export function BugReportWidget() {
       currentCount: images.length,
       files: Array.from(files),
     })
-    const newImages = acceptedFiles.map((file) => ({
-      file,
-      preview: URL.createObjectURL(file),
-      caption: '',
-    }))
+    const newImages = buildSelectedBugReportImages(acceptedFiles)
 
     if (errors.length > 0) setToast({ message: errors.join('. '), type: 'error' })
-    if (newImages.length > 0) setImages(prev => [...prev, ...newImages])
+    if (newImages.length > 0) setImages((prev) => [...prev, ...newImages])
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   const removeImage = (index: number) => {
-    setImages(prev => {
+    setImages((prev) => {
       const updated = [...prev]
-      URL.revokeObjectURL(updated[index].preview)
+      releaseBugReportImagePreviews([updated[index]])
       updated.splice(index, 1)
       return updated
     })
   }
 
   const updateImageCaption = (index: number, caption: string) => {
-    setImages(prev => {
+    setImages((prev) => {
       const updated = [...prev]
       updated[index] = {
         ...updated[index],
-        caption: clampBugReportText(caption.replace(/[\u0000-\u001F\u007F]/g, ''), MAX_BUG_REPORT_CAPTION_LENGTH),
+        caption: clampBugReportText(stripBugReportControlChars(caption), MAX_BUG_REPORT_CAPTION_LENGTH),
       }
       return updated
     })
@@ -120,21 +117,12 @@ export function BugReportWidget() {
     try {
       const normalizedTitle = normalizeBugReportSingleLine(title, MAX_BUG_REPORT_TITLE_LENGTH)
       const normalizedDescription = normalizeBugReportMultiline(description, MAX_BUG_REPORT_DESCRIPTION_LENGTH)
-      const submission = buildBugReportSubmission({
+      const formData = createBugReportFormData({
         type,
         title: normalizedTitle,
         description: normalizedDescription,
         images,
       })
-      const formData = new FormData()
-      formData.append('type', submission.type)
-      formData.append('title', submission.title)
-      formData.append('description', submission.description)
-      submission.imageEntries.forEach((entry) => {
-        formData.append(entry.imageField, entry.file)
-        formData.append(entry.captionField, entry.caption)
-      })
-      formData.append('imageCount', submission.imageCount)
 
       const response = await fetch('/api/bug-report', {
         method: 'POST',
@@ -149,7 +137,7 @@ export function BugReportWidget() {
         setTitle('')
         setDescription('')
         setType('bug')
-        images.forEach(img => URL.revokeObjectURL(img.preview))
+        releaseBugReportImagePreviews(images)
         setImages([])
         setIsOpen(false)
       } else {
@@ -280,7 +268,7 @@ export function BugReportWidget() {
                   id="bug-title"
                   type="text"
                   value={title}
-                  onChange={(e) => setTitle(clampBugReportText(e.target.value.replace(/[\u0000-\u001F\u007F]/g, ''), MAX_BUG_REPORT_TITLE_LENGTH))}
+                  onChange={(e) => setTitle(clampBugReportText(stripBugReportControlChars(e.target.value), MAX_BUG_REPORT_TITLE_LENGTH))}
                   placeholder={type === 'bug' ? 'Brief description of the issue' : 'Brief description of the feature'}
                   className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500"
                   maxLength={MAX_BUG_REPORT_TITLE_LENGTH}
@@ -294,7 +282,7 @@ export function BugReportWidget() {
                 <textarea
                   id="bug-desc"
                   value={description}
-                  onChange={(e) => setDescription(clampBugReportText(e.target.value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ''), MAX_BUG_REPORT_DESCRIPTION_LENGTH))}
+                  onChange={(e) => setDescription(clampBugReportText(stripBugReportControlChars(e.target.value), MAX_BUG_REPORT_DESCRIPTION_LENGTH))}
                   placeholder={type === 'bug'
                     ? 'What happened? What did you expect? Steps to reproduce?'
                     : 'What feature would you like? Why would it be helpful?'

@@ -43,6 +43,15 @@ export const getDisplayImageUrl = (image: LightboxImage) =>
   getPreviewImageUrl(image) ||
   getFullImageUrl(image)
 
+export const getLightboxThumbnailUrl = (image: LightboxImage) =>
+  sanitizeUrlCandidate(
+    image.thumb_signed_url ||
+    image.thumb_public_url ||
+    image.signed_url ||
+    image.public_url ||
+    null
+  )
+
 export const getDownloadImageUrl = (
   image: LightboxImage,
   signedUrls?: {
@@ -68,6 +77,41 @@ export const getNextApprovalStatus = (
   currentStatus: ApprovalStatus | undefined,
   targetStatus: Exclude<ApprovalStatus, 'pending' | null>
 ): ApprovalStatus => (currentStatus === targetStatus ? null : targetStatus)
+
+export const getLightboxDisplayName = ({
+  fileName,
+  variationNumber,
+  currentIndex,
+}: {
+  fileName?: string | null
+  variationNumber?: number | null
+  currentIndex: number
+}) => fileName || `Variation ${variationNumber ?? currentIndex + 1}`
+
+export const getLightboxWarmupIndexes = (currentIndex: number) => [
+  currentIndex,
+  currentIndex - 1,
+  currentIndex + 1,
+  currentIndex - 2,
+  currentIndex + 2,
+]
+
+export const getFixImageHref = ({
+  projectId,
+  productId,
+  imageId,
+}: {
+  projectId?: string | null
+  productId?: string | null
+  imageId?: string | null
+}) => {
+  const safeFixProjectId = sanitizeRouteSegment(projectId)
+  const safeFixProductId = sanitizeRouteSegment(productId)
+  const safeFixImageId = sanitizeRouteSegment(imageId)
+  return safeFixProjectId && safeFixProductId && safeFixImageId
+    ? `/projects/${safeFixProjectId}/products/${safeFixProductId}/fix-image?sourceImageId=${safeFixImageId}`
+    : null
+}
 
 export type LightboxKeyboardAction =
   | 'close'
