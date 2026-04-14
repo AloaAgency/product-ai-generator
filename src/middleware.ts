@@ -62,28 +62,47 @@ function loginPage(showError: boolean, redirectPath: string) {
   )
 }
 
+// Cached expected auth token, computed once per isolate lifetime.
+// SITE_PASSWORD is configured at deploy time and never changes while the
+// process is running, so the derived HMAC token is constant.
+let _cachedExpectedToken: string | null = null
+
+async function getExpectedToken(password: string): Promise<string> {
+  if (_cachedExpectedToken === null) {
+    _cachedExpectedToken = await deriveAuthToken(password)
+  }
+  return _cachedExpectedToken
+}
+
+/** Returns true when the request carries a valid site-auth cookie. */
+async function isAuthenticated(request: NextRequest): Promise<boolean> {
+  const password = process.env.SITE_PASSWORD
+  if (!password) return false
+  const auth = request.cookies.get(AUTH_COOKIE_NAME)
+  // Cookie value is an HMAC derived from SITE_PASSWORD — a predictable static
+  // string like "authenticated" would allow anyone who reads the source to
+  // forge a valid cookie.
+  return auth?.value === await getExpectedToken(password)
+}
+
+/**
+ * Paths that must bypass site-password auth entirely.
+ *   /api/login         — unauthenticated users must be able to submit credentials
+ *   /api/worker/…      — uses its own CRON_SECRET; site-password doesn't apply
+ */
+function isPublicPath(pathname: string): boolean {
+  return pathname === '/api/login' || pathname.startsWith('/api/worker/')
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // Login endpoint must be public so unauthenticated users can submit credentials.
-  if (pathname === '/api/login') {
+  if (isPublicPath(pathname)) {
     return NextResponse.next()
   }
 
-  // Worker endpoint uses its own CRON_SECRET auth — site-password auth doesn't apply.
-  if (pathname === '/api/worker/generate') {
+  if (await isAuthenticated(request)) {
     return NextResponse.next()
-  }
-
-  // Check for auth cookie. The cookie value is an HMAC derived from
-  // SITE_PASSWORD — a predictable static string like "authenticated" would
-  // allow any visitor who reads the source to forge a valid cookie.
-  const password = process.env.SITE_PASSWORD
-  if (password) {
-    const auth = request.cookies.get(AUTH_COOKIE_NAME)
-    if (auth?.value === await deriveAuthToken(password)) {
-      return NextResponse.next()
-    }
   }
 
   if (pathname.startsWith('/api/')) {
