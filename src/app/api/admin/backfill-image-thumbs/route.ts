@@ -2,19 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { createThumbnail, buildThumbnailPath } from '@/lib/image-utils'
+import { isAdminAuthorized } from '@/lib/auth-constants'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
 export const dynamic = 'force-dynamic'
 
 const DEFAULT_LIMIT = 20
-
-function isAdminAuthorized(request: NextRequest): boolean {
-  const adminSecret = process.env.ADMIN_SECRET
-  if (!adminSecret) return false
-  const provided = request.headers.get('x-admin-secret')
-  return provided === adminSecret
-}
 
 export async function POST(request: NextRequest) {
   if (!isAdminAuthorized(request)) {

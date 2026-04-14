@@ -23,7 +23,12 @@ function secretsEqual(a: string, b: string): boolean {
   try {
     const bufA = Buffer.from(a, 'utf8')
     const bufB = Buffer.from(b, 'utf8')
-    if (bufA.length !== bufB.length) return false
+    if (bufA.length !== bufB.length) {
+      // Still run a comparison on equal-length buffers so execution time
+      // doesn't reveal whether the provided secret has the right length.
+      timingSafeEqual(bufA, bufA)
+      return false
+    }
     return timingSafeEqual(bufA, bufB)
   } catch {
     return false

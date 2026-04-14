@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processReferenceImageCompression } from '@/lib/reference-image-compression'
+import { isAdminAuthorized } from '@/lib/auth-constants'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -9,13 +10,6 @@ export const dynamic = 'force-dynamic'
 
 const SIZE_THRESHOLD = 5 * 1024 * 1024 // 5 MB
 const DEFAULT_LIMIT = 50
-
-function isAdminAuthorized(request: NextRequest): boolean {
-  const adminSecret = process.env.ADMIN_SECRET
-  if (!adminSecret) return false
-  const provided = request.headers.get('x-admin-secret')
-  return provided === adminSecret
-}
 
 export async function POST(request: NextRequest) {
   if (!isAdminAuthorized(request)) {

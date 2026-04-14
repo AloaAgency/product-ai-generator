@@ -1,5 +1,18 @@
+import type { NextRequest } from 'next/server'
+
 /** Cookie name used by the site-password auth layer. */
 export const AUTH_COOKIE_NAME = 'site-auth'
+
+/**
+ * Returns true when the request carries the correct ADMIN_SECRET header.
+ * Used by internal admin endpoints that are already behind site-password auth.
+ * Fails closed: if ADMIN_SECRET is not configured, all requests are denied.
+ */
+export function isAdminAuthorized(request: NextRequest): boolean {
+  const adminSecret = process.env.ADMIN_SECRET
+  if (!adminSecret) return false
+  return request.headers.get('x-admin-secret') === adminSecret
+}
 
 /**
  * Derive the expected cookie value from the configured SITE_PASSWORD.
