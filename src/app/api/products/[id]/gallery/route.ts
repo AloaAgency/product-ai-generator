@@ -167,11 +167,18 @@ export async function GET(
     const [signedImageResult, signedVideoResult] = await Promise.all([
       allImageBucketPaths.length > 0
         ? supabase.storage.from('generated-images').createSignedUrls(allImageBucketPaths, SIGNED_URL_TTL_SECONDS)
-        : Promise.resolve({ data: null }),
+        : Promise.resolve({ data: null, error: null }),
       allVideoBucketPaths.length > 0
         ? supabase.storage.from('generated-videos').createSignedUrls(allVideoBucketPaths, SIGNED_URL_TTL_SECONDS)
-        : Promise.resolve({ data: null }),
+        : Promise.resolve({ data: null, error: null }),
     ])
+
+    if (signedImageResult.error) {
+      console.error('[Gallery] Failed to sign image URLs:', signedImageResult.error.message)
+    }
+    if (signedVideoResult.error) {
+      console.error('[Gallery] Failed to sign video URLs:', signedVideoResult.error.message)
+    }
 
     const signedImageBucket = new Map<string, string>(
       (signedImageResult.data || [])
