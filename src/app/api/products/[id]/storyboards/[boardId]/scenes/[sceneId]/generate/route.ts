@@ -184,10 +184,13 @@ export async function POST(
         geminiApiKey
       )
       result.start_frame_image_id = imageId
-      await supabase
+      const { error: startFrameUpdateError } = await supabase
         .from(T.storyboard_scenes)
         .update({ start_frame_image_id: imageId, updated_at: new Date().toISOString() })
         .eq('id', sceneId)
+      if (startFrameUpdateError) {
+        console.error('[Scene Generate] Failed to link start frame to scene:', startFrameUpdateError)
+      }
     }
 
     // Generate end frame
@@ -234,10 +237,13 @@ export async function POST(
         geminiApiKey
       )
       result.end_frame_image_id = imageId
-      await supabase
+      const { error: endFrameUpdateError } = await supabase
         .from(T.storyboard_scenes)
         .update({ end_frame_image_id: imageId, updated_at: new Date().toISOString() })
         .eq('id', sceneId)
+      if (endFrameUpdateError) {
+        console.error('[Scene Generate] Failed to link end frame to scene:', endFrameUpdateError)
+      }
     }
 
     // Return updated scene
