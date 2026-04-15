@@ -72,7 +72,12 @@ export async function DELETE(
     ].filter(Boolean) as string[]
 
     if (pathsToDelete.length > 0) {
-      await supabase.storage.from('generated-images').remove(pathsToDelete)
+      const { error: storageError } = await supabase.storage.from('generated-images').remove(pathsToDelete)
+      if (storageError) {
+        // Log but continue — the DB record must still be deleted to prevent stale data.
+        // Orphaned storage files can be cleaned up via the backfill admin route.
+        console.error('[ImageDelete] Storage deletion failed, orphaned files may remain:', storageError)
+      }
     }
 
     // Delete DB record

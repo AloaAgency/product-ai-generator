@@ -62,10 +62,13 @@ export async function POST(
 
     // If first template, sync settings to product
     if (isFirst && settings) {
-      await supabase
+      const { error: syncError } = await supabase
         .from(T.products)
         .update({ global_style_settings: settings })
         .eq('id', product_id)
+      if (syncError) {
+        console.error('[SettingsTemplates POST] Failed to sync settings to product:', syncError)
+      }
     }
 
     return NextResponse.json(data, { status: 201 })
