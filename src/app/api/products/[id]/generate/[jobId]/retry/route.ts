@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { processGenerationJob } from '@/lib/generation-worker'
+import { logError } from '@/lib/error-logger'
 import { T } from '@/lib/db-tables'
 import { kickWorkerForJob, shouldRunVideoGenerationInline } from '@/lib/video-job-request'
 
@@ -51,7 +52,16 @@ export async function POST(
     }
 
     if (shouldRunVideoGenerationInline()) {
-      void processGenerationJob(jobId)
+      void processGenerationJob(jobId).catch(async (err) => {
+        const message = err instanceof Error ? err.message : 'Inline generation job failed'
+        console.error('[RetryGeneration] Inline job failed:', err)
+        await logError({
+          productId,
+          errorMessage: message,
+          errorSource: 'api/products/generate/retry:inline',
+          errorContext: { jobId },
+        })
+      })
     } else {
       kickWorkerForJob(jobId, request.url, '[RetryGeneration]')
     }

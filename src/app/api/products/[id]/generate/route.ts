@@ -291,7 +291,16 @@ export async function POST(
       const finalBatch = Number.isFinite(overrideBatch) && overrideBatch > 0 ? overrideBatch : batchSize
       const finalParallel = Number.isFinite(overrideParallel) && overrideParallel > 0 ? overrideParallel : parallelism
       const finalBudget = Number.isFinite(overrideBudget) && overrideBudget > 0 ? overrideBudget : timeBudgetMs
-      void processGenerationJob(job.id, { batchSize: finalBatch, parallelism: finalParallel, timeBudgetMs: finalBudget })
+      void processGenerationJob(job.id, { batchSize: finalBatch, parallelism: finalParallel, timeBudgetMs: finalBudget }).catch(async (err) => {
+        const message = err instanceof Error ? err.message : 'Inline generation job failed'
+        console.error('[Generate] Inline job failed:', err)
+        await logError({
+          productId,
+          errorMessage: message,
+          errorSource: 'api/products/generate:inline',
+          errorContext: { jobId: job.id },
+        })
+      })
     } else {
       kickWorkerForJob(job.id, request.url, '[Generate]', {
         batch: process.env.GENERATION_BATCH_SIZE ?? '',
