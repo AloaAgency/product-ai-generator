@@ -213,11 +213,25 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
 
   // Build the Sharp pipeline step-by-step so each transformation is explicit.
   // Always rotate first to honour EXIF orientation before any resize operation.
-  const base = sharp(buffer).rotate()
-  const resized = needsResize
-    ? base.resize({ width: REF_MAX_DIMENSION, height: REF_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
-    : base
-  const compressed = await resized.webp({ quality: 90 }).toBuffer()
+  // Sharp instances are consumed after toBuffer(), so rebuild for each quality
+  // attempt — extra decodes only happen in the edge case where quality 90
+  // still exceeds the file-size limit (dense 4096 × 4096 content).
+  const buildPipeline = (quality: number) => {
+    const base = sharp(buffer).rotate()
+    const sized = needsResize
+      ? base.resize({ width: REF_MAX_DIMENSION, height: REF_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
+      : base
+    return sized.webp({ quality })
+  }
+
+  // Step down quality until the output fits within the size limit or we run
+  // out of steps.  This prevents oversized buffers from reaching upstream APIs
+  // (e.g. Gemini) that enforce a 5 MB payload cap on reference images.
+  const QUALITY_STEPS = [90, 75, 60] as const
+  let compressed = await buildPipeline(QUALITY_STEPS[0]).toBuffer()
+  for (let i = 1; i < QUALITY_STEPS.length && compressed.length > REF_MAX_FILE_SIZE; i++) {
+    compressed = await buildPipeline(QUALITY_STEPS[i]).toBuffer()
+  }
 
   return {
     buffer: compressed,
