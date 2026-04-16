@@ -4,11 +4,12 @@
 
 import sharp from 'sharp'
 import ffmpeg from 'fluent-ffmpeg'
+import { PassThrough } from 'stream'
 import { execSync } from 'child_process'
 import { tmpdir } from 'os'
 import { join, dirname, basename } from 'path'
 import { randomUUID } from 'crypto'
-import { writeFile, readFile, unlink, access } from 'fs/promises'
+import { writeFile, unlink, access } from 'fs/promises'
 
 // Resolve ffmpeg path: try ffmpeg-static first (checking the file exists),
 // then fall back to system ffmpeg
@@ -242,29 +243,39 @@ export const extractVideoThumbnail = async (
 
   await ensureFfmpegPath()
 
-  const id = randomUUID()
-  const tmpVideo = join(tmpdir(), `vid-${id}.mp4`)
-  const tmpFrame = join(tmpdir(), `frame-${id}.png`)
+  const tmpVideo = join(tmpdir(), `vid-${randomUUID()}.mp4`)
 
   try {
     await writeFile(tmpVideo, videoBuffer)
 
-    await new Promise<void>((resolve, reject) => {
+    // Pipe the extracted frame directly into a Buffer — avoids writing and
+    // re-reading a temporary PNG file, saving one full disk write+read cycle.
+    const frameBuffer = await new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = []
+      const output = new PassThrough()
+
+      // Build the ffmpeg instance first so the timeout callback can reference it.
       const ff = ffmpeg(tmpVideo)
         .seekInput(0.1)
         .frames(1)
-        .outputOptions('-update', '1')
-        .output(tmpFrame)
+        .outputFormat('image2pipe')
+        .outputOptions('-vcodec', 'png')
+
+      // Declare timer after ff so both can be const (no circular let needed).
       const timer = setTimeout(() => {
         ff.kill('SIGKILL')
         reject(new Error('extractVideoThumbnail: timed out after 30s'))
       }, 30_000)
-      ff.on('end', () => { clearTimeout(timer); resolve() })
+
+      // Attach error handler after timer is defined so the handler can clear it.
+      ff.on('error', (err: Error) => { clearTimeout(timer); reject(err) })
+      ff.pipe(output)
+      output
+        .on('data', (chunk: Buffer) => chunks.push(chunk))
+        .on('end', () => { clearTimeout(timer); resolve(Buffer.concat(chunks)) })
         .on('error', (err: Error) => { clearTimeout(timer); reject(err) })
-        .run()
     })
 
-    const frameBuffer = await readFile(tmpFrame)
     const thumb = await sharp(frameBuffer)
       .resize({ width, withoutEnlargement: true })
       .webp({ quality: 72 })
@@ -273,6 +284,5 @@ export const extractVideoThumbnail = async (
     return { buffer: thumb, mimeType: 'image/webp', extension: 'webp' }
   } finally {
     await unlink(tmpVideo).catch(() => {})
-    await unlink(tmpFrame).catch(() => {})
   }
 }
