@@ -13,9 +13,18 @@ import type {
   GlobalStyleSettings,
   ErrorLog,
 } from './types'
+import {
+  optionalUuid,
+  requireUuid,
+  sanitizeApprovalStatus,
+  sanitizeGalleryFilters,
+  sanitizePromptText,
+  sanitizePublicErrorMessage,
+  sanitizeUuidArray,
+  validateReferenceUploadFiles,
+} from './request-guards'
 
 const DEFAULT_ERROR_MESSAGE = 'Request failed'
-const MAX_ERROR_MESSAGE_LENGTH = 200
 const MAX_SUGGESTED_PROMPT_COUNT = 10
 const MAX_API_RETRIES = 2
 const MAX_UPLOAD_RETRIES = 1
@@ -101,7 +110,7 @@ const extractErrorMessage = (value: unknown): string | null => {
   if (typeof value !== 'string') return null
   const message = value.trim().replace(/\s+/g, ' ')
   if (!message) return null
-  return message.slice(0, MAX_ERROR_MESSAGE_LENGTH)
+  return message.slice(0, 200)
 }
 
 const isRetryableNetworkError = (error: unknown) =>
@@ -166,7 +175,7 @@ const safeParseResponse = async (res: Response) => {
 }
 
 const logStoreError = (scope: string, error: unknown) => {
-  console.error(`[Store:${scope}]`, error)
+  console.error(`[Store:${scope}] ${sanitizePublicErrorMessage(error)}`)
 }
 
 const getInFlightRequest = <T>(key: string, request: () => Promise<T>) => {
@@ -454,13 +463,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   fetchProject: async (id) => {
-    if (updateSliceScope('currentProject', id)) {
+    const projectId = requireUuid(id, 'project id')
+    if (updateSliceScope('currentProject', projectId)) {
       set({ currentProject: null, errorLogs: [] })
     }
-    const requestKey = buildRequestKey('currentProject', id)
+    const requestKey = buildRequestKey('currentProject', projectId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await getInFlightRequest(requestKey, () => api(`/api/projects/${buildApiPath(id)}`))
+      const data = await getInFlightRequest(requestKey, () => api(`/api/projects/${buildApiPath(projectId)}`))
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ currentProject: data })
@@ -485,7 +495,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     return project
   },
   updateProject: async (id, data) => {
-    const project = await api(`/api/projects/${buildApiPath(id)}`, {
+    const projectId = requireUuid(id, 'project id')
+    const project = await api(`/api/projects/${buildApiPath(projectId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -495,18 +506,19 @@ export const useAppStore = create<AppState>((set, get) => ({
           typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
       }),
     })
-    invalidateRequestKeys(buildRequestKey('projects'), buildRequestKey('currentProject', id))
+    invalidateRequestKeys(buildRequestKey('projects'), buildRequestKey('currentProject', projectId))
     set((s) => ({
-      currentProject: s.currentProject?.id === id ? project : s.currentProject,
-      projects: s.projects.map((p) => (p.id === id ? project : p)),
+      currentProject: s.currentProject?.id === projectId ? project : s.currentProject,
+      projects: s.projects.map((p) => (p.id === projectId ? project : p)),
     }))
   },
   deleteProject: async (id) => {
-    await api(`/api/projects/${buildApiPath(id)}`, { method: 'DELETE' })
-    invalidateRequestKeys(buildRequestKey('projects'), buildRequestKey('currentProject', id))
+    const projectId = requireUuid(id, 'project id')
+    await api(`/api/projects/${buildApiPath(projectId)}`, { method: 'DELETE' })
+    invalidateRequestKeys(buildRequestKey('projects'), buildRequestKey('currentProject', projectId))
     set((s) => ({
-      projects: s.projects.filter((p) => p.id !== id),
-      currentProject: s.currentProject?.id === id ? null : s.currentProject,
+      projects: s.projects.filter((p) => p.id !== projectId),
+      currentProject: s.currentProject?.id === projectId ? null : s.currentProject,
     }))
   },
 
@@ -515,16 +527,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentProduct: null,
   loadingProducts: false,
   fetchProducts: async (projectId) => {
-    const scopeToken = projectId?.trim() || '_'
+    const scopedProjectId = optionalUuid(projectId, 'project id')
+    const scopeToken = scopedProjectId ?? '_'
     if (updateSliceScope('products', scopeToken)) {
       set({ products: [] })
     }
-    const requestKey = buildRequestKey('products', projectId)
+    const requestKey = buildRequestKey('products', scopedProjectId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingProducts: true })
     try {
       const params = new URLSearchParams()
-      if (projectId) params.set('project_id', projectId.trim())
+      if (scopedProjectId) params.set('project_id', scopedProjectId)
       const qs = params.toString()
       const data = await getInFlightRequest(requestKey, () => api(`/api/products${qs ? `?${qs}` : ''}`))
       if (!isLatestRequest(requestKey, requestVersion)) return
@@ -542,13 +555,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   fetchProduct: async (id) => {
-    if (updateSliceScope('currentProduct', id)) {
+    const productId = requireUuid(id, 'product id')
+    if (updateSliceScope('currentProduct', productId)) {
       set({ currentProduct: null, ...getProductScopedState() })
     }
-    const requestKey = buildRequestKey('currentProduct', id)
+    const requestKey = buildRequestKey('currentProduct', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await getInFlightRequest(requestKey, () => api(`/api/products/${buildApiPath(id)}`))
+      const data = await getInFlightRequest(requestKey, () => api(`/api/products/${buildApiPath(productId)}`))
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ currentProduct: data })
@@ -560,6 +574,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   createProduct: async (data) => {
+    const projectId = requireUuid(data.project_id, 'project id')
     const product = await api('/api/products', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -567,16 +582,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...data,
         name: normalizeLabelInput(data.name),
         description: data.description ? trimTextInput(data.description) : undefined,
-        project_id: data.project_id.trim(),
+        project_id: projectId,
       }),
     })
-    invalidateRequestKeys(buildRequestKey('products', data.project_id))
+    invalidateRequestKeys(buildRequestKey('products', projectId))
     set((s) => ({ products: [product, ...s.products] }))
     return product
   },
   updateProduct: async (id, data) => {
-    const existingProduct = get().products.find((product) => product.id === id)
-    const product = await api(`/api/products/${buildApiPath(id)}`, {
+    const productId = requireUuid(id, 'product id')
+    const nextProjectId = optionalUuid(data.project_id, 'project id')
+    const existingProduct = get().products.find((product) => product.id === productId)
+    const product = await api(`/api/products/${buildApiPath(productId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -584,30 +601,31 @@ export const useAppStore = create<AppState>((set, get) => ({
         name: data.name ? normalizeLabelInput(data.name) : data.name,
         description:
           typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
-        project_id: data.project_id?.trim(),
+        project_id: nextProjectId,
       }),
     })
     invalidateRequestKeys(
-      buildRequestKey('currentProduct', id),
+      buildRequestKey('currentProduct', productId),
       buildRequestKey('products', existingProduct?.project_id),
-      buildRequestKey('products', data.project_id ?? existingProduct?.project_id)
+      buildRequestKey('products', nextProjectId ?? existingProduct?.project_id)
     )
     set((s) => ({
-      currentProduct: s.currentProduct?.id === id ? product : s.currentProduct,
-      products: s.products.map((p) => (p.id === id ? product : p)),
+      currentProduct: s.currentProduct?.id === productId ? product : s.currentProduct,
+      products: s.products.map((p) => (p.id === productId ? product : p)),
     }))
   },
   deleteProduct: async (id) => {
-    const existingProduct = get().products.find((product) => product.id === id)
-    await api(`/api/products/${buildApiPath(id)}`, { method: 'DELETE' })
+    const productId = requireUuid(id, 'product id')
+    const existingProduct = get().products.find((product) => product.id === productId)
+    await api(`/api/products/${buildApiPath(productId)}`, { method: 'DELETE' })
     invalidateRequestKeys(
-      buildRequestKey('currentProduct', id),
+      buildRequestKey('currentProduct', productId),
       buildRequestKey('products', existingProduct?.project_id)
     )
     set((s) => ({
-      products: s.products.filter((p) => p.id !== id),
-      currentProduct: s.currentProduct?.id === id ? null : s.currentProduct,
-      ...(s.currentProduct?.id === id ? getProductScopedState() : {}),
+      products: s.products.filter((p) => p.id !== productId),
+      currentProduct: s.currentProduct?.id === productId ? null : s.currentProduct,
+      ...(s.currentProduct?.id === productId ? getProductScopedState() : {}),
     }))
   },
 
@@ -615,15 +633,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   referenceSets: [],
   loadingRefSets: false,
   fetchReferenceSets: async (productId) => {
-    if (updateSliceScope('referenceSets', productId)) {
+    const scopedProductId = requireUuid(productId, 'product id')
+    if (updateSliceScope('referenceSets', scopedProductId)) {
       set({ referenceSets: [], referenceImages: {} })
     }
-    const requestKey = buildRequestKey('referenceSets', productId)
+    const requestKey = buildRequestKey('referenceSets', scopedProductId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingRefSets: true })
     try {
       const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(productId)}/reference-sets`)
+        api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets`)
       )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
@@ -640,7 +659,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   createReferenceSet: async (productId, data) => {
-    const refSet = await api(`/api/products/${buildApiPath(productId)}/reference-sets`, {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const refSet = await api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -649,12 +669,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         description: data.description ? trimTextInput(data.description) : undefined,
       }),
     })
-    invalidateRequestKeys(buildRequestKey('referenceSets', productId))
+    invalidateRequestKeys(buildRequestKey('referenceSets', scopedProductId))
     set((s) => ({ referenceSets: [...s.referenceSets, refSet] }))
     return refSet
   },
   updateReferenceSet: async (productId, setId, data) => {
-    const refSet = await api(`/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}`, {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const referenceSetId = requireUuid(setId, 'reference set id')
+    const refSet = await api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -664,24 +686,26 @@ export const useAppStore = create<AppState>((set, get) => ({
           typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
       }),
     })
-    invalidateRequestKeys(buildRequestKey('referenceSets', productId))
+    invalidateRequestKeys(buildRequestKey('referenceSets', scopedProductId))
     set((s) => ({
       referenceSets: s.referenceSets.map((r) =>
-        r.id === setId ? refSet : data.is_active ? { ...r, is_active: false } : r
+        r.id === referenceSetId ? refSet : data.is_active ? { ...r, is_active: false } : r
       ),
     }))
   },
   deleteReferenceSet: async (productId, setId) => {
-    await api(`/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}`, { method: 'DELETE' })
+    const scopedProductId = requireUuid(productId, 'product id')
+    const referenceSetId = requireUuid(setId, 'reference set id')
+    await api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}`, { method: 'DELETE' })
     invalidateRequestKeys(
-      buildRequestKey('referenceSets', productId),
-      buildRequestKey('referenceImages', productId, setId)
+      buildRequestKey('referenceSets', scopedProductId),
+      buildRequestKey('referenceImages', scopedProductId, referenceSetId)
     )
     set((s) => {
       const nextReferenceImages = { ...s.referenceImages }
-      delete nextReferenceImages[setId]
+      delete nextReferenceImages[referenceSetId]
       return {
-        referenceSets: s.referenceSets.filter((r) => r.id !== setId),
+        referenceSets: s.referenceSets.filter((r) => r.id !== referenceSetId),
         referenceImages: nextReferenceImages,
       }
     })
@@ -690,24 +714,29 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Reference Images
   referenceImages: {},
   fetchReferenceImages: async (productId, setId) => {
-    const requestKey = buildRequestKey('referenceImages', productId, setId)
+    const scopedProductId = requireUuid(productId, 'product id')
+    const referenceSetId = requireUuid(setId, 'reference set id')
+    const requestKey = buildRequestKey('referenceImages', scopedProductId, referenceSetId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await getInFlightRequest(requestKey, () =>
         api(
-          `/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}/images`
+          `/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}/images`
         )
       )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
-      set((s) => ({ referenceImages: { ...s.referenceImages, [setId]: data } }))
+      set((s) => ({ referenceImages: { ...s.referenceImages, [referenceSetId]: data } }))
     } catch (error) {
       logStoreError('ReferenceImages', error)
     }
   },
   uploadReferenceImages: async (productId, setId, files) => {
-    const referenceImagesRequestKey = buildRequestKey('referenceImages', productId, setId)
-    const uploadSpecs = files.map((file, index) => ({
+    const scopedProductId = requireUuid(productId, 'product id')
+    const referenceSetId = requireUuid(setId, 'reference set id')
+    const validatedFiles = validateReferenceUploadFiles(files)
+    const referenceImagesRequestKey = buildRequestKey('referenceImages', scopedProductId, referenceSetId)
+    const uploadSpecs = validatedFiles.map((file, index) => ({
       name: file.name,
       type: file.type,
       size: file.size,
@@ -715,7 +744,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
 
     const signed = await api(
-      `/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}/images/upload-urls`,
+      `/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}/images/upload-urls`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -736,7 +765,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       | { clientId: string; error: string }
     >
 
-    const fileMap = new Map(uploadSpecs.map((spec, idx) => [spec.clientId, files[idx]]))
+    const fileMap = new Map(uploadSpecs.map((spec, idx) => [spec.clientId, validatedFiles[idx]]))
     const uploadResultPromises = signedPayload.map(async (item) => {
       if (!('signedUrl' in item)) {
         return {
@@ -804,7 +833,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const successfulUploads = uploadResults.filter((u) => !u.error)
     let payload: Array<ReferenceImage & { error?: string; file?: string }> = []
     if (successfulUploads.length > 0) {
-      const data = await api(`/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}/images`, {
+      const data = await api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}/images`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uploads: successfulUploads }),
@@ -827,21 +856,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (uploaded.length === 0 && errors.length > 0) {
       const firstError =
         errors[0] && typeof errors[0] === 'object' && 'error' in errors[0]
-          ? (errors[0] as { error?: string }).error
+        ? (errors[0] as { error?: string }).error
           : null
       throw new Error(firstError || 'Upload failed')
     }
   },
   deleteReferenceImage: async (productId, setId, imgId) => {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const referenceSetId = requireUuid(setId, 'reference set id')
+    const imageId = requireUuid(imgId, 'reference image id')
     await api(
-      `/api/products/${buildApiPath(productId)}/reference-sets/${buildApiPath(setId)}/images/${buildApiPath(imgId)}`,
+      `/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}/images/${buildApiPath(imageId)}`,
       { method: 'DELETE' }
     )
-    invalidateRequestKeys(buildRequestKey('referenceImages', productId, setId))
+    invalidateRequestKeys(buildRequestKey('referenceImages', scopedProductId, referenceSetId))
     set((s) => ({
       referenceImages: {
         ...s.referenceImages,
-        [setId]: (s.referenceImages[setId] || []).filter((i) => i.id !== imgId),
+        [referenceSetId]: (s.referenceImages[referenceSetId] || []).filter((i) => i.id !== imageId),
       },
     }))
   },
@@ -849,14 +881,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Prompt Templates
   promptTemplates: [],
   fetchPromptTemplates: async (productId) => {
-    if (updateSliceScope('promptTemplates', productId)) {
+    const scopedProductId = requireUuid(productId, 'product id')
+    if (updateSliceScope('promptTemplates', scopedProductId)) {
       set({ promptTemplates: [] })
     }
-    const requestKey = buildRequestKey('promptTemplates', productId)
+    const requestKey = buildRequestKey('promptTemplates', scopedProductId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(productId)}/prompts`)
+        api(`/api/products/${buildApiPath(scopedProductId)}/prompts`)
       )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
@@ -869,39 +902,44 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   createPromptTemplate: async (productId, data) => {
-    const tmpl = await api(`/api/products/${buildApiPath(productId)}/prompts`, {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/prompts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...data,
         name: normalizeLabelInput(data.name),
-        prompt_text: trimTextInput(data.prompt_text),
+        prompt_text: sanitizePromptText(data.prompt_text, 'prompt_text'),
         tags: data.tags ? sanitizeStringArray(data.tags) : undefined,
       }),
     })
-    invalidateRequestKeys(buildRequestKey('promptTemplates', productId))
+    invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
     set((s) => ({ promptTemplates: [...s.promptTemplates, tmpl] }))
     return tmpl
   },
   updatePromptTemplate: async (productId, promptId, data) => {
-    const tmpl = await api(`/api/products/${buildApiPath(productId)}/prompts/${buildApiPath(promptId)}`, {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const promptTemplateId = requireUuid(promptId, 'prompt template id')
+    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/prompts/${buildApiPath(promptTemplateId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...data,
         name: data.name ? normalizeLabelInput(data.name) : data.name,
         prompt_text:
-          typeof data.prompt_text === 'string' ? trimTextInput(data.prompt_text) : data.prompt_text,
+          typeof data.prompt_text === 'string' ? sanitizePromptText(data.prompt_text, 'prompt_text') : data.prompt_text,
         tags: data.tags ? sanitizeStringArray(data.tags) : data.tags,
       }),
     })
-    invalidateRequestKeys(buildRequestKey('promptTemplates', productId))
-    set((s) => ({ promptTemplates: s.promptTemplates.map((p) => (p.id === promptId ? tmpl : p)) }))
+    invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
+    set((s) => ({ promptTemplates: s.promptTemplates.map((p) => (p.id === promptTemplateId ? tmpl : p)) }))
   },
   deletePromptTemplate: async (productId, promptId) => {
-    await api(`/api/products/${buildApiPath(productId)}/prompts/${buildApiPath(promptId)}`, { method: 'DELETE' })
-    invalidateRequestKeys(buildRequestKey('promptTemplates', productId))
-    set((s) => ({ promptTemplates: s.promptTemplates.filter((p) => p.id !== promptId) }))
+    const scopedProductId = requireUuid(productId, 'product id')
+    const promptTemplateId = requireUuid(promptId, 'prompt template id')
+    await api(`/api/products/${buildApiPath(scopedProductId)}/prompts/${buildApiPath(promptTemplateId)}`, { method: 'DELETE' })
+    invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
+    set((s) => ({ promptTemplates: s.promptTemplates.filter((p) => p.id !== promptTemplateId) }))
   },
 
   // Generation
@@ -909,13 +947,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentJob: null,
   loadingJobs: false,
   fetchGenerationJobs: async (productId) => {
-    const requestKey = buildRequestKey('generationJobs', productId)
+    const scopedProductId = requireUuid(productId, 'product id')
+    const requestKey = buildRequestKey('generationJobs', scopedProductId)
     const requestVersion = beginTrackedRequest(requestKey)
     const shouldShowLoading = get().generationJobs.length === 0
     if (shouldShowLoading) set({ loadingJobs: true })
     try {
       const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(productId)}/generate`)
+        api(`/api/products/${buildApiPath(scopedProductId)}/generate`)
       )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
@@ -932,29 +971,38 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   startGeneration: async (productId, data) => {
+    const scopedProductId = requireUuid(productId, 'product id')
     const devParallel = get().devParallelGeneration
     const body = {
       ...data,
+      prompt_text: sanitizePromptText(data.prompt_text, 'prompt_text'),
+      prompt_template_id: optionalUuid(data.prompt_template_id, 'prompt template id') ?? null,
+      reference_set_id: optionalUuid(data.reference_set_id, 'reference set id') ?? null,
+      texture_set_id: optionalUuid(data.texture_set_id, 'texture set id') ?? null,
+      source_image_id: optionalUuid(data.source_image_id, 'source image id') ?? null,
+      variation_count: clampInteger(data.variation_count ?? 15, 1, 100, 15),
       ...(process.env.NODE_ENV === 'development' && !devParallel
         ? { parallelism_override: 1, batch_override: 1 }
         : {}),
     }
-    const result = await api(`/api/products/${buildApiPath(productId)}/generate`, {
+    const result = await api(`/api/products/${buildApiPath(scopedProductId)}/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
     const job = result.job ?? result
-    invalidateRequestKeys(buildRequestKey('generationJobs', productId))
+    invalidateRequestKeys(buildRequestKey('generationJobs', scopedProductId))
     set((s) => ({ generationJobs: [job, ...s.generationJobs] }))
     return job
   },
   fetchJobStatus: async (productId, jobId) => {
-    const requestKey = buildRequestKey('currentJob', productId, jobId)
+    const scopedProductId = requireUuid(productId, 'product id')
+    const generationJobId = requireUuid(jobId, 'generation job id')
+    const requestKey = buildRequestKey('currentJob', scopedProductId, generationJobId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`)
+        api(`/api/products/${buildApiPath(scopedProductId)}/generate/${buildApiPath(generationJobId)}`)
       )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
@@ -967,13 +1015,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   retryGenerationJob: async (productId, jobId) => {
-    const data = await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}/retry`, {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const generationJobId = requireUuid(jobId, 'generation job id')
+    const data = await api(`/api/products/${buildApiPath(scopedProductId)}/generate/${buildApiPath(generationJobId)}/retry`, {
       method: 'POST',
     })
     const job = data.job ?? data
     invalidateRequestKeys(
-      buildRequestKey('generationJobs', productId),
-      buildRequestKey('currentJob', productId, jobId)
+      buildRequestKey('generationJobs', scopedProductId),
+      buildRequestKey('currentJob', scopedProductId, generationJobId)
     )
     set((s) => ({
       generationJobs: [job, ...s.generationJobs.filter((j) => j.id !== job.id)],
@@ -982,29 +1032,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     return job
   },
   clearGenerationQueue: async (productId) => {
-    await api(`/api/products/${buildApiPath(productId)}/generate`, { method: 'DELETE' })
-    invalidateRequestKeys(buildRequestKey('generationJobs', productId))
-    await get().fetchGenerationJobs(productId)
+    const scopedProductId = requireUuid(productId, 'product id')
+    await api(`/api/products/${buildApiPath(scopedProductId)}/generate`, { method: 'DELETE' })
+    invalidateRequestKeys(buildRequestKey('generationJobs', scopedProductId))
+    await get().fetchGenerationJobs(scopedProductId)
   },
   clearGenerationFailures: async (productId) => {
-    await api(`/api/products/${buildApiPath(productId)}/generate?scope=failed`, { method: 'DELETE' })
-    invalidateRequestKeys(buildRequestKey('generationJobs', productId))
-    await get().fetchGenerationJobs(productId)
+    const scopedProductId = requireUuid(productId, 'product id')
+    await api(`/api/products/${buildApiPath(scopedProductId)}/generate?scope=failed`, { method: 'DELETE' })
+    invalidateRequestKeys(buildRequestKey('generationJobs', scopedProductId))
+    await get().fetchGenerationJobs(scopedProductId)
   },
   deleteGenerationJob: async (productId, jobId) => {
-    await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`, { method: 'DELETE' })
+    const scopedProductId = requireUuid(productId, 'product id')
+    const generationJobId = requireUuid(jobId, 'generation job id')
+    await api(`/api/products/${buildApiPath(scopedProductId)}/generate/${buildApiPath(generationJobId)}`, { method: 'DELETE' })
     invalidateRequestKeys(
-      buildRequestKey('generationJobs', productId),
-      buildRequestKey('currentJob', productId, jobId)
+      buildRequestKey('generationJobs', scopedProductId),
+      buildRequestKey('currentJob', scopedProductId, generationJobId)
     )
     set((s) => ({
-      generationJobs: s.generationJobs.filter((j) => j.id !== jobId),
-      currentJob: s.currentJob?.id === jobId ? null : s.currentJob,
+      generationJobs: s.generationJobs.filter((j) => j.id !== generationJobId),
+      currentJob: s.currentJob?.id === generationJobId ? null : s.currentJob,
     }))
   },
   clearGenerationLog: async (productId) => {
-    await api(`/api/products/${buildApiPath(productId)}/generate?scope=log`, { method: 'DELETE' })
-    invalidateRequestKeys(buildRequestKey('generationJobs', productId))
+    const scopedProductId = requireUuid(productId, 'product id')
+    await api(`/api/products/${buildApiPath(scopedProductId)}/generate?scope=log`, { method: 'DELETE' })
+    invalidateRequestKeys(buildRequestKey('generationJobs', scopedProductId))
     set((s) => ({
       generationJobs: s.generationJobs.filter((j) => j.status === 'pending' || j.status === 'running'),
       currentJob:
@@ -1021,8 +1076,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadingGallery: false,
   loadingGalleryMore: false,
   fetchGallery: async (productId, filters) => {
-    const requestKey = getGalleryRequestKey(productId, filters)
-    const qs = getGalleryQueryString(filters)
+    const scopedProductId = requireUuid(productId, 'product id')
+    const sanitizedFilters = sanitizeGalleryFilters(filters)
+    const requestKey = getGalleryRequestKey(scopedProductId, sanitizedFilters)
+    const qs = getGalleryQueryString(sanitizedFilters)
     if (updateSliceScope('gallery', requestKey)) {
       set({ loadingGalleryMore: false })
     }
@@ -1031,7 +1088,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (shouldShowLoading) set({ loadingGallery: true })
     try {
       const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(productId)}/gallery?${qs}`)
+        api(`/api/products/${buildApiPath(scopedProductId)}/gallery?${qs}`)
       )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
@@ -1052,17 +1109,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   fetchGalleryMore: async (productId, filters) => {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const sanitizedFilters = sanitizeGalleryFilters(filters)
     const { galleryImages, galleryHasMore, loadingGalleryMore } = get()
     if (!galleryHasMore || loadingGalleryMore) return
 
-    const requestKey = getGalleryRequestKey(productId, filters)
+    const requestKey = getGalleryRequestKey(scopedProductId, sanitizedFilters)
     const requestVersion = requestVersions.get(requestKey) ?? 0
     if (!isCurrentSliceScope('gallery', requestKey)) return
 
     set({ loadingGalleryMore: true })
     try {
-      const qs = getGalleryQueryString(filters, galleryImages.length)
-      const data = await api(`/api/products/${buildApiPath(productId)}/gallery?${qs}`)
+      const qs = getGalleryQueryString(sanitizedFilters, galleryImages.length)
+      const data = await api(`/api/products/${buildApiPath(scopedProductId)}/gallery?${qs}`)
       if (!isCurrentSliceScope('gallery', requestKey) || !isLatestRequest(requestKey, requestVersion)) {
         return
       }
@@ -1085,28 +1144,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   updateImageApproval: async (imageId, approval_status, notes) => {
-    const data = await api(`/api/images/${buildApiPath(imageId)}`, {
+    const scopedImageId = requireUuid(imageId, 'image id')
+    const data = await api(`/api/images/${buildApiPath(scopedImageId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        approval_status: approval_status?.trim() || null,
+        approval_status: sanitizeApprovalStatus(approval_status, { allowNull: true }) ?? null,
         notes: typeof notes === 'string' ? trimTextInput(notes) : notes,
       }),
     })
     const updated = data.image ?? data
     set((s) => ({
-      galleryImages: mergeUpdatedImage(s.galleryImages, imageId, updated),
+      galleryImages: mergeUpdatedImage(s.galleryImages, scopedImageId, updated),
       currentJob: s.currentJob?.images
         ? {
             ...s.currentJob,
-            images: mergeUpdatedImage(s.currentJob.images, imageId, updated),
+            images: mergeUpdatedImage(s.currentJob.images, scopedImageId, updated),
           }
         : s.currentJob,
     }))
   },
   deleteImage: async (imageId) => {
-    await api(`/api/images/${buildApiPath(imageId)}`, { method: 'DELETE' })
-    const idSet = new Set([imageId])
+    const scopedImageId = requireUuid(imageId, 'image id')
+    await api(`/api/images/${buildApiPath(scopedImageId)}`, { method: 'DELETE' })
+    const idSet = new Set([scopedImageId])
     set((s) => ({
       ...updateGalleryStateAfterRemoval(s, idSet),
       currentJob: s.currentJob?.images
@@ -1118,8 +1179,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
   },
   bulkDeleteImages: async (imageIds) => {
-    const sanitizedIds = sanitizeStringArray(imageIds)
-    if (sanitizedIds.length === 0) return
+    const sanitizedIds = sanitizeUuidArray(imageIds, 'image id')
     await api('/api/images/bulk-delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1141,12 +1201,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsTemplates: [],
   loadingSettingsTemplates: false,
   fetchSettingsTemplates: async (productId) => {
-    const requestKey = buildRequestKey('settingsTemplates', productId)
+    const scopedProductId = requireUuid(productId, 'product id')
+    const requestKey = buildRequestKey('settingsTemplates', scopedProductId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingSettingsTemplates: true })
     try {
       const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(productId)}/settings-templates`)
+        api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates`)
       )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
@@ -1163,7 +1224,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   createSettingsTemplate: async (productId, data) => {
-    const tmpl = await api(`/api/products/${buildApiPath(productId)}/settings-templates`, {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1171,63 +1233,70 @@ export const useAppStore = create<AppState>((set, get) => ({
         name: normalizeLabelInput(data.name),
       }),
     })
-    invalidateRequestKeys(buildRequestKey('settingsTemplates', productId))
+    invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
     set((s) => ({ settingsTemplates: [...s.settingsTemplates, tmpl] }))
     return tmpl
   },
   updateSettingsTemplate: async (productId, templateId, data) => {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const settingsTemplateId = requireUuid(templateId, 'settings template id')
     const requestBody = {
       ...data,
       name: data.name ? normalizeLabelInput(data.name) : data.name,
     }
-    const tmpl = await api(`/api/products/${buildApiPath(productId)}/settings-templates/${buildApiPath(templateId)}`, {
+    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates/${buildApiPath(settingsTemplateId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
     })
-    invalidateRequestKeys(buildRequestKey('settingsTemplates', productId))
+    invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
     set((s) => ({
       settingsTemplates: s.settingsTemplates.map((t) =>
-        t.id === templateId ? tmpl : data.is_active ? { ...t, is_active: false } : t
+        t.id === settingsTemplateId ? tmpl : data.is_active ? { ...t, is_active: false } : t
       ),
     }))
   },
   deleteSettingsTemplate: async (productId, templateId) => {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const settingsTemplateId = requireUuid(templateId, 'settings template id')
     await api(
-      `/api/products/${buildApiPath(productId)}/settings-templates/${buildApiPath(templateId)}`,
+      `/api/products/${buildApiPath(scopedProductId)}/settings-templates/${buildApiPath(settingsTemplateId)}`,
       { method: 'DELETE' }
     )
-    invalidateRequestKeys(buildRequestKey('settingsTemplates', productId))
-    set((s) => ({ settingsTemplates: s.settingsTemplates.filter((t) => t.id !== templateId) }))
+    invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
+    set((s) => ({ settingsTemplates: s.settingsTemplates.filter((t) => t.id !== settingsTemplateId) }))
   },
   activateSettingsTemplate: async (productId, templateId) => {
-    const tmpl = await api(`/api/products/${buildApiPath(productId)}/settings-templates/${buildApiPath(templateId)}`, {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const settingsTemplateId = requireUuid(templateId, 'settings template id')
+    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates/${buildApiPath(settingsTemplateId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_active: true }),
     })
-    invalidateRequestKeys(buildRequestKey('settingsTemplates', productId))
+    invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
     set((s) => ({
       settingsTemplates: s.settingsTemplates.map((t) =>
-        t.id === templateId ? tmpl : { ...t, is_active: false }
+        t.id === settingsTemplateId ? tmpl : { ...t, is_active: false }
       ),
     }))
     // Refresh product to get synced settings
-    await get().fetchProduct(productId)
+    await get().fetchProduct(scopedProductId)
   },
 
   // Error Logs
   errorLogs: [],
   loadingErrorLogs: false,
   fetchErrorLogs: async (projectId) => {
-    if (updateSliceScope('errorLogs', projectId)) {
+    const scopedProjectId = requireUuid(projectId, 'project id')
+    if (updateSliceScope('errorLogs', scopedProjectId)) {
       set({ errorLogs: [] })
     }
-    const requestKey = buildRequestKey('errorLogs', projectId)
+    const requestKey = buildRequestKey('errorLogs', scopedProjectId)
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingErrorLogs: true })
     try {
-      const qs = buildProjectScopedQuery(projectId)
+      const qs = buildProjectScopedQuery(scopedProjectId)
       const data = await getInFlightRequest(requestKey, () => api(`/api/error-logs?${qs}`))
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
@@ -1244,9 +1313,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   clearErrorLogs: async (projectId) => {
-    const qs = buildProjectScopedQuery(projectId)
+    const scopedProjectId = requireUuid(projectId, 'project id')
+    const qs = buildProjectScopedQuery(scopedProjectId)
     await api(`/api/error-logs?${qs}`, { method: 'DELETE' })
-    invalidateRequestKeys(buildRequestKey('errorLogs', projectId))
+    invalidateRequestKeys(buildRequestKey('errorLogs', scopedProjectId))
     set({ errorLogs: [] })
   },
 
@@ -1259,8 +1329,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          product_id: productId.trim(),
-          user_prompt: trimTextInput(userPrompt),
+          product_id: requireUuid(productId, 'product id'),
+          user_prompt: sanitizePromptText(userPrompt, 'user_prompt'),
         }),
       })
       return data.refined_prompt
@@ -1275,7 +1345,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          product_id: productId.trim(),
+          product_id: requireUuid(productId, 'product id'),
           count: clampInteger(count, 1, MAX_SUGGESTED_PROMPT_COUNT, 5),
         }),
       })
