@@ -5,6 +5,7 @@ import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import {
   buildPromptSuggestionSystemPrompt,
   parsePromptSuggestions,
+  MAX_SUGGESTION_COUNT,
 } from '@/lib/prompt-builder'
 import type { GlobalStyleSettings } from '@/lib/types'
 import { T } from '@/lib/db-tables'
@@ -23,7 +24,19 @@ export async function POST(request: NextRequest) {
 
   try {
     product_id = body.product_id
-    const count = body.count ?? 5
+
+    // Validate count: must be a finite integer in [1, MAX_SUGGESTION_COUNT].
+    // Passing a non-numeric value (NaN, string, undefined) would cause Math.floor(NaN)
+    // to propagate as NaN into the system prompt, producing "exactly NaN unique…".
+    const rawCount = body.count ?? 5
+    const parsedCount = Number(rawCount)
+    if (!Number.isFinite(parsedCount) || parsedCount < 1 || parsedCount > MAX_SUGGESTION_COUNT) {
+      return NextResponse.json(
+        { error: `count must be an integer between 1 and ${MAX_SUGGESTION_COUNT}` },
+        { status: 400 }
+      )
+    }
+    const count = Math.floor(parsedCount)
 
     if (!product_id) {
       return NextResponse.json(

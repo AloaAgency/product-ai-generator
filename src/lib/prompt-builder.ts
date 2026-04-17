@@ -19,6 +19,8 @@ export const MAX_PRODUCT_DESC_LEN = 500
 export const MAX_USER_PROMPT_LEN = 2000
 export const MAX_STYLE_VALUE_LEN = 500
 export const MAX_SUGGESTION_COUNT = 20
+/** Max length for a suggestion name returned by parsePromptSuggestions — matches the DB-layer validation in the prompts route */
+export const MAX_SUGGESTION_NAME_LEN = 500
 
 /**
  * Allowlist of GlobalStyleSettings keys that are safe and relevant to include in
@@ -89,15 +91,17 @@ export function buildFullPrompt(
 ): string {
   const parts: string[] = []
 
-  // Mandatory style requirements block
+  // Mandatory style requirements block — truncate each value to match the allowlist guard
+  // in buildStyleBlock so both prompt-assembly paths enforce identical payload limits.
+  const cap = (v: string | undefined) => v?.slice(0, MAX_STYLE_VALUE_LEN) ?? ''
   const styleLines: string[] = []
-  if (settings.subject_rule) styleLines.push(`Subject: ${settings.subject_rule}`)
-  if (settings.lens) styleLines.push(`Lens: ${settings.lens}`)
-  if (settings.camera_height) styleLines.push(`Camera height: ${settings.camera_height}`)
-  if (settings.color_grading) styleLines.push(`Color grading: ${settings.color_grading}`)
-  if (settings.lighting) styleLines.push(`Lighting: ${settings.lighting}`)
-  if (settings.style) styleLines.push(`Style: ${settings.style}`)
-  if (settings.constraints) styleLines.push(`Constraints: ${settings.constraints}`)
+  if (settings.subject_rule) styleLines.push(`Subject: ${cap(settings.subject_rule)}`)
+  if (settings.lens) styleLines.push(`Lens: ${cap(settings.lens)}`)
+  if (settings.camera_height) styleLines.push(`Camera height: ${cap(settings.camera_height)}`)
+  if (settings.color_grading) styleLines.push(`Color grading: ${cap(settings.color_grading)}`)
+  if (settings.lighting) styleLines.push(`Lighting: ${cap(settings.lighting)}`)
+  if (settings.style) styleLines.push(`Style: ${cap(settings.style)}`)
+  if (settings.constraints) styleLines.push(`Constraints: ${cap(settings.constraints)}`)
 
   if (styleLines.length > 0) {
     parts.push(`MANDATORY STYLE REQUIREMENTS (you must follow these):\n${styleLines.map(l => `• ${l}`).join('\n')}`)
@@ -106,7 +110,7 @@ export function buildFullPrompt(
   // Reference rule - handle both product and texture images
   let refRule: string
   if (settings.reference_rule) {
-    refRule = settings.reference_rule
+    refRule = settings.reference_rule.slice(0, MAX_STYLE_VALUE_LEN)
   } else if (textureImageCount > 0) {
     refRule = `The attached images include ${referenceImageCount} product reference images followed by ${textureImageCount} texture reference images. The product images define the product appearance and must be matched exactly. The texture images show material/finish samples to use for realistic surface rendering.`
   } else {
@@ -123,7 +127,7 @@ export function buildFullPrompt(
   parts.push(`${aspect} aspect ratio, ${resolution} resolution, professional quality`)
 
   if (settings.custom_suffix?.trim()) {
-    parts.push(settings.custom_suffix.trim())
+    parts.push(settings.custom_suffix.trim().slice(0, MAX_STYLE_VALUE_LEN))
   }
 
   return parts.join('\n\n')
@@ -138,9 +142,13 @@ export function buildPromptSuggestionSystemPrompt(
   settings: GlobalStyleSettings,
   count: number
 ): string {
-  // Sanitize interpolated fields to prevent prompt injection and oversized API payloads
-  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN)
-  const safeDesc = productDescription ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN) : null
+  // Sanitize interpolated fields to prevent prompt injection and oversized API payloads.
+  // Double-quotes are replaced with a typographic alternative so they cannot break out of
+  // the inline "product name" context in the assembled system prompt.
+  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN).replace(/"/g, '\u2033')
+  const safeDesc = productDescription
+    ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN).replace(/"/g, '\u2033')
+    : null
   const safeCount = Math.max(1, Math.min(Math.floor(count), MAX_SUGGESTION_COUNT))
 
   const styleBlock = buildStyleBlock(settings)
@@ -178,8 +186,10 @@ export function parsePromptSuggestions(raw: string): { name: string; prompt_text
     if (!Array.isArray(prompts)) return []
     return prompts
       .map((p: any) => ({
-        name: (p.name || p.title || '').trim(),
-        prompt_text: (p.prompt_text || p.promptText || p.prompt || '').trim(),
+        // Cap fields so an oversized or adversarial AI response cannot push unbounded
+        // strings into DB inserts or API responses downstream.
+        name: (p.name || p.title || '').trim().slice(0, MAX_SUGGESTION_NAME_LEN),
+        prompt_text: (p.prompt_text || p.promptText || p.prompt || '').trim().slice(0, MAX_USER_PROMPT_LEN),
       }))
       .filter((p: { name: string; prompt_text: string }) => p.prompt_text.length > 0)
   } catch (err) {
