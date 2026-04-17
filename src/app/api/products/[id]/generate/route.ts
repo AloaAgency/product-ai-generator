@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { buildFullPrompt } from '@/lib/prompt-builder'
+import { buildFullPrompt, MAX_STYLE_VALUE_LEN } from '@/lib/prompt-builder'
 import type { Product, Project, ReferenceSet, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
@@ -226,12 +226,15 @@ export async function POST(
     const projectStyles = (projectResult.data as Project | null)?.global_style_settings ?? {}
     const mergedSettings = mergeStyles(projectStyles, typedProduct.global_style_settings)
 
-    // Apply per-generation photographic overrides
-    if (overrideLens) mergedSettings.lens = overrideLens
-    if (overrideCameraHeight) mergedSettings.camera_height = overrideCameraHeight
-    if (overrideLighting) mergedSettings.lighting = overrideLighting
-    if (overrideColorGrading) mergedSettings.color_grading = overrideColorGrading
-    if (overrideStyle) mergedSettings.style = overrideStyle
+    // Apply per-generation photographic overrides — cap at MAX_STYLE_VALUE_LEN to prevent
+    // oversized or injected values from the request body reaching the AI prompt unchecked.
+    const capStyle = (v: unknown): string | undefined =>
+      typeof v === 'string' && v.trim() ? v.slice(0, MAX_STYLE_VALUE_LEN) : undefined
+    if (capStyle(overrideLens)) mergedSettings.lens = capStyle(overrideLens)
+    if (capStyle(overrideCameraHeight)) mergedSettings.camera_height = capStyle(overrideCameraHeight)
+    if (capStyle(overrideLighting)) mergedSettings.lighting = capStyle(overrideLighting)
+    if (capStyle(overrideColorGrading)) mergedSettings.color_grading = capStyle(overrideColorGrading)
+    if (capStyle(overrideStyle)) mergedSettings.style = capStyle(overrideStyle)
 
     // Build final prompt
     let userPrompt = prompt_text
