@@ -1,22 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import {
+  requireUuid,
+  sanitizeApprovalStatus,
+  sanitizePublicErrorMessage,
+} from '@/lib/request-guards'
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ imageId: string }> }
 ) {
-  const { imageId } = await params
-
   try {
+    const { imageId } = await params
+    const sanitizedImageId = requireUuid(imageId, 'image id')
     const body = await request.json()
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+    }
+
     const updates: Record<string, unknown> = {}
 
     if ('approval_status' in body) {
-      updates.approval_status = body.approval_status
+      updates.approval_status = sanitizeApprovalStatus(
+        body.approval_status as string | null | undefined,
+        { allowNull: true }
+      ) ?? null
     }
     if ('notes' in body) {
-      updates.notes = body.notes
+      if (body.notes !== null && typeof body.notes !== 'string') {
+        return NextResponse.json({ error: 'notes must be a string or null' }, { status: 400 })
+      }
+      updates.notes = typeof body.notes === 'string' ? body.notes.trim() : body.notes
     }
 
     if (Object.keys(updates).length === 0) {
@@ -28,7 +43,7 @@ export async function PATCH(
     const { data: image, error } = await supabase
       .from(T.generated_images)
       .update(updates)
-      .eq('id', imageId)
+      .eq('id', sanitizedImageId)
       // Return only the mutable fields we changed so client-side signed URLs stay intact.
       .select('id, approval_status, notes')
       .single()
@@ -39,7 +54,7 @@ export async function PATCH(
 
     return NextResponse.json({ image })
   } catch (err) {
-    console.error('[ImagePatch] Error:', err)
+    console.error(`[ImagePatch] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -48,16 +63,16 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ imageId: string }> }
 ) {
-  const { imageId } = await params
-
   try {
+    const { imageId } = await params
+    const sanitizedImageId = requireUuid(imageId, 'image id')
     const supabase = createServiceClient()
 
     // Fetch the image record first
     const { data: image, error: fetchError } = await supabase
       .from(T.generated_images)
       .select('*')
-      .eq('id', imageId)
+      .eq('id', sanitizedImageId)
       .single()
 
     if (fetchError || !image) {
@@ -84,7 +99,7 @@ export async function DELETE(
     const { error: deleteError } = await supabase
       .from(T.generated_images)
       .delete()
-      .eq('id', imageId)
+      .eq('id', sanitizedImageId)
 
     if (deleteError) {
       return NextResponse.json({ error: 'Failed to delete image record' }, { status: 500 })
@@ -92,7 +107,7 @@ export async function DELETE(
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[ImageDelete] Error:', err)
+    console.error(`[ImageDelete] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

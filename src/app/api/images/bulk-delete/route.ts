@@ -1,18 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { sanitizePublicErrorMessage, sanitizeUuidArray } from '@/lib/request-guards'
 
 const MAX_BULK_DELETE = 200
 
 export async function POST(request: NextRequest) {
   try {
-    const { imageIds } = await request.json()
+    const body = await request.json()
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+    }
+
+    const { imageIds } = body as { imageIds?: string[] }
 
     if (!Array.isArray(imageIds) || imageIds.length === 0) {
       return NextResponse.json({ error: 'imageIds must be a non-empty array' }, { status: 400 })
     }
 
-    if (imageIds.length > MAX_BULK_DELETE) {
+    const sanitizedImageIds = sanitizeUuidArray(imageIds, 'image id')
+
+    if (sanitizedImageIds.length > MAX_BULK_DELETE) {
       return NextResponse.json(
         { error: `Cannot delete more than ${MAX_BULK_DELETE} images in a single request` },
         { status: 400 }
@@ -25,7 +33,7 @@ export async function POST(request: NextRequest) {
     const { data: images, error: fetchError } = await supabase
       .from(T.generated_images)
       .select('*')
-      .in('id', imageIds)
+      .in('id', sanitizedImageIds)
 
     if (fetchError) {
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
@@ -52,7 +60,7 @@ export async function POST(request: NextRequest) {
     const { error: deleteError } = await supabase
       .from(T.generated_images)
       .delete()
-      .in('id', imageIds)
+      .in('id', sanitizedImageIds)
 
     if (deleteError) {
       return NextResponse.json({ error: 'Failed to delete image records' }, { status: 500 })
@@ -60,7 +68,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ deleted: images.length })
   } catch (err) {
-    console.error('[BulkDelete] Error:', err)
+    console.error(`[BulkDelete] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import {
+  GALLERY_MEDIA_TYPES,
+  GALLERY_SORT_OPTIONS,
+  requireUuid,
+  sanitizeApprovalStatus,
+  sanitizePublicErrorMessage,
+} from '@/lib/request-guards'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const DEFAULT_PAGE_SIZE = 48
@@ -71,16 +78,25 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id: productId } = await params
-  const { searchParams } = request.nextUrl
-  const sceneId = searchParams.get('scene_id')
-  const approvalStatus = searchParams.get('approval_status')
-  const mediaType = searchParams.get('media_type')
-  const sortParam = searchParams.get('sort')
-  const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_PAGE_SIZE, 1), 200)
-  const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
-
   try {
+    const { id } = await params
+    const productId = requireUuid(id, 'product id')
+    const { searchParams } = request.nextUrl
+    const sceneId = searchParams.get('scene_id')
+    const approvalStatus = sanitizeApprovalStatus(searchParams.get('approval_status'), { allowAll: true }) ?? null
+    const mediaType = searchParams.get('media_type')
+    const sortParam = searchParams.get('sort')
+    const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_PAGE_SIZE, 1), 200)
+    const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
+
+    if (sceneId) requireUuid(sceneId, 'scene id')
+    if (mediaType && !GALLERY_MEDIA_TYPES.has(mediaType)) {
+      return NextResponse.json({ error: 'Invalid media_type' }, { status: 400 })
+    }
+    if (sortParam && !GALLERY_SORT_OPTIONS.has(sortParam)) {
+      return NextResponse.json({ error: 'Invalid sort' }, { status: 400 })
+    }
+
     const supabase = createServiceClient()
 
     const countQuery = applyImageFilters(
@@ -220,7 +236,7 @@ export async function GET(
       has_more: offset + signedImages.length < (totalCount ?? signedImages.length),
     })
   } catch (err) {
-    console.error('[Gallery] Error:', err)
+    console.error(`[Gallery] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
