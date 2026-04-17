@@ -19,6 +19,8 @@ export const MAX_PRODUCT_DESC_LEN = 500
 export const MAX_USER_PROMPT_LEN = 2000
 export const MAX_STYLE_VALUE_LEN = 500
 export const MAX_SUGGESTION_COUNT = 20
+/** Max length for a suggestion name returned by parsePromptSuggestions — matches the DB-layer validation in the prompts route */
+export const MAX_SUGGESTION_NAME_LEN = 500
 
 /**
  * Allowlist of GlobalStyleSettings keys that are safe and relevant to include in
@@ -180,8 +182,10 @@ export function parsePromptSuggestions(raw: string): { name: string; prompt_text
     if (!Array.isArray(prompts)) return []
     return prompts
       .map((p: any) => ({
-        name: (p.name || p.title || '').trim(),
-        prompt_text: (p.prompt_text || p.promptText || p.prompt || '').trim(),
+        // Cap fields so an oversized or adversarial AI response cannot push unbounded
+        // strings into DB inserts or API responses downstream.
+        name: (p.name || p.title || '').trim().slice(0, MAX_SUGGESTION_NAME_LEN),
+        prompt_text: (p.prompt_text || p.promptText || p.prompt || '').trim().slice(0, MAX_USER_PROMPT_LEN),
       }))
       .filter((p: { name: string; prompt_text: string }) => p.prompt_text.length > 0)
   } catch (err) {
