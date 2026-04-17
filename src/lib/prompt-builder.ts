@@ -142,9 +142,13 @@ export function buildPromptSuggestionSystemPrompt(
   settings: GlobalStyleSettings,
   count: number
 ): string {
-  // Sanitize interpolated fields to prevent prompt injection and oversized API payloads
-  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN)
-  const safeDesc = productDescription ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN) : null
+  // Sanitize interpolated fields to prevent prompt injection and oversized API payloads.
+  // Double-quotes are replaced with a typographic alternative so they cannot break out of
+  // the inline "product name" context in the assembled system prompt.
+  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN).replace(/"/g, '\u2033')
+  const safeDesc = productDescription
+    ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN).replace(/"/g, '\u2033')
+    : null
   const safeCount = Math.max(1, Math.min(Math.floor(count), MAX_SUGGESTION_COUNT))
 
   const styleBlock = buildStyleBlock(settings)
