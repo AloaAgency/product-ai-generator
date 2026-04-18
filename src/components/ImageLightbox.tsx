@@ -31,7 +31,6 @@ import {
   getLightboxWarmupIndexes,
   getNextApprovalStatus,
   getPreviewImageUrl,
-  sanitizeRouteSegment,
   shouldRequestSignedUrls,
 } from './imageLightbox.helpers'
 import { getSafeDownloadErrorMessage, getSafeErrorMessage } from './errorDisplay.helpers'
