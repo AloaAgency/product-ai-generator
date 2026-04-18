@@ -17,6 +17,15 @@ const sanitizeUrlCandidate = (value?: string | null) => {
   }
 }
 
+const getFirstSafeUrl = (...values: Array<string | null | undefined>) => {
+  for (const value of values) {
+    const sanitized = sanitizeUrlCandidate(value)
+    if (sanitized) return sanitized
+  }
+
+  return null
+}
+
 export const sanitizeRouteSegment = (value?: string | null) => {
   if (!value) return null
   const trimmed = value.trim()
@@ -24,32 +33,26 @@ export const sanitizeRouteSegment = (value?: string | null) => {
 }
 
 export const getPreviewImageUrl = (image: LightboxImage) =>
-  sanitizeUrlCandidate(
-    image.preview_signed_url ||
-    image.preview_public_url ||
-    image.thumb_signed_url ||
-    image.thumb_public_url ||
-    null
+  getFirstSafeUrl(
+    image.preview_signed_url,
+    image.preview_public_url,
+    image.thumb_signed_url,
+    image.thumb_public_url
   )
 
 export const getFullImageUrl = (image: LightboxImage) =>
-  sanitizeUrlCandidate(
-    image.signed_url ||
-    image.public_url ||
-    null
-  )
+  getFirstSafeUrl(image.signed_url, image.public_url)
 
 export const getDisplayImageUrl = (image: LightboxImage) =>
   getPreviewImageUrl(image) ||
   getFullImageUrl(image)
 
 export const getLightboxThumbnailUrl = (image: LightboxImage) =>
-  sanitizeUrlCandidate(
-    image.thumb_signed_url ||
-    image.thumb_public_url ||
-    image.signed_url ||
-    image.public_url ||
-    null
+  getFirstSafeUrl(
+    image.thumb_signed_url,
+    image.thumb_public_url,
+    image.signed_url,
+    image.public_url
   )
 
 export const getDownloadImageUrl = (
@@ -58,14 +61,13 @@ export const getDownloadImageUrl = (
     signed_url?: string | null
     download_url?: string | null
   } | null
-) => sanitizeUrlCandidate(
-  signedUrls?.download_url ||
-  signedUrls?.signed_url ||
-  image.download_url ||
-  image.signed_url ||
-  image.public_url ||
-  null
-)
+) => getFirstSafeUrl(
+    signedUrls?.download_url,
+    signedUrls?.signed_url,
+    image.download_url,
+    image.signed_url,
+    image.public_url
+  )
 
 export const shouldRequestSignedUrls = (image: LightboxImage, hasRequester: boolean) => {
   if (!hasRequester) return false
@@ -111,6 +113,30 @@ export const getFixImageHref = ({
   return safeFixProjectId && safeFixProductId && safeFixImageId
     ? `/projects/${safeFixProjectId}/products/${safeFixProductId}/fix-image?sourceImageId=${safeFixImageId}`
     : null
+}
+
+export const buildRegenerateUrl = ({
+  projectId,
+  image,
+}: {
+  projectId?: string | null
+  image: Pick<
+    LightboxImage,
+    'productId' | 'prompt' | 'reference_set_id' | 'texture_set_id' | 'product_image_count' | 'texture_image_count'
+  >
+}) => {
+  const safeProjectId = sanitizeRouteSegment(projectId)
+  const safeProductId = sanitizeRouteSegment(image.productId)
+  if (!safeProjectId || !safeProductId) return '#'
+
+  const params = new URLSearchParams()
+  if (image.prompt) params.set('prompt', image.prompt)
+  if (image.reference_set_id) params.set('reference_set_id', image.reference_set_id)
+  if (image.texture_set_id) params.set('texture_set_id', image.texture_set_id)
+  if (image.product_image_count != null) params.set('product_image_count', String(image.product_image_count))
+  if (image.texture_image_count != null) params.set('texture_image_count', String(image.texture_image_count))
+
+  return `/projects/${safeProjectId}/products/${safeProductId}/generate?${params.toString()}`
 }
 
 export type LightboxKeyboardAction =
