@@ -3,9 +3,14 @@
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useAppStore } from '@/lib/store'
 import { AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Trash2 } from 'lucide-react'
-import { getSafeErrorContext, getSafeErrorMessage } from './errorDisplay.helpers'
-
-const PAGE_SIZE = 20
+import {
+  ERROR_LOGS_PAGE_SIZE,
+  getNextVisibleErrorLogCount,
+  getRemainingErrorLogCount,
+  getVisibleErrorLogs,
+  hasMoreErrorLogs,
+  shouldShowErrorLogsPanel,
+} from './errorLogsPanel.helpers'
 
 export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
   const panelId = useId()
@@ -15,7 +20,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
   const clearErrorLogs = useAppStore((state) => state.clearErrorLogs)
   const [expanded, setExpanded] = useState(false)
   const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set())
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
+  const [visibleCount, setVisibleCount] = useState(ERROR_LOGS_PAGE_SIZE)
   const [clearing, setClearing] = useState(false)
 
   useEffect(() => {
@@ -23,19 +28,13 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
   }, [projectId, fetchErrorLogs])
 
   useEffect(() => {
-    setVisibleCount(PAGE_SIZE)
+    setVisibleCount(ERROR_LOGS_PAGE_SIZE)
     setExpandedEntries(new Set())
   }, [projectId, errorLogs.length])
 
-  const visibleLogs = useMemo(() => {
-    return errorLogs.slice(0, visibleCount).map((log) => ({
-      ...log,
-      safeMessage: getSafeErrorMessage(log.error_message),
-      safeContext: getSafeErrorContext(log.error_context),
-    }))
-  }, [errorLogs, visibleCount])
+  const visibleLogs = useMemo(() => getVisibleErrorLogs(errorLogs, visibleCount), [errorLogs, visibleCount])
 
-  const hasMoreLogs = visibleCount < errorLogs.length
+  const hasMoreLogs = hasMoreErrorLogs(visibleCount, errorLogs.length)
 
   const handleClear = useCallback(async () => {
     if (!confirm('Clear all error logs for this project?')) return
@@ -61,12 +60,12 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
   }, [])
 
   const handleRefresh = useCallback(() => {
-    setVisibleCount(PAGE_SIZE)
+    setVisibleCount(ERROR_LOGS_PAGE_SIZE)
     setExpandedEntries(new Set())
     void fetchErrorLogs(projectId)
   }, [fetchErrorLogs, projectId])
 
-  if (errorLogs.length === 0 && !loadingErrorLogs) return null
+  if (!shouldShowErrorLogsPanel(errorLogs.length, loadingErrorLogs)) return null
 
   return (
     <div className="mb-4 rounded-lg border border-red-900/40 bg-red-950/20">
@@ -174,10 +173,10 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
             {hasMoreLogs && (
               <button
                 type="button"
-                onClick={() => setVisibleCount((prev) => prev + PAGE_SIZE)}
+                onClick={() => setVisibleCount((prev) => getNextVisibleErrorLogCount(prev, errorLogs.length))}
                 className="w-full rounded-md border border-red-900/30 bg-red-950/20 px-3 py-2 text-xs font-medium text-red-200 transition-colors hover:bg-red-950/30"
               >
-                Load more ({errorLogs.length - visibleCount} remaining)
+                Load more ({getRemainingErrorLogCount(visibleCount, errorLogs.length)} remaining)
               </button>
             )}
           </div>
