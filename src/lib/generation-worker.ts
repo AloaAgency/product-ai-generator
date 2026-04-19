@@ -369,6 +369,7 @@ async function processVideoJob(
       {
         completed_count: completedCounts.completed,
         status: 'completed',
+        error_message: null,
         completed_at: new Date().toISOString(),
       },
       {
@@ -567,6 +568,22 @@ async function buildReferenceImagePayloads(
   ]
 }
 
+async function cleanupGeneratedImageAssets(
+  supabase: WorkerSupabase,
+  paths: string[]
+) {
+  const uniquePaths = [...new Set(paths.filter(Boolean))]
+  if (uniquePaths.length === 0) return
+
+  try {
+    await supabase.storage
+      .from('generated-images')
+      .remove(uniquePaths)
+  } catch {
+    // Cleanup failures should not hide the original generation error.
+  }
+}
+
 async function loadImageJobResources(
   supabase: WorkerSupabase,
   job: GenerationJobRecord
@@ -639,12 +656,16 @@ async function persistProgress(
   progress: ProgressSnapshot,
   plan: VariationPlan
 ) {
+  const nextFailedCount = plan.startingFailed + progress.failCount
   await updateGenerationJob(
     supabase,
     jobId,
     {
       completed_count: plan.startingCompleted + progress.successCount,
-      failed_count: plan.startingFailed + progress.failCount,
+      failed_count: nextFailedCount,
+      ...(!progress.lastError && nextFailedCount === 0 && progress.successCount > 0
+        ? { error_message: null }
+        : {}),
       ...(progress.lastError ? { error_message: progress.lastError } : {}),
     },
     {
@@ -703,11 +724,7 @@ async function runVariation(
     const thumbPath = buildThumbnailPath(storagePath, thumbnail.extension)
     const previewPath = buildPreviewPath(storagePath, preview.extension)
 
-    const [
-      { error: imageUploadError },
-      { error: thumbUploadError },
-      { error: previewUploadError },
-    ] = await Promise.all([
+    const uploadResults = await Promise.all([
       supabase.storage
         .from('generated-images')
         .upload(storagePath, imageBuffer, { contentType: result.mimeType }),
@@ -719,14 +736,21 @@ async function runVariation(
         .upload(previewPath, preview.buffer, { contentType: preview.mimeType }),
     ])
 
-    if (imageUploadError) {
-      throw new Error(`Failed to upload generated image: ${imageUploadError.message}`)
-    }
-    if (thumbUploadError) {
-      throw new Error(`Failed to upload image thumbnail: ${thumbUploadError.message}`)
-    }
-    if (previewUploadError) {
-      throw new Error(`Failed to upload image preview: ${previewUploadError.message}`)
+    const generatedPaths = [storagePath, thumbPath, previewPath]
+    const successfulUploads = generatedPaths.filter((_, index) => !uploadResults[index]?.error)
+    const [imageUploadResult, thumbUploadResult, previewUploadResult] = uploadResults
+    const previewUploadError = previewUploadResult?.error
+
+    if (imageUploadResult?.error || thumbUploadResult?.error || previewUploadError) {
+      await cleanupGeneratedImageAssets(supabase, successfulUploads)
+
+      if (imageUploadResult?.error) {
+        throw new Error(`Failed to upload generated image: ${imageUploadResult.error.message}`)
+      }
+      if (thumbUploadResult?.error) {
+        throw new Error(`Failed to upload image thumbnail: ${thumbUploadResult.error.message}`)
+      }
+      throw new Error(`Failed to upload image preview: ${previewUploadError?.message || 'unknown upload failure'}`)
     }
 
     const { error: insertError } = await supabase.from(T.generated_images).insert({
@@ -742,6 +766,7 @@ async function runVariation(
     })
 
     if (insertError) {
+      await cleanupGeneratedImageAssets(supabase, generatedPaths)
       throw new Error(`Failed to record generated image: ${insertError.message}`)
     }
   } finally {
@@ -910,6 +935,10 @@ async function persistFinalImageJobState(
     failed_count: result.failedCount,
     status: finalStatus,
     ...(result.lastError ? { error_message: result.lastError } : {}),
+  }
+
+  if (result.failedCount === 0 && !result.lastError && result.completedCount > 0) {
+    updates.error_message = null
   }
 
   if (finalCompleted) {
