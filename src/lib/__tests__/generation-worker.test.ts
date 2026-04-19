@@ -9,7 +9,7 @@ type QueryResponse = {
 
 type StorageResponse = {
   bucket: string
-  type: 'upload' | 'download'
+  type: 'upload' | 'download' | 'remove'
   data?: unknown
   error?: { message: string } | null
 }
@@ -118,6 +118,7 @@ function createMockSupabase(
   storageResponses: StorageResponse[] = []
 ) {
   const updates: Array<{ table: string; values: Record<string, unknown> }> = []
+  const removals: Array<{ bucket: string; paths: string[] }> = []
   const queryQueue = [...queryResponses]
   const storageQueue = [...storageResponses]
 
@@ -152,12 +153,17 @@ function createMockSupabase(
       return {
         upload: vi.fn(async () => nextStorage(bucket, 'upload')),
         download: vi.fn(async () => nextStorage(bucket, 'download')),
+        remove: vi.fn(async (paths: string[]) => {
+          removals.push({ bucket, paths })
+          return nextStorage(bucket, 'remove')
+        }),
       }
     },
   }
 
   const supabase = {
     updates,
+    removals,
     storage,
     from(table: string) {
       const state: {
@@ -372,6 +378,11 @@ describe('processGenerationJob', () => {
           type: 'upload',
           data: {},
         },
+        {
+          bucket: 'generated-images',
+          type: 'remove',
+          data: {},
+        },
       ]
     )
 
@@ -397,6 +408,15 @@ describe('processGenerationJob', () => {
       failed_count: 1,
       error_message: 'Failed to upload generated image: bucket down',
     })
+    expect(serviceClientState.current?.removals).toEqual([
+      {
+        bucket: 'generated-images',
+        paths: [
+          'products/product-1/jobs/job-1/thumbs/gen-01.webp',
+          'products/product-1/jobs/job-1/previews/gen-01.webp',
+        ],
+      },
+    ])
   })
 
   it('does not silently ignore progress persistence failures', async () => {
@@ -791,6 +811,94 @@ describe('processGenerationJob', () => {
         { mimeType: 'image/png', base64: Buffer.from('texture-ref').toString('base64') },
       ],
     }))
+  })
+
+  it('cleans up uploaded image assets when recording the generated image fails', async () => {
+    const jobId = '56565656-5656-4565-8565-565656565656'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId),
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: null, global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running' },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          error: { message: 'insert failed' },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'remove', data: {} },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockResolvedValue({
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-insert-failure-cleanup',
+      raw: {},
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 1,
+      status: 'failed',
+    })
+
+    expect(serviceClientState.current?.removals).toEqual([
+      {
+        bucket: 'generated-images',
+        paths: [
+          'products/product-1/jobs/job-1/gen-01.png',
+          'products/product-1/jobs/job-1/thumbs/gen-01.webp',
+          'products/product-1/jobs/job-1/previews/gen-01.webp',
+        ],
+      },
+    ])
+    expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: 'Failed to record generated image: insert failed',
+    })
   })
 
   it('stops before the next variation after the job is cancelled during status refresh', async () => {
