@@ -607,6 +607,84 @@ describe('processGenerationJob', () => {
     })
   })
 
+  it('clears stale image job errors after a later successful completion', async () => {
+    const jobId = '45454545-4545-4545-8454-454545454545'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId, { error_message: 'Previous tick failed' }),
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: null, global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running' },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockResolvedValue({
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-clear-stale-error',
+      raw: {},
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 1,
+      failed: 0,
+      status: 'completed',
+    })
+
+    expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
+      status: 'completed',
+      completed_count: 1,
+      failed_count: 0,
+      error_message: null,
+    })
+  })
+
   it('uses the project Gemini key and sends source plus limited reference images to Gemini', async () => {
     const jobId = '55555555-5555-4555-8555-555555555555'
     serviceClientState.current = createMockSupabase(
@@ -966,7 +1044,7 @@ describe('processGenerationJob', () => {
       {
         table: 'prodai_generation_jobs',
         type: 'update-maybeSingle',
-        data: createVideoJobRecord(jobId),
+        data: createVideoJobRecord(jobId, { error_message: 'Old video error' }),
       },
       {
         table: 'prodai_generation_jobs',
@@ -991,6 +1069,7 @@ describe('processGenerationJob', () => {
     expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
       status: 'completed',
       completed_count: 1,
+      error_message: null,
     })
   })
 

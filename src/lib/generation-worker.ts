@@ -369,6 +369,7 @@ async function processVideoJob(
       {
         completed_count: completedCounts.completed,
         status: 'completed',
+        error_message: null,
         completed_at: new Date().toISOString(),
       },
       {
@@ -914,6 +915,9 @@ async function persistFinalImageJobState(
 
   if (finalCompleted) {
     updates.completed_at = new Date().toISOString()
+    if (result.failedCount === 0 && !result.lastError) {
+      updates.error_message = null
+    }
     if (allFailed) {
       updates.error_message = result.lastError || 'All variations failed'
     }
