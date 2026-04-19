@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { normalizeDurationValue } from '@/lib/video-constants'
 
 const MAX_PROMPT_LENGTH = 10000
 const MAX_TITLE_LENGTH = 500
@@ -40,24 +41,10 @@ export async function POST(
   try {
     const { id: productId } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
-
-    const normalizeDuration = (model: string, value: unknown, resolution?: string | null, hasStartFrame?: boolean, hasEndFrame?: boolean) => {
-      const parsed = typeof value === 'number' ? value : Number(value)
-      if (!Number.isFinite(parsed) || parsed <= 0) return null
-      if (model.toLowerCase().startsWith('ltx')) return parsed
-      const resLower = (resolution || '').toLowerCase()
-      if (hasStartFrame || hasEndFrame || resLower === '1080p' || resLower === '4k') return 8
-      const allowed = [4, 6, 8]
-      if (allowed.includes(parsed)) return parsed
-      return allowed.reduce((closest, current) => {
-        const currentDiff = Math.abs(current - parsed)
-        const closestDiff = Math.abs(closest - parsed)
-        if (currentDiff < closestDiff) return current
-        if (currentDiff === closestDiff && current > closest) return current
-        return closest
-      }, allowed[0])
-    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
 
     if (typeof body.title === 'string' && body.title.length > MAX_TITLE_LENGTH) {
       return NextResponse.json({ error: `title must be ${MAX_TITLE_LENGTH} characters or fewer` }, { status: 400 })
@@ -88,7 +75,7 @@ export async function POST(
     if (body.video_resolution !== undefined) insert.video_resolution = body.video_resolution
     if (body.video_aspect_ratio !== undefined) insert.video_aspect_ratio = body.video_aspect_ratio
     if (body.video_duration_seconds !== undefined) {
-      insert.video_duration_seconds = normalizeDuration(model, body.video_duration_seconds, body.video_resolution, !!body.start_frame_image_id, !!body.end_frame_image_id)
+      insert.video_duration_seconds = normalizeDurationValue(model, body.video_duration_seconds, body.video_resolution, !!body.start_frame_image_id, !!body.end_frame_image_id)
     }
     if (body.video_fps !== undefined) insert.video_fps = body.video_fps
     if (body.video_generate_audio !== undefined) insert.video_generate_audio = body.video_generate_audio
