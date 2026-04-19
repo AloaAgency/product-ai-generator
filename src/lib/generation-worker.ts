@@ -739,8 +739,9 @@ async function runVariation(
     const generatedPaths = [storagePath, thumbPath, previewPath]
     const successfulUploads = generatedPaths.filter((_, index) => !uploadResults[index]?.error)
     const [imageUploadResult, thumbUploadResult, previewUploadResult] = uploadResults
+    const previewUploadError = previewUploadResult?.error
 
-    if (imageUploadResult?.error || thumbUploadResult?.error || previewUploadResult?.error) {
+    if (imageUploadResult?.error || thumbUploadResult?.error || previewUploadError) {
       await cleanupGeneratedImageAssets(supabase, successfulUploads)
 
       if (imageUploadResult?.error) {
@@ -749,7 +750,7 @@ async function runVariation(
       if (thumbUploadResult?.error) {
         throw new Error(`Failed to upload image thumbnail: ${thumbUploadResult.error.message}`)
       }
-      throw new Error(`Failed to upload image preview: ${previewUploadResult!.error.message}`)
+      throw new Error(`Failed to upload image preview: ${previewUploadError?.message || 'unknown upload failure'}`)
     }
 
     const { error: insertError } = await supabase.from(T.generated_images).insert({
