@@ -656,12 +656,16 @@ async function persistProgress(
   progress: ProgressSnapshot,
   plan: VariationPlan
 ) {
+  const nextFailedCount = plan.startingFailed + progress.failCount
   await updateGenerationJob(
     supabase,
     jobId,
     {
       completed_count: plan.startingCompleted + progress.successCount,
-      failed_count: plan.startingFailed + progress.failCount,
+      failed_count: nextFailedCount,
+      ...(!progress.lastError && nextFailedCount === 0 && progress.successCount > 0
+        ? { error_message: null }
+        : {}),
       ...(progress.lastError ? { error_message: progress.lastError } : {}),
     },
     {
@@ -932,11 +936,12 @@ async function persistFinalImageJobState(
     ...(result.lastError ? { error_message: result.lastError } : {}),
   }
 
+  if (result.failedCount === 0 && !result.lastError && result.completedCount > 0) {
+    updates.error_message = null
+  }
+
   if (finalCompleted) {
     updates.completed_at = new Date().toISOString()
-    if (result.failedCount === 0 && !result.lastError) {
-      updates.error_message = null
-    }
     if (allFailed) {
       updates.error_message = result.lastError || 'All variations failed'
     }
