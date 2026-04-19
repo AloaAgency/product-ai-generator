@@ -30,7 +30,10 @@ export async function POST(
   try {
     const { id: productId, boardId } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
 
     // Determine next scene_order
     const { data: existing } = await supabase

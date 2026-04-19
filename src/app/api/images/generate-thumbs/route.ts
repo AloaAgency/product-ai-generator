@@ -16,7 +16,10 @@ export const dynamic = 'force-dynamic'
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
     const imageIds: string[] = body.image_ids
     if (!Array.isArray(imageIds) || imageIds.length === 0) {
       return NextResponse.json({ error: 'image_ids required' }, { status: 400 })
