@@ -23,11 +23,29 @@ export async function POST(
   try {
     const { id: productId, setId } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
     const files = (body?.files || []) as UploadRequestItem[]
 
     if (!Array.isArray(files) || files.length === 0) {
       return NextResponse.json({ error: 'No files provided' }, { status: 400 })
+    }
+
+    for (const file of files) {
+      if (!file || typeof file !== 'object') {
+        return NextResponse.json({ error: 'Each file entry must be an object' }, { status: 400 })
+      }
+      if (typeof file.name !== 'string' || !file.name) {
+        return NextResponse.json({ error: 'Each file entry must have a name' }, { status: 400 })
+      }
+      if (typeof file.type !== 'string') {
+        return NextResponse.json({ error: 'Each file entry must have a type' }, { status: 400 })
+      }
+      if (typeof file.size !== 'number') {
+        return NextResponse.json({ error: 'Each file entry must have a numeric size' }, { status: 400 })
+      }
     }
 
     const { data: existing } = await supabase

@@ -34,7 +34,10 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const supabase = createServiceClient()
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
     const { name, description, global_style_settings, project_id } = body
 
     if (!name) {

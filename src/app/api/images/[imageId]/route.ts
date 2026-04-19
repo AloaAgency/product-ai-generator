@@ -14,7 +14,10 @@ export async function PATCH(
   try {
     const { imageId } = await params
     const sanitizedImageId = requireUuid(imageId, 'image id')
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
     }
