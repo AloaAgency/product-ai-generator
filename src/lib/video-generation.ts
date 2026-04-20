@@ -10,6 +10,7 @@ const MAX_PROMPT_LENGTH = 4_000
 const MAX_FRAME_BYTES = 20 * 1024 * 1024
 const DEFAULT_FETCH_TIMEOUT_MS = 60_000
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000
+const DEFAULT_VEO_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
 const DEFAULT_VEO_MODEL = 'veo-3.1-generate-preview'
 const DEFAULT_VEO_POLL_INTERVAL_MS = 10_000
 const DEFAULT_VEO_POLL_TIMEOUT_MS = 600_000
@@ -95,6 +96,12 @@ type SceneGenerationContext = {
 
 const isVeoModel = (model: string) => model.toLowerCase().startsWith('veo')
 
+function getTrimmedStringOrNull(value: unknown) {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim()
+  return normalized || null
+}
+
 function sanitizeExternalErrorMessage(
   value: string,
   fallback: string,
@@ -144,6 +151,14 @@ function validateVideoPrompt(prompt: string) {
 
 function getConfiguredTimeout(value: unknown, fallback: number) {
   return Math.max(1_000, Math.round(getPositiveNumberOrDefault(value, fallback)))
+}
+
+function safeJsonStringify(value: unknown) {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
 }
 
 function createTimeoutSignal(timeoutMs: number) {
@@ -269,7 +284,7 @@ async function loadFrameRefsByImageId(
   supabase: ReturnType<typeof createServiceClient>,
   imageIds: string[]
 ) {
-  const uniqueImageIds = [...new Set(imageIds)]
+  const uniqueImageIds = Array.from(new Set(imageIds))
   if (uniqueImageIds.length === 0) return new Map<string, FrameRef>()
 
   const { data: images, error: imageError } = await supabase
@@ -375,13 +390,15 @@ export async function pollVeoOperation(
 }
 
 export function getVeoConfig(apiKeyOverride?: string | null): VeoConfig {
-  const apiKey = apiKeyOverride || process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY
+  const apiKey = getTrimmedStringOrNull(apiKeyOverride)
+    || getTrimmedStringOrNull(process.env.GOOGLE_AI_API_KEY)
+    || getTrimmedStringOrNull(process.env.GEMINI_API_KEY)
   if (!apiKey) throw new Error('Google AI API key not configured')
 
   return {
     apiKey,
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    model: process.env.VEO_MODEL?.trim() || DEFAULT_VEO_MODEL,
+    baseUrl: getTrimmedStringOrNull(process.env.VEO_API_BASE_URL) || DEFAULT_VEO_API_BASE_URL,
+    model: getTrimmedStringOrNull(process.env.VEO_MODEL) || DEFAULT_VEO_MODEL,
     pollIntervalMs: getPositiveNumberOrDefault(
       process.env.VEO_POLL_INTERVAL_MS,
       DEFAULT_VEO_POLL_INTERVAL_MS
@@ -487,11 +504,13 @@ async function startVeoOperation(
 }
 
 function getVeoOperationErrorMessage(error: unknown) {
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
-    return error.message
+  if (typeof error === 'string') {
+    return sanitizeExternalErrorMessage(error, 'Unknown error')
   }
-  return JSON.stringify(error)
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return sanitizeExternalErrorMessage(error.message, 'Unknown error')
+  }
+  return sanitizeExternalErrorMessage(safeJsonStringify(error) || '', 'Unknown error')
 }
 
 export function getVeoVideoUri(operation: Record<string, unknown>) {
@@ -540,9 +559,10 @@ async function loadSceneOrThrow(
     .single<SceneRecord>()
 
   if (sceneErr || !scene) throw new Error('Scene not found')
-  scene.motion_prompt = validateVideoPrompt(scene.motion_prompt || '')
-
-  return scene as SceneWithMotionPrompt
+  return {
+    ...scene,
+    motion_prompt: validateVideoPrompt(scene.motion_prompt || ''),
+  }
 }
 
 async function resolveSceneGeminiApiKey(
@@ -796,14 +816,16 @@ async function generateWithVeo3(
 }
 
 export function getLtxConfig(settings: SceneVideoSettings): LtxConfig {
-  const apiKey = process.env.LTX_API_KEY
+  const apiKey = getTrimmedStringOrNull(process.env.LTX_API_KEY)
   if (!apiKey) throw new Error('LTX_API_KEY not configured')
 
   return {
     apiKey,
-    baseUrl: (process.env.LTX_API_BASE_URL || DEFAULT_LTX_API_BASE_URL).replace(/\/$/, ''),
-    model: process.env.LTX_MODEL || DEFAULT_LTX_MODEL,
-    resolution: settings.resolution || process.env.LTX_RESOLUTION || DEFAULT_LTX_RESOLUTION,
+    baseUrl: (getTrimmedStringOrNull(process.env.LTX_API_BASE_URL) || DEFAULT_LTX_API_BASE_URL).replace(/\/$/, ''),
+    model: getTrimmedStringOrNull(process.env.LTX_MODEL) || DEFAULT_LTX_MODEL,
+    resolution: settings.resolution
+      || getTrimmedStringOrNull(process.env.LTX_RESOLUTION)
+      || DEFAULT_LTX_RESOLUTION,
     durationSeconds: getPositiveNumberOrDefault(
       settings.durationSeconds ?? process.env.LTX_DURATION,
       DEFAULT_LTX_DURATION_SECONDS

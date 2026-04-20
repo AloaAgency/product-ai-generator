@@ -5,6 +5,7 @@ import {
   buildSceneVideoSettings,
   buildVeoRequestParts,
   getLtxConfig,
+  getVeoConfig,
   getVeoVideoUri,
   pollVeoOperation,
 } from '../video-generation'
@@ -284,6 +285,57 @@ describe('pollVeoOperation', () => {
     await expect(
       pollVeoOperation('https://veo.example.test', 'operations/slow', 'api-key', 250, 1_000)
     ).rejects.toThrow(/Veo generation timed out after 1s/)
+  })
+})
+
+describe('getVeoConfig', () => {
+  it('trims configured values and falls back past blank overrides', async () => {
+    await withEnv({
+      GOOGLE_AI_API_KEY: '  env-api-key  ',
+      GEMINI_API_KEY: '  ',
+      VEO_API_BASE_URL: '  https://veo.example.test/base  ',
+      VEO_MODEL: '  veo-custom  ',
+    }, async () => {
+      const config = getVeoConfig('   ')
+
+      expect(config.apiKey).toBe('env-api-key')
+      expect(config.baseUrl).toBe('https://veo.example.test/base')
+      expect(config.model).toBe('veo-custom')
+    })
+  })
+})
+
+describe('getLtxConfig', () => {
+  it('trims environment configuration and ignores blank values', async () => {
+    await withEnv({
+      LTX_API_KEY: '  ltx-secret  ',
+      LTX_API_BASE_URL: '  https://ltx.example.test/v1/  ',
+      LTX_MODEL: '  ltx-custom  ',
+      LTX_RESOLUTION: '  2560x1440  ',
+    }, async () => {
+      const config = getLtxConfig({ resolution: null })
+
+      expect(config.apiKey).toBe('ltx-secret')
+      expect(config.baseUrl).toBe('https://ltx.example.test/v1')
+      expect(config.model).toBe('ltx-custom')
+      expect(config.resolution).toBe('2560x1440')
+    })
+  })
+})
+
+describe('getVeoVideoUri', () => {
+  it('sanitizes provider errors before surfacing them', () => {
+    expect(() => getVeoVideoUri({
+      error: {
+        message: 'request failed with token=abc123 and Bearer secret-value',
+      },
+    })).toThrow(/token=\[redacted\]/)
+
+    expect(() => getVeoVideoUri({
+      error: {
+        message: 'request failed with token=abc123 and Bearer secret-value',
+      },
+    })).toThrow(/Bearer \[redacted\]/)
   })
 })
 
