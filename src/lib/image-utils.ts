@@ -134,6 +134,9 @@ async function resizeToWebP(
   width: number,
   quality: number
 ): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
+  if (buffer.length === 0) {
+    throw new Error('resizeToWebP: buffer is empty')
+  }
   const outBuffer = await sharp(buffer)
     .rotate()
     .resize({ width, withoutEnlargement: true })
