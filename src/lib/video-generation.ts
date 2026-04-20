@@ -269,7 +269,7 @@ async function loadFrameRefsByImageId(
   supabase: ReturnType<typeof createServiceClient>,
   imageIds: string[]
 ) {
-  const uniqueImageIds = [...new Set(imageIds)]
+  const uniqueImageIds = Array.from(new Set(imageIds))
   if (uniqueImageIds.length === 0) return new Map<string, FrameRef>()
 
   const { data: images, error: imageError } = await supabase
@@ -540,9 +540,10 @@ async function loadSceneOrThrow(
     .single<SceneRecord>()
 
   if (sceneErr || !scene) throw new Error('Scene not found')
-  scene.motion_prompt = validateVideoPrompt(scene.motion_prompt || '')
-
-  return scene as SceneWithMotionPrompt
+  return {
+    ...scene,
+    motion_prompt: validateVideoPrompt(scene.motion_prompt || ''),
+  }
 }
 
 async function resolveSceneGeminiApiKey(
