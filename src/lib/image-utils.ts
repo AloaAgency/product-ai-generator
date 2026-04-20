@@ -38,16 +38,21 @@ async function resolveFfmpegPath(): Promise<string | null> {
 let ffmpegPathPromise: Promise<void> | null = null
 function ensureFfmpegPath(): Promise<void> {
   if (!ffmpegPathPromise) {
-    ffmpegPathPromise = resolveFfmpegPath().then((p) => {
-      if (!p) {
-        // Reset so the next call retries discovery instead of immediately failing
+    ffmpegPathPromise = resolveFfmpegPath()
+      .then((p) => {
+        if (!p) {
+          throw new Error(
+            'ffmpeg not found: install the ffmpeg-static package or ensure ffmpeg is on PATH'
+          )
+        }
+        ffmpeg.setFfmpegPath(p)
+      })
+      .catch((err) => {
+        // Reset on any failure so subsequent calls can retry rather than
+        // receiving a permanently cached rejection.
         ffmpegPathPromise = null
-        throw new Error(
-          'ffmpeg not found: install the ffmpeg-static package or ensure ffmpeg is on PATH'
-        )
-      }
-      ffmpeg.setFfmpegPath(p)
-    })
+        throw err
+      })
   }
   return ffmpegPathPromise
 }
@@ -134,6 +139,9 @@ async function resizeToWebP(
   width: number,
   quality: number
 ): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
+  if (buffer.length === 0) {
+    throw new Error('resizeToWebP: buffer is empty')
+  }
   const outBuffer = await sharp(buffer)
     .rotate()
     .resize({ width, withoutEnlargement: true })

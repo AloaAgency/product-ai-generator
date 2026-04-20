@@ -1,5 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/server'
-import { compressReferenceImage } from '@/lib/image-utils'
+import { compressReferenceImage, CompressResult } from '@/lib/image-utils'
 import { T } from '@/lib/db-tables'
 
 const BUCKET = 'reference-images'
@@ -51,7 +51,7 @@ export async function processReferenceImageCompression(
     }
   }
 
-  let result: Awaited<ReturnType<typeof compressReferenceImage>>
+  let result: CompressResult
   try {
     result = await compressReferenceImage(buffer)
   } catch (err) {
