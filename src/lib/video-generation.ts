@@ -153,6 +153,14 @@ function getConfiguredTimeout(value: unknown, fallback: number) {
   return Math.max(1_000, Math.round(getPositiveNumberOrDefault(value, fallback)))
 }
 
+function safeJsonStringify(value: unknown) {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
+}
+
 function createTimeoutSignal(timeoutMs: number) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -496,11 +504,13 @@ async function startVeoOperation(
 }
 
 function getVeoOperationErrorMessage(error: unknown) {
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
-    return error.message
+  if (typeof error === 'string') {
+    return sanitizeExternalErrorMessage(error, 'Unknown error')
   }
-  return JSON.stringify(error)
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return sanitizeExternalErrorMessage(error.message, 'Unknown error')
+  }
+  return sanitizeExternalErrorMessage(safeJsonStringify(error) || '', 'Unknown error')
 }
 
 export function getVeoVideoUri(operation: Record<string, unknown>) {

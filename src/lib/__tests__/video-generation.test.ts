@@ -3,9 +3,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   buildLtxPayload,
   buildSceneVideoSettings,
-  getVeoConfig,
   buildVeoRequestParts,
   getLtxConfig,
+  getVeoConfig,
   getVeoVideoUri,
   pollVeoOperation,
 } from '../video-generation'
@@ -286,6 +286,8 @@ describe('pollVeoOperation', () => {
       pollVeoOperation('https://veo.example.test', 'operations/slow', 'api-key', 250, 1_000)
     ).rejects.toThrow(/Veo generation timed out after 1s/)
   })
+})
+
 describe('getVeoConfig', () => {
   it('trims configured values and falls back past blank overrides', async () => {
     await withEnv({
@@ -318,6 +320,23 @@ describe('getLtxConfig', () => {
       expect(config.model).toBe('ltx-custom')
       expect(config.resolution).toBe('2560x1440')
     })
+  })
+})
+
+describe('getVeoVideoUri', () => {
+  it('sanitizes provider errors before surfacing them', () => {
+    expect(() => getVeoVideoUri({
+      error: {
+        message: 'request failed with token=abc123 and Bearer secret-value',
+      },
+    })).toThrow(/token=\[redacted\]/)
+
+    expect(() => getVeoVideoUri({
+      error: {
+        message: 'request failed with token=abc123 and Bearer secret-value',
+      },
+    })).toThrow(/Bearer \[redacted\]/)
+  })
 })
 
 describe('getVeoVideoUri', () => {
