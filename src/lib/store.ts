@@ -106,6 +106,12 @@ const invalidateRequestKeys = (...keys: Array<string | undefined | null>) => {
   }
 }
 
+const getActiveSliceScope = (slice: string) => {
+  const scope = sliceScopes.get(slice)
+  if (!scope || scope === '_') return null
+  return scope
+}
+
 const extractErrorMessage = (value: unknown): string | null => {
   if (typeof value !== 'string') return null
   const message = value.trim().replace(/\s+/g, ' ')
@@ -949,6 +955,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchGenerationJobs: async (productId) => {
     const scopedProductId = requireUuid(productId, 'product id')
     const requestKey = buildRequestKey('generationJobs', scopedProductId)
+    if (updateSliceScope('generationJobs', requestKey)) {
+      set({ generationJobs: [], currentJob: null, loadingJobs: false })
+    }
     const requestVersion = beginTrackedRequest(requestKey)
     const shouldShowLoading = get().generationJobs.length === 0
     if (shouldShowLoading) set({ loadingJobs: true })
@@ -999,6 +1008,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const scopedProductId = requireUuid(productId, 'product id')
     const generationJobId = requireUuid(jobId, 'generation job id')
     const requestKey = buildRequestKey('currentJob', scopedProductId, generationJobId)
+    if (updateSliceScope('currentJob', requestKey)) {
+      set({ currentJob: null })
+    }
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await getInFlightRequest(requestKey, () =>
@@ -1059,7 +1071,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearGenerationLog: async (productId) => {
     const scopedProductId = requireUuid(productId, 'product id')
     await api(`/api/products/${buildApiPath(scopedProductId)}/generate?scope=log`, { method: 'DELETE' })
-    invalidateRequestKeys(buildRequestKey('generationJobs', scopedProductId))
+    invalidateRequestKeys(buildRequestKey('generationJobs', scopedProductId), getActiveSliceScope('currentJob'))
     set((s) => ({
       generationJobs: s.generationJobs.filter((j) => j.status === 'pending' || j.status === 'running'),
       currentJob:
@@ -1081,7 +1093,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestKey = getGalleryRequestKey(scopedProductId, sanitizedFilters)
     const qs = getGalleryQueryString(sanitizedFilters)
     if (updateSliceScope('gallery', requestKey)) {
-      set({ loadingGalleryMore: false })
+      set({ galleryImages: [], galleryTotal: 0, galleryHasMore: false, loadingGallery: false, loadingGalleryMore: false })
     }
     const requestVersion = beginTrackedRequest(requestKey)
     const shouldShowLoading = get().galleryImages.length === 0
@@ -1154,6 +1166,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     const updated = data.image ?? data
+    const activeGalleryScope = getActiveSliceScope('gallery')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
+    if (activeGalleryScope) invalidateTrackedRequest(activeGalleryScope)
+    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
     set((s) => ({
       galleryImages: mergeUpdatedImage(s.galleryImages, scopedImageId, updated),
       currentJob: s.currentJob?.images
@@ -1168,6 +1184,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const scopedImageId = requireUuid(imageId, 'image id')
     await api(`/api/images/${buildApiPath(scopedImageId)}`, { method: 'DELETE' })
     const idSet = new Set([scopedImageId])
+    invalidateRequestKeys(getActiveSliceScope('gallery'), getActiveSliceScope('currentJob'))
     set((s) => ({
       ...updateGalleryStateAfterRemoval(s, idSet),
       currentJob: s.currentJob?.images
@@ -1186,6 +1203,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       body: JSON.stringify({ imageIds: sanitizedIds }),
     })
     const idSet = new Set(sanitizedIds)
+    invalidateRequestKeys(getActiveSliceScope('gallery'), getActiveSliceScope('currentJob'))
     set((s) => ({
       ...updateGalleryStateAfterRemoval(s, idSet),
       currentJob: s.currentJob?.images
@@ -1203,6 +1221,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchSettingsTemplates: async (productId) => {
     const scopedProductId = requireUuid(productId, 'product id')
     const requestKey = buildRequestKey('settingsTemplates', scopedProductId)
+    if (updateSliceScope('settingsTemplates', requestKey)) {
+      set({ settingsTemplates: [], loadingSettingsTemplates: false })
+    }
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingSettingsTemplates: true })
     try {
