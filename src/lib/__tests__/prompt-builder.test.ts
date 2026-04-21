@@ -85,6 +85,20 @@ describe('buildRefinedPromptUserMessage', () => {
     const promptSection = msg.split("User's prompt idea:\n")[1] ?? ''
     expect(promptSection.length).toBe(MAX_USER_PROMPT_LEN)
   })
+
+  it('replaces double-quotes in product name to prevent prompt injection', () => {
+    const msg = buildRefinedPromptUserMessage('Brand "Premium" Bottle', null, {}, 'Hero shot')
+    // ASCII double-quotes must not appear in the sanitized name
+    expect(msg).not.toContain('"Premium"')
+    // Typographic double-prime ″ (U+2033) replaces them
+    expect(msg).toContain('\u2033Premium\u2033')
+  })
+
+  it('replaces double-quotes in product description to prevent prompt injection', () => {
+    const msg = buildRefinedPromptUserMessage('Bottle', 'A "premium" glass bottle', {}, 'Hero shot')
+    expect(msg).not.toContain('"premium"')
+    expect(msg).toContain('\u2033premium\u2033')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -258,6 +272,23 @@ describe('parsePromptSuggestions', () => {
   it('returns an empty array when JSON is valid but does not contain a prompts array', () => {
     const raw = JSON.stringify({ something: 'else' })
     expect(parsePromptSuggestions(raw)).toStrictEqual([])
+  })
+
+  it('handles non-string name values from adversarial AI responses without throwing', () => {
+    // A number as the name field must not cause .trim() to throw
+    const raw = JSON.stringify([{ name: 42, prompt_text: 'Valid prompt text here' }])
+    const result = parsePromptSuggestions(raw)
+    expect(result).toHaveLength(1)
+    expect(result[0]?.name).toBe('42')
+    expect(result[0]?.prompt_text).toBe('Valid prompt text here')
+  })
+
+  it('handles non-string prompt_text values from adversarial AI responses without throwing', () => {
+    // A number as the prompt_text field must not cause .trim() to throw
+    const raw = JSON.stringify([{ name: 'Shot title', prompt_text: 99 }])
+    const result = parsePromptSuggestions(raw)
+    expect(result).toHaveLength(1)
+    expect(result[0]?.prompt_text).toBe('99')
   })
 })
 
