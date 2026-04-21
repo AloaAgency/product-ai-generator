@@ -62,11 +62,6 @@ const invalidateTrackedRequest = (key: string) => {
 const isLatestRequest = (key: string, version: number) =>
   (requestVersions.get(key) ?? 0) === version
 
-const extractErrorMessage = (value: unknown): string | null => {
-  if (typeof value !== 'string') return null
-  const message = value.trim().replace(/\s+/g, ' ')
-  if (!message) return null
-  return message.slice(0, MAX_ERROR_MESSAGE_LENGTH)
 const updateSliceScope = (slice: string, scope: string) => {
   const normalizedScope = scope.trim() || '_'
   const previousScope = sliceScopes.get(slice)
@@ -80,6 +75,11 @@ const getActiveSliceScope = (slice: string) => {
   return scope
 }
 
+const extractErrorMessage = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null
+  const message = value.trim().replace(/\s+/g, ' ')
+  if (!message) return null
+  return message.slice(0, MAX_ERROR_MESSAGE_LENGTH)
 }
 
 const safeParseResponse = async (res: Response) => {
@@ -96,11 +96,6 @@ const logStoreError = (scope: string, error: unknown) => {
   console.error(`[Store:${scope}]`, error)
 }
 
-interface AppState {
-  // Projects
-  projects: Project[]
-  currentProject: Project | null
-  loadingProjects: boolean
 const getGalleryQueryString = (
   filters?: {
     job_id?: string
@@ -117,6 +112,11 @@ const getGalleryQueryString = (
   return params.toString()
 }
 
+interface AppState {
+  // Projects
+  projects: Project[]
+  currentProject: Project | null
+  loadingProjects: boolean
   fetchProjects: () => Promise<void>
   fetchProject: (id: string) => Promise<void>
   createProject: (data: { name: string; description?: string }) => Promise<Project>
@@ -703,6 +703,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       body: JSON.stringify(body),
     })
     const job = result.job ?? result
+    const activeGenerationJobsScope = getActiveSliceScope('generationJobs')
+    if (activeGenerationJobsScope) invalidateTrackedRequest(activeGenerationJobsScope)
     set((s) => ({ generationJobs: [job, ...s.generationJobs] }))
     return job
   },
@@ -728,6 +730,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       method: 'POST',
     })
     const job = data.job ?? data
+    const activeGenerationJobsScope = getActiveSliceScope('generationJobs')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
+    if (activeGenerationJobsScope) invalidateTrackedRequest(activeGenerationJobsScope)
+    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
     set((s) => ({
       generationJobs: [job, ...s.generationJobs.filter((j) => j.id !== job.id)],
       currentJob: s.currentJob?.id === job.id ? { ...job, images: s.currentJob?.images } : s.currentJob,
@@ -744,6 +750,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   deleteGenerationJob: async (productId, jobId) => {
     await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`, { method: 'DELETE' })
+    const activeGenerationJobsScope = getActiveSliceScope('generationJobs')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
+    if (activeGenerationJobsScope) invalidateTrackedRequest(activeGenerationJobsScope)
+    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
     set((s) => ({
       generationJobs: s.generationJobs.filter((j) => j.id !== jobId),
       currentJob: s.currentJob?.id === jobId ? null : s.currentJob,
@@ -751,6 +761,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   clearGenerationLog: async (productId) => {
     await api(`/api/products/${buildApiPath(productId)}/generate?scope=log`, { method: 'DELETE' })
+    const activeGenerationJobsScope = getActiveSliceScope('generationJobs')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
+    if (activeGenerationJobsScope) invalidateTrackedRequest(activeGenerationJobsScope)
+    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
     set((s) => ({
       generationJobs: s.generationJobs.filter((j) => j.status === 'pending' || j.status === 'running'),
       currentJob:
@@ -776,6 +790,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await api(`/api/products/${buildApiPath(productId)}/gallery${qs ? `?${qs}` : ''}`)
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ galleryImages: data.images ?? data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ galleryImages: [] })
+      }
+      logStoreError('Gallery', error)
     } finally {
       if (shouldShowLoading && isLatestRequest(requestKey, requestVersion)) {
         set({ loadingGallery: false })
@@ -792,14 +811,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     const updated = data.image ?? data
+    const activeGalleryScope = getActiveSliceScope('gallery')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
+    if (activeGalleryScope) invalidateTrackedRequest(activeGalleryScope)
+    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
     set((s) => ({
       galleryImages: s.galleryImages.map((i) =>
         i.id === imageId ? { ...i, ...updated } : i
-    } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
-        set({ galleryImages: [] })
-      }
-      logStoreError('Gallery', error)
       ),
       currentJob: s.currentJob?.images
         ? {
@@ -811,12 +829,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         : s.currentJob,
     }))
   },
+  deleteImage: async (imageId) => {
+    await api(`/api/images/${buildApiPath(imageId)}`, { method: 'DELETE' })
     const activeGalleryScope = getActiveSliceScope('gallery')
     const activeCurrentJobScope = getActiveSliceScope('currentJob')
     if (activeGalleryScope) invalidateTrackedRequest(activeGalleryScope)
     if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
-  deleteImage: async (imageId) => {
-    await api(`/api/images/${buildApiPath(imageId)}`, { method: 'DELETE' })
     set((s) => ({
       galleryImages: s.galleryImages.filter((i) => i.id !== imageId),
       currentJob: s.currentJob?.images
@@ -831,15 +849,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     const sanitizedIds = sanitizeStringArray(imageIds)
     if (sanitizedIds.length === 0) return
     await api('/api/images/bulk-delete', {
-    const activeGalleryScope = getActiveSliceScope('gallery')
-    const activeCurrentJobScope = getActiveSliceScope('currentJob')
-    if (activeGalleryScope) invalidateTrackedRequest(activeGalleryScope)
-    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ imageIds: sanitizedIds }),
     })
     const idSet = new Set(sanitizedIds)
+    const activeGalleryScope = getActiveSliceScope('gallery')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
+    if (activeGalleryScope) invalidateTrackedRequest(activeGalleryScope)
+    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
     set((s) => ({
       galleryImages: s.galleryImages.filter((i) => !idSet.has(i.id)),
       currentJob: s.currentJob?.images
@@ -854,10 +872,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Settings Templates
   settingsTemplates: [],
   loadingSettingsTemplates: false,
-    const activeGalleryScope = getActiveSliceScope('gallery')
-    const activeCurrentJobScope = getActiveSliceScope('currentJob')
-    if (activeGalleryScope) invalidateTrackedRequest(activeGalleryScope)
-    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
   fetchSettingsTemplates: async (productId) => {
     const requestKey = `settingsTemplates:${productId.trim()}`
     if (updateSliceScope('settingsTemplates', requestKey)) {
@@ -869,6 +883,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await api(`/api/products/${buildApiPath(productId)}/settings-templates`)
       if (!isLatestRequest(requestKey, requestVersion)) return
       set({ settingsTemplates: data })
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ settingsTemplates: [] })
+      }
+      logStoreError('SettingsTemplates', error)
     } finally {
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ loadingSettingsTemplates: false })
@@ -884,6 +903,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         name: normalizeLabelInput(data.name),
       }),
     })
+    const activeSettingsTemplatesScope = getActiveSliceScope('settingsTemplates')
+    if (activeSettingsTemplatesScope) invalidateTrackedRequest(activeSettingsTemplatesScope)
     set((s) => ({ settingsTemplates: [...s.settingsTemplates, tmpl] }))
     return tmpl
   },
@@ -897,14 +918,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
     })
+    const activeSettingsTemplatesScope = getActiveSliceScope('settingsTemplates')
+    if (activeSettingsTemplatesScope) invalidateTrackedRequest(activeSettingsTemplatesScope)
     set((s) => ({
       settingsTemplates: s.settingsTemplates.map((t) =>
         t.id === templateId ? tmpl : data.is_active ? { ...t, is_active: false } : t
-    } catch (error) {
-      if (isLatestRequest(requestKey, requestVersion)) {
-        set({ settingsTemplates: [] })
-      }
-      logStoreError('SettingsTemplates', error)
       ),
     }))
   },
@@ -913,6 +931,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       `/api/products/${buildApiPath(productId)}/settings-templates/${buildApiPath(templateId)}`,
       { method: 'DELETE' }
     )
+    const activeSettingsTemplatesScope = getActiveSliceScope('settingsTemplates')
+    if (activeSettingsTemplatesScope) invalidateTrackedRequest(activeSettingsTemplatesScope)
     set((s) => ({ settingsTemplates: s.settingsTemplates.filter((t) => t.id !== templateId) }))
   },
   activateSettingsTemplate: async (productId, templateId) => {
@@ -921,6 +941,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_active: true }),
     })
+    const activeSettingsTemplatesScope = getActiveSliceScope('settingsTemplates')
+    if (activeSettingsTemplatesScope) invalidateTrackedRequest(activeSettingsTemplatesScope)
     set((s) => ({
       settingsTemplates: s.settingsTemplates.map((t) =>
         t.id === templateId ? tmpl : { ...t, is_active: false }
