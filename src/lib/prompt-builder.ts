@@ -59,8 +59,10 @@ export function buildStyleBlock(settings: GlobalStyleSettings): string {
 /**
  * Build the user message for Claude's prompt-refinement call.
  * Sanitizes all user-controlled and DB-sourced fields before AI interpolation.
- * Mirrors the truncation applied in buildPromptSuggestionSystemPrompt so that
- * both AI endpoints enforce identical injection / payload limits.
+ * Mirrors the truncation AND quote sanitization applied in buildPromptSuggestionSystemPrompt
+ * so that both AI endpoints enforce identical injection / payload limits.
+ * Double-quotes are replaced with a typographic alternative (″) to prevent an adversarial
+ * product name or description from injecting instructions into the assembled message.
  */
 export function buildRefinedPromptUserMessage(
   productName: string,
@@ -68,8 +70,10 @@ export function buildRefinedPromptUserMessage(
   settings: GlobalStyleSettings,
   userPrompt: string
 ): string {
-  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN)
-  const safeDesc = productDescription ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN) : null
+  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN).replace(/"/g, '\u2033')
+  const safeDesc = productDescription
+    ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN).replace(/"/g, '\u2033')
+    : null
   const safePrompt = userPrompt.slice(0, MAX_USER_PROMPT_LEN)
   const styleBlock = buildStyleBlock(settings)
   return (
@@ -188,8 +192,11 @@ export function parsePromptSuggestions(raw: string): { name: string; prompt_text
       .map((p: any) => ({
         // Cap fields so an oversized or adversarial AI response cannot push unbounded
         // strings into DB inserts or API responses downstream.
-        name: (p.name || p.title || '').trim().slice(0, MAX_SUGGESTION_NAME_LEN),
-        prompt_text: (p.prompt_text || p.promptText || p.prompt || '').trim().slice(0, MAX_USER_PROMPT_LEN),
+        // String() coercion prevents a TypeError when the AI returns a non-string value
+        // (e.g. a number) for these fields — without it, .trim() would throw and the
+        // entire response would be silently discarded by the outer catch.
+        name: String(p.name || p.title || '').trim().slice(0, MAX_SUGGESTION_NAME_LEN),
+        prompt_text: String(p.prompt_text || p.promptText || p.prompt || '').trim().slice(0, MAX_USER_PROMPT_LEN),
       }))
       .filter((p: { name: string; prompt_text: string }) => p.prompt_text.length > 0)
   } catch (err) {
