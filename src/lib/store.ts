@@ -18,6 +18,7 @@ const DEFAULT_ERROR_MESSAGE = 'Request failed'
 const MAX_ERROR_MESSAGE_LENGTH = 200
 const MAX_SUGGESTED_PROMPT_COUNT = 10
 const requestVersions = new Map<string, number>()
+const sliceScopes = new Map<string, string>()
 let aiRequestCount = 0
 
 const sanitizePathSegment = (value: string) => encodeURIComponent(value.trim())
@@ -61,6 +62,19 @@ const extractErrorMessage = (value: unknown): string | null => {
   const message = value.trim().replace(/\s+/g, ' ')
   if (!message) return null
   return message.slice(0, MAX_ERROR_MESSAGE_LENGTH)
+const updateSliceScope = (slice: string, scope: string) => {
+  const normalizedScope = scope.trim() || '_'
+  const previousScope = sliceScopes.get(slice)
+  sliceScopes.set(slice, normalizedScope)
+  return previousScope !== normalizedScope
+}
+
+const getActiveSliceScope = (slice: string) => {
+  const scope = sliceScopes.get(slice)
+  if (!scope || scope === '_') return null
+  return scope
+}
+
 }
 
 const safeParseResponse = async (res: Response) => {
@@ -82,6 +96,22 @@ interface AppState {
   projects: Project[]
   currentProject: Project | null
   loadingProjects: boolean
+const getGalleryQueryString = (
+  filters?: {
+    job_id?: string
+    approval_status?: string
+    media_type?: string
+    scene_id?: string
+  }
+) => {
+  const params = new URLSearchParams()
+  if (filters?.job_id) params.set('job_id', filters.job_id.trim())
+  if (filters?.approval_status) params.set('approval_status', filters.approval_status.trim())
+  if (filters?.media_type) params.set('media_type', filters.media_type.trim())
+  if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
+  return params.toString()
+}
+
   fetchProjects: () => Promise<void>
   fetchProject: (id: string) => Promise<void>
   createProject: (data: { name: string; description?: string }) => Promise<Project>
@@ -635,7 +665,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentJob: null,
   loadingJobs: false,
   fetchGenerationJobs: async (productId) => {
-    const requestKey = 'generationJobs'
+    const requestKey = `generationJobs:${productId.trim()}`
+    if (updateSliceScope('generationJobs', requestKey)) {
+      set({ generationJobs: [], currentJob: null, loadingJobs: false })
+    }
     const requestVersion = beginTrackedRequest(requestKey)
     const shouldShowLoading = get().generationJobs.length === 0
     if (shouldShowLoading) set({ loadingJobs: true })
@@ -669,7 +702,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     return job
   },
   fetchJobStatus: async (productId, jobId) => {
-    const requestKey = 'currentJob'
+    const requestKey = `currentJob:${productId.trim()}:${jobId.trim()}`
+    if (updateSliceScope('currentJob', requestKey)) {
+      set({ currentJob: null })
+    }
     const requestVersion = beginTrackedRequest(requestKey)
     try {
       const data = await api(`/api/products/${buildApiPath(productId)}/generate/${buildApiPath(jobId)}`)
@@ -679,7 +715,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (isLatestRequest(requestKey, requestVersion)) {
         set({ currentJob: null })
       }
-      throw error
+      logStoreError('CurrentJob', error)
     }
   },
   retryGenerationJob: async (productId, jobId) => {
@@ -723,13 +759,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   galleryImages: [],
   loadingGallery: false,
   fetchGallery: async (productId, filters) => {
-    const params = new URLSearchParams()
-    if (filters?.job_id) params.set('job_id', filters.job_id.trim())
-    if (filters?.approval_status) params.set('approval_status', filters.approval_status.trim())
-    if (filters?.media_type) params.set('media_type', filters.media_type.trim())
-    if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
-    const qs = params.toString()
-    const requestKey = 'gallery'
+    const qs = getGalleryQueryString(filters)
+    const requestKey = `gallery:${productId.trim()}:${qs || '_'}`
+    if (updateSliceScope('gallery', requestKey)) {
+      set({ galleryImages: [], loadingGallery: false })
+    }
     const requestVersion = beginTrackedRequest(requestKey)
     const shouldShowLoading = get().galleryImages.length === 0
     if (shouldShowLoading) set({ loadingGallery: true })
@@ -756,6 +790,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       galleryImages: s.galleryImages.map((i) =>
         i.id === imageId ? { ...i, ...updated } : i
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ galleryImages: [] })
+      }
+      logStoreError('Gallery', error)
       ),
       currentJob: s.currentJob?.images
         ? {
@@ -803,7 +842,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsTemplates: [],
   loadingSettingsTemplates: false,
   fetchSettingsTemplates: async (productId) => {
-    const requestKey = 'settingsTemplates'
+    const requestKey = `settingsTemplates:${productId.trim()}`
+    if (updateSliceScope('settingsTemplates', requestKey)) {
+      set({ settingsTemplates: [], loadingSettingsTemplates: false })
+    }
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingSettingsTemplates: true })
     try {
@@ -841,6 +883,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       settingsTemplates: s.settingsTemplates.map((t) =>
         t.id === templateId ? tmpl : data.is_active ? { ...t, is_active: false } : t
+    } catch (error) {
+      if (isLatestRequest(requestKey, requestVersion)) {
+        set({ settingsTemplates: [] })
+      }
+      logStoreError('SettingsTemplates', error)
       ),
     }))
   },
