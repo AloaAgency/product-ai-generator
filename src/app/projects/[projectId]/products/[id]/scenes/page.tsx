@@ -54,6 +54,12 @@ const api = async (url: string, options?: RequestInit) => {
   return res.json()
 }
 
+const fieldClassName = 'w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none'
+const selectClassName = 'w-full min-h-11 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-3 text-sm text-zinc-200 outline-none'
+const thumbButtonClassName = 'flex h-24 w-24 items-center justify-center overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 transition-colors hover:border-blue-500 sm:h-20 sm:w-20'
+const secondaryActionClassName = 'inline-flex min-h-11 items-center justify-center rounded-lg px-3 text-xs text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-200'
+const iconButtonClassName = 'inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg transition-colors'
+
 export default function ScenesPage({
   params,
 }: {
@@ -120,7 +126,7 @@ export default function ScenesPage({
     setPickerTab('gallery')
     setLoadingGallery(true)
     try {
-      const data = await api(`/api/products/${id}/gallery?media_type=image&approval_status=approved`)
+      const data = await api(`/api/products/${id}/gallery?media_type=image&approval_status=approved&limit=200`)
       setGalleryImages(data.images ?? data)
     } catch {
       setGalleryImages([])
@@ -494,8 +500,8 @@ export default function ScenesPage({
 
   return (
     <div className="min-h-screen bg-zinc-900 text-zinc-100">
-      <div className="border-b border-zinc-800 px-6 py-4">
-        <div className="flex items-center justify-between">
+      <div className="border-b border-zinc-800 px-4 py-4 sm:px-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <Clapperboard className="h-5 w-5 text-zinc-400" />
             <h1 className="text-xl font-semibold">Scenes</h1>
@@ -505,7 +511,7 @@ export default function ScenesPage({
           </div>
           <button
             onClick={() => setShowCreate(!showCreate)}
-            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+            className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 sm:w-auto"
           >
             <Plus className="h-4 w-4" />
             New Scene
@@ -513,11 +519,11 @@ export default function ScenesPage({
         </div>
       </div>
 
-      <div className="p-6 space-y-4">
+      <div className="space-y-4 p-4 sm:p-6">
         {/* Create form */}
         {showCreate && (
           <div className="rounded-xl border border-zinc-700 bg-zinc-800/50 p-5 space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-sm font-semibold text-zinc-300">Create Scene</h2>
               <span className="text-xs text-zinc-500">Key frames, prompts, and video settings</span>
             </div>
@@ -528,22 +534,22 @@ export default function ScenesPage({
                   placeholder="Scene title"
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+                  className={`${fieldClassName} focus:border-blue-500`}
                   autoFocus
                 />
                 <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 space-y-2">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Key frames</span>
                     {!supportsEndFrame(newModel) && (
                       <span className="text-[10px] text-zinc-500">LTX uses the start frame only</span>
                     )}
                   </div>
-                  <div className="flex gap-3">
+                  <div className="flex flex-wrap gap-3">
                     <div className="flex flex-col items-center gap-1">
                       <span className="text-[10px] uppercase tracking-wide text-zinc-500">Start</span>
                       <button
                         onClick={() => openFramePicker(null, 'start', 'create')}
-                        className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                        className={thumbButtonClassName}
                         title="Select start frame"
                       >
                         {renderThumb(newStartFrameId, 'Start')}
@@ -551,7 +557,7 @@ export default function ScenesPage({
                       {newStartFrameId && (
                         <button
                           onClick={() => setNewStartFrameId(null)}
-                          className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                          className={secondaryActionClassName}
                         >
                           Clear
                         </button>
@@ -562,7 +568,7 @@ export default function ScenesPage({
                         <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
                         <button
                           onClick={() => openFramePicker(null, 'end', 'create')}
-                          className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                          className={thumbButtonClassName}
                           title="Select end frame"
                         >
                           {renderThumb(newEndFrameId, 'End')}
@@ -570,7 +576,7 @@ export default function ScenesPage({
                         {newEndFrameId && (
                           <button
                             onClick={() => setNewEndFrameId(null)}
-                            className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                            className={secondaryActionClassName}
                           >
                             Clear
                           </button>
@@ -579,7 +585,7 @@ export default function ScenesPage({
                     ) : (
                       <div className="flex flex-col items-center gap-1 opacity-50">
                         <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
-                        <div className="h-20 w-20 rounded-lg border border-dashed border-zinc-700 bg-zinc-800 flex items-center justify-center">
+                        <div className="flex h-24 w-24 items-center justify-center rounded-lg border border-dashed border-zinc-700 bg-zinc-800 sm:h-20 sm:w-20">
                           <ImageIcon className="h-6 w-6 text-zinc-600" />
                         </div>
                         <span className="text-[10px] text-zinc-600">Veo only</span>
@@ -594,7 +600,7 @@ export default function ScenesPage({
                   placeholder="Frame prompt (still image description)..."
                   value={newPrompt}
                   onChange={(e) => setNewPrompt(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
+                  className={`${fieldClassName} resize-none focus:border-blue-500`}
                 />
                 {supportsEndFrame(newModel) && (
                   <textarea
@@ -602,7 +608,7 @@ export default function ScenesPage({
                     placeholder="End frame prompt (optional)..."
                     value={newEndPrompt}
                     onChange={(e) => setNewEndPrompt(e.target.value)}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
+                    className={`${fieldClassName} resize-none focus:border-blue-500`}
                   />
                 )}
                 <textarea
@@ -610,7 +616,7 @@ export default function ScenesPage({
                   placeholder="Motion prompt (video/motion description)..."
                   value={newMotionPrompt}
                   onChange={(e) => setNewMotionPrompt(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none resize-none"
+                  className={`${fieldClassName} resize-none focus:border-purple-500`}
                 />
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-1">
@@ -618,7 +624,7 @@ export default function ScenesPage({
                     <select
                       value={newModel}
                       onChange={(e) => handleNewModelChange(e.target.value)}
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                      className={selectClassName}
                     >
                       <option value="veo3">Veo 3</option>
                       <option value="ltx">LTX-2</option>
@@ -629,7 +635,7 @@ export default function ScenesPage({
                     <select
                       value={newResolution}
                       onChange={(e) => setNewResolution(e.target.value)}
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                      className={selectClassName}
                     >
                       {(isLtxModel(newModel) ? LTX_RESOLUTIONS : VEO_RESOLUTIONS).map((res) => (
                         <option key={res} value={res}>{res}</option>
@@ -642,7 +648,7 @@ export default function ScenesPage({
                       <select
                         value={newAspectRatio}
                         onChange={(e) => setNewAspectRatio(e.target.value)}
-                        className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                        className={selectClassName}
                       >
                         {VEO_ASPECT_RATIOS.map((ratio) => (
                           <option key={ratio} value={ratio}>{ratio}</option>
@@ -657,20 +663,21 @@ export default function ScenesPage({
                         type="number"
                         min={1}
                         step={1}
+                        inputMode="numeric"
                         value={newDurationInput}
                         onChange={(e) => setNewDurationInput(e.target.value)}
                         onBlur={() => {
                           const parsed = parsePositiveNumber(newDurationInput)
                           setNewDurationInput(String(parsed ?? 1))
                         }}
-                        className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                        className={selectClassName}
                       />
                     ) : veoRequires8s(newResolution, !!newStartFrameId, !!newEndFrameId) ? (
                       <>
                         <select
                           value={8}
                           disabled
-                          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none opacity-60 cursor-not-allowed"
+                          className={`${selectClassName} cursor-not-allowed opacity-60`}
                         >
                           <option value={8}>8</option>
                         </select>
@@ -680,7 +687,7 @@ export default function ScenesPage({
                       <select
                         value={normalizeDurationValue(newModel, newDurationInput, newResolution, !!newStartFrameId, !!newEndFrameId) ?? DEFAULT_VEO.duration}
                         onChange={(e) => setNewDurationInput(e.target.value)}
-                        className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                        className={selectClassName}
                       >
                         {VEO_DURATIONS.map((duration) => (
                           <option key={duration} value={duration}>{duration}</option>
@@ -695,21 +702,22 @@ export default function ScenesPage({
                         type="number"
                         min={1}
                         step={1}
+                        inputMode="numeric"
                         value={newFpsInput}
                         onChange={(e) => setNewFpsInput(e.target.value)}
                         onBlur={() => {
                           const parsed = parsePositiveNumber(newFpsInput)
                           setNewFpsInput(String(parsed ?? 1))
                         }}
-                        className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                        className={selectClassName}
                       />
                     </div>
                   )}
-                  <div className="flex flex-col items-start">
+                  <div className="flex flex-col items-start sm:justify-end">
                     <button
                       onClick={() => setNewGenerateAudio(!newGenerateAudio)}
                       disabled={!supportsAudioToggle(newModel)}
-                      className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                       title={!supportsAudioToggle(newModel) ? 'Audio toggle is supported for LTX only' : undefined}
                     >
                       {newGenerateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
@@ -722,18 +730,18 @@ export default function ScenesPage({
                 </div>
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row">
               <button
                 onClick={handleCreate}
                 disabled={creating || !newTitle.trim()}
-                className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
+                className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-40"
               >
                 {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                 Create
               </button>
               <button
                 onClick={() => setShowCreate(false)}
-                className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200 transition-colors"
+                className="min-h-11 rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-400 transition-colors hover:text-zinc-200"
               >
                 Cancel
               </button>
@@ -773,21 +781,21 @@ export default function ScenesPage({
                           type="text"
                           value={editTitle}
                           onChange={(e) => setEditTitle(e.target.value)}
-                          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
+                          className={`${fieldClassName} focus:border-blue-500`}
                         />
                         <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 space-y-2">
-                          <div className="flex items-center justify-between">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
                             <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Key frames</span>
                             {!supportsEndFrame(editModel) && (
                               <span className="text-[10px] text-zinc-500">LTX uses the start frame only</span>
                             )}
                           </div>
-                          <div className="flex gap-3">
+                          <div className="flex flex-wrap gap-3">
                             <div className="flex flex-col items-center gap-1">
                               <span className="text-[10px] uppercase tracking-wide text-zinc-500">Start</span>
                               <button
                                 onClick={() => openFramePicker(scene.id, 'start', 'edit')}
-                                className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                                className={thumbButtonClassName}
                                 title="Select start frame"
                               >
                                 {renderThumb(scene.start_frame_image_id, 'Start')}
@@ -795,7 +803,7 @@ export default function ScenesPage({
                               {scene.start_frame_image_id && (
                                 <button
                                   onClick={() => clearSceneFrame(scene.id, 'start')}
-                                  className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                                  className={secondaryActionClassName}
                                 >
                                   Clear
                                 </button>
@@ -804,17 +812,17 @@ export default function ScenesPage({
                             {supportsEndFrame(editModel) ? (
                               <div className="flex flex-col items-center gap-1">
                                 <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
-                                <button
-                                  onClick={() => openFramePicker(scene.id, 'end', 'edit')}
-                                  className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
-                                  title="Select end frame"
-                                >
+                              <button
+                                onClick={() => openFramePicker(scene.id, 'end', 'edit')}
+                                className={thumbButtonClassName}
+                                title="Select end frame"
+                              >
                                   {renderThumb(scene.end_frame_image_id, 'End')}
                                 </button>
                                 {scene.end_frame_image_id && (
                                   <button
                                     onClick={() => clearSceneFrame(scene.id, 'end')}
-                                    className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                                    className={secondaryActionClassName}
                                   >
                                     Clear
                                   </button>
@@ -823,7 +831,7 @@ export default function ScenesPage({
                             ) : (
                               <div className="flex flex-col items-center gap-1 opacity-50">
                                 <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
-                                <div className="h-20 w-20 rounded-lg border border-dashed border-zinc-700 bg-zinc-800 flex items-center justify-center">
+                                <div className="flex h-24 w-24 items-center justify-center rounded-lg border border-dashed border-zinc-700 bg-zinc-800 sm:h-20 sm:w-20">
                                   <ImageIcon className="h-6 w-6 text-zinc-600" />
                                 </div>
                                 <span className="text-[10px] text-zinc-600">Veo only</span>
@@ -838,7 +846,7 @@ export default function ScenesPage({
                           value={editPrompt}
                           onChange={(e) => setEditPrompt(e.target.value)}
                           placeholder="Frame prompt..."
-                          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
+                          className={`${fieldClassName} resize-none focus:border-blue-500`}
                         />
                         {supportsEndFrame(editModel) && (
                           <textarea
@@ -846,7 +854,7 @@ export default function ScenesPage({
                             value={editEndPrompt}
                             onChange={(e) => setEditEndPrompt(e.target.value)}
                             placeholder="End frame prompt (optional)..."
-                            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
+                            className={`${fieldClassName} resize-none focus:border-blue-500`}
                           />
                         )}
                         <textarea
@@ -854,7 +862,7 @@ export default function ScenesPage({
                           value={editMotionPrompt}
                           onChange={(e) => setEditMotionPrompt(e.target.value)}
                           placeholder="Motion prompt..."
-                          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none resize-none"
+                          className={`${fieldClassName} resize-none focus:border-purple-500`}
                         />
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div className="space-y-1">
@@ -862,7 +870,7 @@ export default function ScenesPage({
                             <select
                               value={editModel}
                               onChange={(e) => handleEditModelChange(e.target.value)}
-                              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                              className={selectClassName}
                             >
                               <option value="veo3">Veo 3</option>
                               <option value="ltx">LTX-2</option>
@@ -873,7 +881,7 @@ export default function ScenesPage({
                             <select
                               value={editResolution}
                               onChange={(e) => setEditResolution(e.target.value)}
-                              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                              className={selectClassName}
                             >
                               {(isLtxModel(editModel) ? LTX_RESOLUTIONS : VEO_RESOLUTIONS).map((res) => (
                                 <option key={res} value={res}>{res}</option>
@@ -886,7 +894,7 @@ export default function ScenesPage({
                               <select
                                 value={editAspectRatio}
                                 onChange={(e) => setEditAspectRatio(e.target.value)}
-                                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                                className={selectClassName}
                               >
                                 {VEO_ASPECT_RATIOS.map((ratio) => (
                                   <option key={ratio} value={ratio}>{ratio}</option>
@@ -901,13 +909,14 @@ export default function ScenesPage({
                                 type="number"
                                 min={1}
                                 step={1}
+                                inputMode="numeric"
                                 value={editDurationInput}
                                 onChange={(e) => setEditDurationInput(e.target.value)}
                                 onBlur={() => {
                                   const parsed = parsePositiveNumber(editDurationInput)
                                   setEditDurationInput(String(parsed ?? 1))
                                 }}
-                                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                                className={selectClassName}
                               />
                             ) : (() => {
                               const scene = scenes.find((s) => s.id === editingId)
@@ -917,7 +926,7 @@ export default function ScenesPage({
                                   <select
                                     value={8}
                                     disabled
-                                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none opacity-60 cursor-not-allowed"
+                                    className={`${selectClassName} cursor-not-allowed opacity-60`}
                                   >
                                     <option value={8}>8</option>
                                   </select>
@@ -927,7 +936,7 @@ export default function ScenesPage({
                                 <select
                                   value={normalizeDurationValue(editModel, editDurationInput, editResolution, !!scene?.start_frame_image_id, !!scene?.end_frame_image_id) ?? DEFAULT_VEO.duration}
                                   onChange={(e) => setEditDurationInput(e.target.value)}
-                                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                                  className={selectClassName}
                                 >
                                   {VEO_DURATIONS.map((duration) => (
                                     <option key={duration} value={duration}>{duration}</option>
@@ -943,21 +952,22 @@ export default function ScenesPage({
                                 type="number"
                                 min={1}
                                 step={1}
+                                inputMode="numeric"
                                 value={editFpsInput}
                                 onChange={(e) => setEditFpsInput(e.target.value)}
                                 onBlur={() => {
                                   const parsed = parsePositiveNumber(editFpsInput)
                                   setEditFpsInput(String(parsed ?? 1))
                                 }}
-                                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                                className={selectClassName}
                               />
                             </div>
                           )}
-                          <div className="flex flex-col items-start">
+                          <div className="flex flex-col items-start sm:justify-end">
                             <button
                               onClick={() => setEditGenerateAudio(!editGenerateAudio)}
                               disabled={!supportsAudioToggle(editModel)}
-                              className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+                              className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                               title={!supportsAudioToggle(editModel) ? 'Audio toggle is supported for LTX only' : undefined}
                             >
                               {editGenerateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
@@ -970,18 +980,18 @@ export default function ScenesPage({
                         </div>
                       </div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-col gap-2 sm:flex-row">
                       <button
                         onClick={handleSave}
                         disabled={saving}
-                        className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
+                        className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-40"
                       >
                         {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                         Save
                       </button>
                       <button
                         onClick={() => setEditingId(null)}
-                        className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                        className="min-h-11 rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-400 transition-colors hover:text-zinc-200"
                       >
                         Cancel
                       </button>
@@ -991,9 +1001,9 @@ export default function ScenesPage({
                   /* View mode */
                   <>
                     {/* Header */}
-                    <div className="flex items-start justify-between mb-3">
+                    <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="space-y-1">
-                        <div className="flex items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-3">
                           <Clapperboard className="h-4 w-4 text-zinc-500" />
                           <h3 className="text-sm font-semibold text-zinc-100">
                             {scene.title || 'Untitled Scene'}
@@ -1025,24 +1035,25 @@ export default function ScenesPage({
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-2 self-end sm:self-auto">
                         <button
                           onClick={() => startEdit(scene)}
-                          className="rounded p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700 transition-colors"
+                          className={`${iconButtonClassName} text-zinc-500 hover:bg-zinc-700 hover:text-zinc-200`}
+                          aria-label={`Edit ${scene.title || 'scene'}`}
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
                         {confirmDeleteId === scene.id ? (
-                          <div className="flex items-center gap-1">
+                          <div className="flex flex-wrap items-center justify-end gap-2">
                             <button
                               onClick={() => handleDelete(scene.id)}
-                              className="rounded px-2 py-1 text-xs font-medium text-red-400 hover:bg-red-900/30 transition-colors"
+                              className="min-h-11 rounded-lg px-3 py-2 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/30"
                             >
                               Confirm
                             </button>
                             <button
                               onClick={() => setConfirmDeleteId(null)}
-                              className="rounded px-2 py-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                              className="min-h-11 rounded-lg px-3 py-2 text-sm text-zinc-500 transition-colors hover:text-zinc-300"
                             >
                               Cancel
                             </button>
@@ -1050,7 +1061,8 @@ export default function ScenesPage({
                         ) : (
                           <button
                             onClick={() => setConfirmDeleteId(scene.id)}
-                            className="rounded p-1.5 text-zinc-500 hover:text-red-400 hover:bg-zinc-700 transition-colors"
+                            className={`${iconButtonClassName} text-zinc-500 hover:bg-zinc-700 hover:text-red-400`}
+                            aria-label={`Delete ${scene.title || 'scene'}`}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -1059,12 +1071,12 @@ export default function ScenesPage({
                     </div>
 
                     {/* Frame thumbnails */}
-                    <div className="flex gap-3 mb-3">
+                    <div className="mb-3 flex flex-wrap gap-3">
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-[10px] uppercase tracking-wide text-zinc-500">Start</span>
                         <button
                           onClick={() => openFramePicker(scene.id, 'start', 'edit')}
-                          className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                          className={thumbButtonClassName}
                           title="Click to select start frame"
                         >
                           {renderThumb(scene.start_frame_image_id, 'Start')}
@@ -1075,7 +1087,7 @@ export default function ScenesPage({
                           <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
                           <button
                             onClick={() => openFramePicker(scene.id, 'end', 'edit')}
-                            className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                            className={thumbButtonClassName}
                             title="Click to select end frame"
                           >
                             {renderThumb(scene.end_frame_image_id, 'End')}
@@ -1084,7 +1096,7 @@ export default function ScenesPage({
                       ) : (
                         <div className="flex flex-col items-center gap-1 opacity-50">
                           <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
-                          <div className="h-20 w-20 rounded-lg border border-dashed border-zinc-700 bg-zinc-800 flex items-center justify-center">
+                          <div className="flex h-24 w-24 items-center justify-center rounded-lg border border-dashed border-zinc-700 bg-zinc-800 sm:h-20 sm:w-20">
                             <ImageIcon className="h-6 w-6 text-zinc-600" />
                           </div>
                           <span className="text-[10px] text-zinc-600">Veo only</span>
@@ -1113,7 +1125,7 @@ export default function ScenesPage({
                     )}
 
                     {/* Actions */}
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                       {isGenVideo ? (
                         <div className="flex items-center gap-2 text-sm text-zinc-400">
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -1123,7 +1135,7 @@ export default function ScenesPage({
                         <button
                           onClick={() => generateVideo(scene.id)}
                           disabled={!hasMotion}
-                          className="flex items-center gap-1.5 rounded-lg bg-purple-600 px-3 py-1.5 text-sm text-white hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                          className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-purple-600 px-4 py-2 text-sm text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-40"
                           title={!hasMotion ? 'Add a motion prompt first' : undefined}
                         >
                           <Video className="h-3.5 w-3.5" />
@@ -1139,7 +1151,7 @@ export default function ScenesPage({
                             setExpandedScene(null)
                           }
                         }}
-                        className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-zinc-400 hover:bg-zinc-700 transition-colors"
+                        className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-700"
                       >
                         <Film className="h-3.5 w-3.5" />
                         Videos {videos.length > 0 && `(${videos.length})`}
@@ -1167,12 +1179,12 @@ export default function ScenesPage({
                         {videos.length === 0 ? (
                           <p className="text-xs text-zinc-500">No videos generated yet.</p>
                         ) : (
-                          <div className="flex gap-2 overflow-x-auto">
+                          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                             {videos.map((v) => (
-                              <div key={v.id} className="relative flex-shrink-0">
+                              <div key={v.id} className="relative min-w-0">
                                 <button
                                   onClick={() => setPlayingVideoUrl(v.public_url)}
-                                  className="relative h-20 w-32 overflow-hidden rounded-lg border border-zinc-600 bg-zinc-700 hover:border-zinc-400 transition-colors"
+                                  className="relative aspect-video w-full overflow-hidden rounded-lg border border-zinc-600 bg-zinc-700 transition-colors hover:border-zinc-400"
                                 >
                                   {v.public_url ? (
                                     <video
@@ -1196,7 +1208,7 @@ export default function ScenesPage({
                                 {v.public_url && (
                                   <button
                                     onClick={() => handleDownloadVideo(v.public_url!, scene.title || undefined)}
-                                    className="absolute top-1 right-1 rounded bg-zinc-800/80 p-1 text-zinc-400 hover:text-zinc-100 transition-colors"
+                                    className="absolute right-1 top-1 inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg bg-zinc-800/80 p-1 text-zinc-400 transition-colors hover:text-zinc-100"
                                     title="Download video"
                                   >
                                     <Download className="h-3 w-3" />
@@ -1218,37 +1230,41 @@ export default function ScenesPage({
 
       {/* Frame picker modal */}
       {framePicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={() => setFramePicker(null)}>
-          <div className="relative w-full max-w-2xl mx-4 rounded-xl border border-zinc-700 bg-zinc-900 p-5" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/80 p-3 sm:items-center sm:p-4" onClick={() => setFramePicker(null)}>
+          <div
+            className="relative flex max-h-[calc(100vh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 p-4 sm:max-h-[85vh] sm:p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-zinc-200">
                 Select {framePicker.slot === 'start' ? 'Start' : 'End'} Frame
               </h2>
               <button
                 onClick={() => setFramePicker(null)}
-                className="rounded p-1 text-zinc-400 hover:text-zinc-100"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                aria-label="Close frame picker"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
             {/* Tabs */}
-            <div className="flex gap-2 mb-4 border-b border-zinc-700 pb-2">
+            <div className="mb-4 grid grid-cols-2 gap-2 border-b border-zinc-700 pb-2">
               <button
                 onClick={() => setPickerTab('gallery')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${pickerTab === 'gallery' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`min-h-11 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${pickerTab === 'gallery' ? 'border-b-2 border-blue-400 text-blue-400' : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'}`}
               >
                 Gallery
               </button>
               <button
                 onClick={() => !uploadDisabled && setPickerTab('upload')}
                 disabled={uploadDisabled}
-                className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${
+                className={`min-h-11 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                   pickerTab === 'upload'
-                    ? 'text-blue-400 border-b-2 border-blue-400'
+                    ? 'border-b-2 border-blue-400 text-blue-400'
                     : uploadDisabled
                       ? 'text-zinc-600 cursor-not-allowed'
-                      : 'text-zinc-400 hover:text-zinc-200'
+                      : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
                 }`}
               >
                 Upload
@@ -1256,7 +1272,7 @@ export default function ScenesPage({
             </div>
 
             {pickerTab === 'gallery' ? (
-              <div className="max-h-80 overflow-y-auto">
+              <div className="max-h-[60vh] flex-1 overflow-y-auto pr-1">
                 {loadingGallery ? (
                   <div className="flex justify-center py-8">
                     <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
@@ -1264,12 +1280,12 @@ export default function ScenesPage({
                 ) : galleryImages.length === 0 ? (
                   <p className="text-center text-sm text-zinc-500 py-8">No approved images in gallery.</p>
                 ) : (
-                  <div className="grid grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                     {galleryImages.map((img) => (
                       <button
                         key={img.id}
                         onClick={() => selectGalleryImage(img.id)}
-                        className="h-24 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 hover:border-blue-500 transition-colors"
+                        className="min-h-24 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 transition-colors hover:border-blue-500"
                       >
                         {(img.thumb_public_url || img.public_url) ? (
                           // eslint-disable-next-line @next/next/no-img-element
@@ -1293,7 +1309,7 @@ export default function ScenesPage({
                 Upload is available after the scene is created.
               </div>
             ) : (
-              <div className="py-8 flex flex-col items-center gap-3">
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 py-8">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -1309,7 +1325,7 @@ export default function ScenesPage({
                 ) : (
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-zinc-700 px-12 py-8 text-zinc-400 hover:border-blue-500 hover:text-blue-400 transition-colors"
+                    className="flex min-h-44 w-full max-w-sm flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-zinc-700 px-6 py-8 text-center text-zinc-400 transition-colors hover:border-blue-500 hover:text-blue-400"
                   >
                     <Upload className="h-8 w-8" />
                     <span className="text-sm font-medium">Click to upload an image</span>
@@ -1324,19 +1340,23 @@ export default function ScenesPage({
 
       {/* Video playback overlay */}
       {playingVideoUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={() => setPlayingVideoUrl(null)}>
-          <div className="relative w-full max-w-4xl mx-4" onClick={(e) => e.stopPropagation()}>
-            <div className="absolute -top-10 right-0 flex items-center gap-2">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/80 p-3 sm:items-center sm:p-4" onClick={() => setPlayingVideoUrl(null)}>
+          <div
+            className="relative w-full max-w-4xl rounded-xl border border-zinc-700 bg-zinc-950/95 p-3 sm:p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-end gap-2">
               <button
                 onClick={() => handleDownloadVideo(playingVideoUrl)}
-                className="rounded p-1 text-zinc-400 hover:text-zinc-100"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
                 title="Download video"
               >
                 <Download className="h-6 w-6" />
               </button>
               <button
                 onClick={() => setPlayingVideoUrl(null)}
-                className="rounded p-1 text-zinc-400 hover:text-zinc-100"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                aria-label="Close video player"
               >
                 <X className="h-6 w-6" />
               </button>
@@ -1345,7 +1365,7 @@ export default function ScenesPage({
               src={playingVideoUrl}
               controls
               autoPlay
-              className="w-full rounded-lg"
+              className="max-h-[70vh] w-full rounded-lg bg-black"
             />
           </div>
         </div>

@@ -6,7 +6,7 @@ import sharp from 'sharp'
 import ffmpeg from 'fluent-ffmpeg'
 import { execSync } from 'child_process'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, dirname, basename } from 'path'
 import { randomUUID } from 'crypto'
 import { writeFile, readFile, unlink, access } from 'fs/promises'
 
@@ -14,7 +14,10 @@ import { writeFile, readFile, unlink, access } from 'fs/promises'
 // then fall back to system ffmpeg
 async function resolveFfmpegPath(): Promise<string | null> {
   try {
-    // ffmpeg-static path can be mangled by bundlers, so verify it exists
+    // ffmpeg-static path can be mangled by bundlers, so verify it exists.
+    // require() is intentional here — dynamic loading so a missing optional
+    // dependency is caught at runtime rather than at module parse time.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const ffmpegStatic = require('ffmpeg-static') as string
     if (ffmpegStatic) {
       await access(ffmpegStatic)
@@ -28,12 +31,30 @@ async function resolveFfmpegPath(): Promise<string | null> {
   return null
 }
 
-let ffmpegPathResolved = false
-async function ensureFfmpegPath() {
-  if (ffmpegPathResolved) return
-  const p = await resolveFfmpegPath()
-  if (p) ffmpeg.setFfmpegPath(p)
-  ffmpegPathResolved = true
+// Cache the resolution promise so concurrent callers share the same in-flight
+// work rather than racing to call setFfmpegPath multiple times.
+// The promise is cleared on failure so subsequent calls can retry (e.g. if
+// ffmpeg is installed after the server starts).
+let ffmpegPathPromise: Promise<void> | null = null
+function ensureFfmpegPath(): Promise<void> {
+  if (!ffmpegPathPromise) {
+    ffmpegPathPromise = resolveFfmpegPath()
+      .then((p) => {
+        if (!p) {
+          throw new Error(
+            'ffmpeg not found: install the ffmpeg-static package or ensure ffmpeg is on PATH'
+          )
+        }
+        ffmpeg.setFfmpegPath(p)
+      })
+      .catch((err) => {
+        // Reset on any failure so subsequent calls can retry rather than
+        // receiving a permanently cached rejection.
+        ffmpegPathPromise = null
+        throw err
+      })
+  }
+  return ffmpegPathPromise
 }
 
 /**
@@ -55,6 +76,7 @@ export const slugify = (text: string, maxLength = 50): string => {
 export const resolveExtension = (mimeType: string): string => {
   if (mimeType === 'image/jpeg') return 'jpg'
   if (mimeType === 'image/webp') return 'webp'
+  if (mimeType === 'image/heic' || mimeType === 'image/heif') return 'heic'
   return 'png'
 }
 
@@ -88,50 +110,73 @@ export const buildImageStoragePath = (
 }
 
 /**
+ * Build a sibling-folder path for derived assets (e.g. thumbnails, previews).
+ * Given `products/123/jobs/456/gen-01.png` and subfolder `thumbs`, returns
+ * `products/123/jobs/456/thumbs/gen-01.webp`.
+ */
+const buildDerivedPath = (storagePath: string, subfolder: string, extension: string): string => {
+  const dir = dirname(storagePath)
+  const baseName = basename(storagePath).replace(/\.[^/.]+$/, '')
+  const fileName = `${baseName}.${extension}`
+  return dir === '.' ? `${subfolder}/${fileName}` : `${dir}/${subfolder}/${fileName}`
+}
+
+/**
  * Build thumbnail storage path
  */
-export const buildThumbnailPath = (storagePath: string, extension: string): string => {
-  const lastSlash = storagePath.lastIndexOf('/')
-  const dir = lastSlash === -1 ? '' : storagePath.slice(0, lastSlash)
-  const fileName = lastSlash === -1 ? storagePath : storagePath.slice(lastSlash + 1)
-  const baseName = fileName.replace(/\.[^/.]+$/, '')
-  const suffix = `${baseName}.${extension}`
-  return dir ? `${dir}/thumbs/${suffix}` : `thumbs/${suffix}`
-}
+export const buildThumbnailPath = (storagePath: string, extension: string): string =>
+  buildDerivedPath(storagePath, 'thumbs', extension)
 
 /**
  * Build preview storage path
  */
-export const buildPreviewPath = (storagePath: string, extension: string): string => {
-  const lastSlash = storagePath.lastIndexOf('/')
-  const dir = lastSlash === -1 ? '' : storagePath.slice(0, lastSlash)
-  const fileName = lastSlash === -1 ? storagePath : storagePath.slice(lastSlash + 1)
-  const baseName = fileName.replace(/\.[^/.]+$/, '')
-  const suffix = `${baseName}.${extension}`
-  return dir ? `${dir}/previews/${suffix}` : `previews/${suffix}`
+export const buildPreviewPath = (storagePath: string, extension: string): string =>
+  buildDerivedPath(storagePath, 'previews', extension)
+
+/** Resize an image buffer to a WebP of the given width and quality. */
+async function resizeToWebP(
+  buffer: Buffer,
+  width: number,
+  quality: number
+): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
+  if (buffer.length === 0) {
+    throw new Error('resizeToWebP: buffer is empty')
+  }
+  const outBuffer = await sharp(buffer)
+    .rotate()
+    .resize({ width, withoutEnlargement: true })
+    .webp({ quality })
+    .toBuffer()
+  return { buffer: outBuffer, mimeType: 'image/webp', extension: 'webp' }
 }
 
 /**
  * Generate a resized thumbnail buffer (480px WebP)
  */
-export const createThumbnail = async (
+export const createThumbnail = (
   buffer: Buffer,
   width = 480
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => {
-  const pipeline = sharp(buffer).rotate().resize({ width, withoutEnlargement: true }).webp({ quality: 72 })
-  return { buffer: await pipeline.toBuffer(), mimeType: 'image/webp', extension: 'webp' }
-}
+): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => resizeToWebP(buffer, width, 72)
 
 /**
  * Generate a resized preview buffer (1600px WebP)
  */
-export const createPreview = async (
+export const createPreview = (
   buffer: Buffer,
   width = 1600
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => {
-  const pipeline = sharp(buffer).rotate().resize({ width, withoutEnlargement: true }).webp({ quality: 82 })
-  return { buffer: await pipeline.toBuffer(), mimeType: 'image/webp', extension: 'webp' }
-}
+): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => resizeToWebP(buffer, width, 82)
+
+/**
+ * Generate thumbnail and preview in parallel from the same source buffer.
+ * Equivalent to calling createThumbnail + createPreview concurrently —
+ * cuts Sharp processing time roughly in half vs sequential calls.
+ */
+export const createThumbnailAndPreview = (
+  buffer: Buffer
+): Promise<[
+  { buffer: Buffer; mimeType: string; extension: string },
+  { buffer: Buffer; mimeType: string; extension: string }
+]> => Promise.all([createThumbnail(buffer), createPreview(buffer)])
 
 /** Thresholds for reference image compression */
 const REF_MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
@@ -151,6 +196,9 @@ export type CompressResult = {
  * Returns the original buffer unchanged when already within limits.
  */
 export const compressReferenceImage = async (buffer: Buffer): Promise<CompressResult> => {
+  if (buffer.length === 0) {
+    throw new Error('compressReferenceImage: buffer is empty')
+  }
   const originalSize = buffer.length
   const meta = await sharp(buffer).metadata()
   const w = meta.width ?? 0
@@ -170,16 +218,13 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
     }
   }
 
-  let pipeline = sharp(buffer).rotate()
-  if (needsResize) {
-    pipeline = pipeline.resize({
-      width: REF_MAX_DIMENSION,
-      height: REF_MAX_DIMENSION,
-      fit: 'inside',
-      withoutEnlargement: true,
-    })
-  }
-  const compressed = await pipeline.webp({ quality: 90 }).toBuffer()
+  // Build the Sharp pipeline step-by-step so each transformation is explicit.
+  // Always rotate first to honour EXIF orientation before any resize operation.
+  const base = sharp(buffer).rotate()
+  const resized = needsResize
+    ? base.resize({ width: REF_MAX_DIMENSION, height: REF_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
+    : base
+  const compressed = await resized.webp({ quality: 90 }).toBuffer()
 
   return {
     buffer: compressed,
@@ -199,6 +244,10 @@ export const extractVideoThumbnail = async (
   videoBuffer: Buffer,
   width = 480
 ): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => {
+  if (videoBuffer.length === 0) {
+    throw new Error('extractVideoThumbnail: video buffer is empty')
+  }
+
   await ensureFfmpegPath()
 
   const id = randomUUID()
@@ -209,13 +258,17 @@ export const extractVideoThumbnail = async (
     await writeFile(tmpVideo, videoBuffer)
 
     await new Promise<void>((resolve, reject) => {
-      ffmpeg(tmpVideo)
+      const ff = ffmpeg(tmpVideo)
         .seekInput(0.1)
         .frames(1)
         .outputOptions('-update', '1')
         .output(tmpFrame)
-        .on('end', () => resolve())
-        .on('error', (err: Error) => reject(err))
+      const timer = setTimeout(() => {
+        ff.kill('SIGKILL')
+        reject(new Error('extractVideoThumbnail: timed out after 30s'))
+      }, 30_000)
+      ff.on('end', () => { clearTimeout(timer); resolve() })
+        .on('error', (err: Error) => { clearTimeout(timer); reject(err) })
         .run()
     })
 

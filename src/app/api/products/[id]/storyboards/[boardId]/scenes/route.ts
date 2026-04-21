@@ -16,7 +16,7 @@ export async function GET(
       .eq('storyboard_id', boardId)
       .order('scene_order', { ascending: true })
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[StoryboardScenes GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data || [])
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -28,9 +28,12 @@ export async function POST(
   { params }: { params: Promise<{ id: string; boardId: string }> }
 ) {
   try {
-    const { boardId } = await params
+    const { id: productId, boardId } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
 
     // Determine next scene_order
     const { data: existing } = await supabase
@@ -45,6 +48,7 @@ export async function POST(
     const { data, error } = await supabase
       .from(T.storyboard_scenes)
       .insert({
+        product_id: productId,
         storyboard_id: boardId,
         scene_order: nextOrder,
         title: body.title || null,
@@ -55,7 +59,7 @@ export async function POST(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[StoryboardScenes POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

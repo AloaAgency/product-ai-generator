@@ -3,6 +3,78 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
+const DEFAULT_PAGE_SIZE = 48
+const GALLERY_IMAGE_SELECT = [
+  'id',
+  'product_id',
+  'job_id',
+  'scene_id',
+  'scene_name',
+  'variation_number',
+  'storage_path',
+  'thumb_storage_path',
+  'preview_storage_path',
+  'mime_type',
+  'file_size',
+  'approval_status',
+  'notes',
+  'media_type',
+  'created_at',
+].join(', ')
+
+type GalleryImageRecord = {
+  id: string
+  product_id: string | null
+  job_id: string | null
+  scene_id: string | null
+  scene_name: string | null
+  variation_number: number | null
+  storage_path: string | null
+  thumb_storage_path: string | null
+  preview_storage_path: string | null
+  mime_type: string | null
+  file_size: number | null
+  approval_status: string | null
+  notes: string | null
+  media_type: string | null
+  created_at: string | null
+}
+
+type ProductRecord = {
+  id: string
+  name: string | null
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applyProjectGalleryFilters(q: any, {
+  productIds,
+  approvalStatus,
+  mediaType,
+}: {
+  productIds: string[]
+  approvalStatus: string | null
+  mediaType: string | null
+}) {
+  let result = productIds.length === 1
+    ? q.eq('product_id', productIds[0])
+    : q.in('product_id', productIds)
+
+  if (approvalStatus === 'rejected') {
+    result = result.eq('approval_status', 'rejected')
+  } else if (approvalStatus === 'request_changes') {
+    result = result.eq('approval_status', 'request_changes')
+  } else if (approvalStatus) {
+    result = result.eq('approval_status', approvalStatus)
+  } else {
+    result = result.or('approval_status.is.null,approval_status.in.(approved,pending)')
+  }
+
+  if (mediaType && mediaType !== 'all') {
+    result = result.eq('media_type', mediaType)
+  }
+
+  return result
+}
 
 export async function GET(
   request: NextRequest,
@@ -13,11 +85,12 @@ export async function GET(
   const approvalStatus = searchParams.get('approval_status')
   const mediaType = searchParams.get('media_type')
   const productIdFilter = searchParams.get('product_id')
+  const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_PAGE_SIZE, 1), 200)
+  const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
 
   try {
     const supabase = createServiceClient()
 
-    // 1. Fetch all products for this project
     let productsQuery = supabase
       .from(T.products)
       .select('id, name')
@@ -28,229 +101,188 @@ export async function GET(
       productsQuery = productsQuery.eq('id', productIdFilter)
     }
 
-    const { data: products, error: productsError } = await productsQuery
+    const { data: products, error: productsError } = await productsQuery as {
+      data: ProductRecord[] | null
+      error: { message: string } | null
+    }
+
     if (productsError) {
       return NextResponse.json({ error: 'Failed to fetch products' }, { status: 500 })
     }
+
     if (!products || products.length === 0) {
-      return NextResponse.json({ products: [] })
-    }
-
-    const productIds = products.map((p) => p.id)
-    const productNameMap = new Map(products.map((p) => [p.id, p.name]))
-
-    // 2. Fetch all generation_jobs for these products
-    const { data: jobs } = await supabase
-      .from(T.generation_jobs)
-      .select('id, product_id, prompt_template_id, final_prompt')
-      .in('product_id', productIds)
-
-    const jobIds = (jobs || []).map((j) => j.id)
-    const jobProductMap = new Map((jobs || []).map((j) => [j.id, j.product_id]))
-    const jobPromptMap = new Map((jobs || []).map((j) => [j.id, j.final_prompt as string | null]))
-
-    // 3. Fetch storyboard scenes for these products
-    const { data: boards } = await supabase
-      .from(T.storyboards)
-      .select('id, product_id')
-      .in('product_id', productIds)
-
-    const boardIds = (boards || []).map((b) => b.id)
-    const boardProductMap = new Map((boards || []).map((b) => [b.id, b.product_id]))
-
-    let sceneIds: string[] = []
-    const sceneProductMap = new Map<string, string>()
-
-    if (boardIds.length > 0) {
-      const { data: scenes } = await supabase
-        .from(T.storyboard_scenes)
-        .select('id, storyboard_id')
-        .in('storyboard_id', boardIds)
-
-      if (scenes) {
-        sceneIds = scenes.map((s) => s.id)
-        for (const scene of scenes) {
-          const prodId = boardProductMap.get(scene.storyboard_id!)
-          if (prodId) sceneProductMap.set(scene.id, prodId)
-        }
-      }
-    }
-
-    // 4. Fetch generated_images matching jobs OR scenes
-    if (jobIds.length === 0 && sceneIds.length === 0) {
       return NextResponse.json({
-        products: products.map((p) => ({ product_id: p.id, product_name: p.name, images: [] })),
+        products: [],
+        total: 0,
+        offset,
+        limit,
+        has_more: false,
+        rejected_count: 0,
+        request_changes_count: 0,
       })
     }
 
-    let imagesQuery = supabase
-      .from(T.generated_images)
-      .select('*')
+    const productIds = products.map((product) => product.id)
+    const countQuery = applyProjectGalleryFilters(
+      supabase.from(T.generated_images).select('id', { count: 'exact', head: true }),
+      { productIds, approvalStatus, mediaType }
+    )
+    const { count: totalCount, error: countError } = await countQuery
 
-    if (jobIds.length > 0 && sceneIds.length > 0) {
-      imagesQuery = imagesQuery.or(
-        `job_id.in.(${jobIds.join(',')}),scene_id.in.(${sceneIds.join(',')})`
-      )
-    } else if (jobIds.length > 0) {
-      imagesQuery = imagesQuery.in('job_id', jobIds)
-    } else {
-      imagesQuery = imagesQuery.in('scene_id', sceneIds)
+    if (countError) {
+      return NextResponse.json({ error: 'Failed to count images' }, { status: 500 })
     }
 
-    if (approvalStatus === 'rejected') {
-      imagesQuery = imagesQuery.eq('approval_status', 'rejected')
-    } else if (approvalStatus === 'request_changes') {
-      imagesQuery = imagesQuery.eq('approval_status', 'request_changes')
-    } else if (approvalStatus) {
-      imagesQuery = imagesQuery.eq('approval_status', approvalStatus)
-    } else {
-      // Default: exclude rejected and request_changes images
-      imagesQuery = imagesQuery.or('approval_status.is.null,approval_status.in.(approved,pending)')
-    }
-    if (mediaType && mediaType !== 'all') {
-      imagesQuery = imagesQuery.eq('media_type', mediaType)
+    const imagesQuery = applyProjectGalleryFilters(
+      supabase.from(T.generated_images).select(GALLERY_IMAGE_SELECT),
+      { productIds, approvalStatus, mediaType }
+    )
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
+
+    const { data: images, error: imagesError } = await imagesQuery as {
+      data: GalleryImageRecord[] | null
+      error: { message: string } | null
     }
 
-    imagesQuery = imagesQuery.order('created_at', { ascending: false })
-
-    const { data: images, error: imagesError } = await imagesQuery
     if (imagesError) {
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
     }
 
-    // 5. Sign thumbnail + full-size + video URLs
+    const jobIds = Array.from(
+      new Set((images || []).map((image) => image.job_id).filter((value): value is string => Boolean(value)))
+    )
+
+    const { data: jobs, error: jobsError } = jobIds.length > 0
+      ? await supabase
+          .from(T.generation_jobs)
+          .select('id, product_id, final_prompt')
+          .in('id', jobIds)
+      : { data: [], error: null }
+
+    if (jobsError) {
+      return NextResponse.json({ error: 'Failed to fetch job metadata' }, { status: 500 })
+    }
+
+    const jobPromptMap = new Map((jobs || []).map((job) => [job.id, job.final_prompt as string | null]))
+
     const imageItems = (images || []).filter((img) => img.media_type !== 'video')
     const thumbPaths = imageItems
       .map((img) => img.thumb_storage_path)
       .filter(Boolean) as string[]
-    const imagePaths = imageItems
+    const previewPaths = imageItems
+      .map((img) => img.preview_storage_path)
+      .filter(Boolean) as string[]
+    const fallbackPaths = imageItems
+      .filter((img) => !img.thumb_storage_path && !img.preview_storage_path && img.storage_path)
       .map((img) => img.storage_path)
       .filter(Boolean) as string[]
 
-    let signedImageBucket = new Map<string, string>()
-    const allImageBucketPaths = [...new Set([...thumbPaths, ...imagePaths])]
-    if (allImageBucketPaths.length > 0) {
-      const { data: signed } = await supabase.storage
-        .from('generated-images')
-        .createSignedUrls(allImageBucketPaths, SIGNED_URL_TTL_SECONDS)
-      if (signed) {
-        signedImageBucket = new Map(
-          signed
-            .filter((item) => item?.signedUrl && item?.path)
-            .map((item) => [item.path!, item.signedUrl])
-        )
-      }
-    }
+    const lightweightImagePaths = Array.from(new Set([...thumbPaths, ...previewPaths, ...fallbackPaths]))
 
     const videoItems = (images || []).filter((img) => img.media_type === 'video')
     const videoPaths = videoItems
-      .map((v) => v.storage_path)
+      .map((video) => video.storage_path)
       .filter(Boolean) as string[]
     const videoThumbPaths = videoItems
-      .map((v) => v.thumb_storage_path)
+      .map((video) => video.thumb_storage_path)
       .filter(Boolean) as string[]
+    const allVideoBucketPaths = Array.from(new Set([...videoPaths, ...videoThumbPaths]))
 
-    let signedVideos = new Map<string, string>()
-    const allVideoBucketPaths = [...videoPaths, ...videoThumbPaths]
-    if (allVideoBucketPaths.length > 0) {
-      const { data: signed } = await supabase.storage
-        .from('generated-videos')
-        .createSignedUrls(allVideoBucketPaths, SIGNED_URL_TTL_SECONDS)
-      if (signed) {
-        signedVideos = new Map(
-          signed
-            .filter((item) => item?.signedUrl && item?.path)
-            .map((item) => [item.path!, item.signedUrl])
-        )
-      }
+    const [signedImageResult, signedVideoResult] = await Promise.all([
+      lightweightImagePaths.length > 0
+        ? supabase.storage.from('generated-images').createSignedUrls(lightweightImagePaths, SIGNED_URL_TTL_SECONDS)
+        : Promise.resolve({ data: null, error: null }),
+      allVideoBucketPaths.length > 0
+        ? supabase.storage.from('generated-videos').createSignedUrls(allVideoBucketPaths, SIGNED_URL_TTL_SECONDS)
+        : Promise.resolve({ data: null, error: null }),
+    ])
+
+    if (signedImageResult.error) {
+      console.error('[ProjectGallery] Failed to sign image URLs:', signedImageResult.error.message)
+    }
+    if (signedVideoResult.error) {
+      console.error('[ProjectGallery] Failed to sign video URLs:', signedVideoResult.error.message)
     }
 
-    // 6. Group by product_id
-    const productImageMap = new Map<string, typeof images>()
-    for (const pid of productIds) {
-      productImageMap.set(pid, [])
+    const signedImageBucket = new Map<string, string>(
+      (signedImageResult.data || [])
+        .filter((item) => item?.signedUrl && item?.path)
+        .map((item) => [item.path!, item.signedUrl])
+    )
+    const signedVideos = new Map<string, string>(
+      (signedVideoResult.data || [])
+        .filter((item) => item?.signedUrl && item?.path)
+        .map((item) => [item.path!, item.signedUrl])
+    )
+
+    const productImageMap = new Map<string, Array<GalleryImageRecord & {
+      public_url: string | null
+      preview_public_url: string | null
+      thumb_public_url: string | null
+      prompt: string | null
+    }>>()
+
+    for (const productId of productIds) {
+      productImageMap.set(productId, [])
     }
 
-    for (const img of images || []) {
-      let prodId: string | undefined
-      if (img.job_id) {
-        prodId = jobProductMap.get(img.job_id)
-      }
-      if (!prodId && img.scene_id) {
-        prodId = sceneProductMap.get(img.scene_id)
-      }
-      if (prodId && productImageMap.has(prodId)) {
-        productImageMap.get(prodId)!.push(img)
-      }
+    for (const image of images || []) {
+      if (!image.product_id || !productImageMap.has(image.product_id)) continue
+
+      productImageMap.get(image.product_id)!.push({
+        ...image,
+        public_url: image.media_type === 'video'
+          ? (image.storage_path ? (signedVideos.get(image.storage_path) ?? null) : null)
+          : (!image.thumb_storage_path && !image.preview_storage_path && image.storage_path
+              ? (signedImageBucket.get(image.storage_path) ?? null)
+              : null),
+        preview_public_url: image.media_type === 'video'
+          ? null
+          : (image.preview_storage_path ? (signedImageBucket.get(image.preview_storage_path) ?? null) : null),
+        thumb_public_url: image.media_type === 'video'
+          ? (image.thumb_storage_path ? (signedVideos.get(image.thumb_storage_path) ?? null) : null)
+          : (image.thumb_storage_path ? (signedImageBucket.get(image.thumb_storage_path) ?? null) : null),
+        prompt: image.job_id ? (jobPromptMap.get(image.job_id) ?? null) : null,
+      })
     }
 
-    const result = products.map((p) => ({
-      product_id: p.id,
-      product_name: p.name,
-      images: (productImageMap.get(p.id) || []).map((img) => ({
-        ...img,
-        public_url: img.media_type === 'video'
-          ? (signedVideos.get(img.storage_path) ?? null)
-          : (signedImageBucket.get(img.storage_path) ?? null),
-        preview_public_url: null,
-        thumb_public_url: img.media_type === 'video'
-          ? (img.thumb_storage_path ? (signedVideos.get(img.thumb_storage_path) ?? null) : null)
-          : (img.thumb_storage_path ? (signedImageBucket.get(img.thumb_storage_path) ?? null) : null),
-        prompt: img.job_id ? (jobPromptMap.get(img.job_id) ?? null) : null,
-      })),
+    const result = products.map((product) => ({
+      product_id: product.id,
+      product_name: product.name ?? 'Untitled Product',
+      images: productImageMap.get(product.id) || [],
     }))
 
-    // Filter out products with no images (unless product filter is set)
     const filtered = productIdFilter
       ? result
-      : result.filter((p) => p.images.length > 0)
+      : result.filter((product) => product.images.length > 0)
 
-    // Count rejected and request_changes images (for badge display)
-    let rejectedCount = 0
-    let requestChangesCount = 0
+    const scopedStatusCount = async (status: string) => {
+      const query = productIds.length === 1
+        ? supabase.from(T.generated_images).select('id', { count: 'exact', head: true }).eq('product_id', productIds[0])
+        : supabase.from(T.generated_images).select('id', { count: 'exact', head: true }).in('product_id', productIds)
 
-    if (approvalStatus !== 'rejected') {
-      let rejectedQuery = supabase
-        .from(T.generated_images)
-        .select('id', { count: 'exact', head: true })
-        .eq('approval_status', 'rejected')
-      if (jobIds.length > 0 && sceneIds.length > 0) {
-        rejectedQuery = rejectedQuery.or(
-          `job_id.in.(${jobIds.join(',')}),scene_id.in.(${sceneIds.join(',')})`
-        )
-      } else if (jobIds.length > 0) {
-        rejectedQuery = rejectedQuery.in('job_id', jobIds)
-      } else {
-        rejectedQuery = rejectedQuery.in('scene_id', sceneIds)
-      }
-      const { count } = await rejectedQuery
-      rejectedCount = count ?? 0
+      return query.eq('approval_status', status)
     }
 
-    if (approvalStatus !== 'request_changes') {
-      let changesQuery = supabase
-        .from(T.generated_images)
-        .select('id', { count: 'exact', head: true })
-        .eq('approval_status', 'request_changes')
-      if (jobIds.length > 0 && sceneIds.length > 0) {
-        changesQuery = changesQuery.or(
-          `job_id.in.(${jobIds.join(',')}),scene_id.in.(${sceneIds.join(',')})`
-        )
-      } else if (jobIds.length > 0) {
-        changesQuery = changesQuery.in('job_id', jobIds)
-      } else {
-        changesQuery = changesQuery.in('scene_id', sceneIds)
-      }
-      const { count } = await changesQuery
-      requestChangesCount = count ?? 0
-    }
+    const [rejectedResult, changesResult] = await Promise.all([
+      approvalStatus !== 'rejected' ? scopedStatusCount('rejected') : Promise.resolve({ count: null }),
+      approvalStatus !== 'request_changes' ? scopedStatusCount('request_changes') : Promise.resolve({ count: null }),
+    ])
 
-    return NextResponse.json({ products: filtered, rejected_count: rejectedCount, request_changes_count: requestChangesCount })
+    const total = totalCount ?? (images || []).length
+
+    return NextResponse.json({
+      products: filtered,
+      total,
+      offset,
+      limit,
+      has_more: offset + (images || []).length < total,
+      rejected_count: rejectedResult.count ?? 0,
+      request_changes_count: changesResult.count ?? 0,
+    })
   } catch (err) {
     console.error('[ProjectGallery] Error:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

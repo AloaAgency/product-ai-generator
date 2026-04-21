@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 
+const MAX_NAME_LENGTH = 500
+const MAX_DESCRIPTION_LENGTH = 5000
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -16,7 +19,7 @@ export async function GET(
       .eq('product_id', id)
       .order('display_order', { ascending: true })
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[ReferenceSets GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -36,6 +39,12 @@ export async function POST(
     if (!name) {
       return NextResponse.json({ error: 'name is required' }, { status: 400 })
     }
+    if (typeof name === 'string' && name.length > MAX_NAME_LENGTH) {
+      return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (typeof description === 'string' && description.length > MAX_DESCRIPTION_LENGTH) {
+      return NextResponse.json({ error: `description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer` }, { status: 400 })
+    }
 
     if (type !== 'product' && type !== 'texture') {
       return NextResponse.json({ error: 'type must be "product" or "texture"' }, { status: 400 })
@@ -48,7 +57,7 @@ export async function POST(
       .eq('product_id', product_id)
       .eq('type', type)
 
-    if (countError) return NextResponse.json({ error: countError.message }, { status: 500 })
+    if (countError) { console.error('[ReferenceSets POST count]', countError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     // Only auto-activate for product sets (not texture sets)
     const isFirst = (count ?? 0) === 0 && type === 'product'
@@ -66,7 +75,7 @@ export async function POST(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[ReferenceSets POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

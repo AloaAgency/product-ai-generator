@@ -2,15 +2,23 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
-import type { Product, Project } from '@/lib/types'
+import { buildRefinedPromptUserMessage } from '@/lib/prompt-builder'
+import type { GlobalStyleSettings } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
 
 export async function POST(request: NextRequest) {
   let product_id: string | undefined
+
+  let body: { product_id?: string; user_prompt?: string }
   try {
-    const body = await request.json()
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 })
+  }
+
+  try {
     product_id = body.product_id
     const user_prompt = body.user_prompt
 
@@ -23,38 +31,28 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
+    // Single JOIN query — fetches product + parent project in one round-trip
     const { data: product, error: productError } = await supabase
       .from(T.products)
-      .select('*')
+      .select(`id,name,description,project_id,global_style_settings,${T.projects}!fk_products_project(global_style_settings)`)
       .eq('id', product_id)
-      .single()
+      .single<{
+        id: string
+        name: string
+        description: string | null
+        project_id: string | null
+        global_style_settings: GlobalStyleSettings | null
+        prodai_projects: { global_style_settings: GlobalStyleSettings | null } | null
+      }>()
 
     if (productError || !product) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
 
-    const typedProduct = product as Product
+    const projectStyles = product.prodai_projects?.global_style_settings ?? {}
+    const settings = mergeStyles(projectStyles, product.global_style_settings ?? undefined)
 
-    // Fetch parent project and merge styles
-    let projectStyles = {}
-    if (typedProduct.project_id) {
-      const { data: project } = await supabase
-        .from(T.projects)
-        .select('*')
-        .eq('id', typedProduct.project_id)
-        .single()
-      if (project) {
-        projectStyles = (project as Project).global_style_settings ?? {}
-      }
-    }
-    const settings = mergeStyles(projectStyles, typedProduct.global_style_settings)
-
-    const styleBlock = Object.entries(settings)
-      .filter(([, v]) => typeof v === 'string' && (v as string).trim())
-      .map(([k, v]) => `- ${k}: ${v}`)
-      .join('\n')
-
-    const userMessage = `Product: ${typedProduct.name}${typedProduct.description ? `\nDescription: ${typedProduct.description}` : ''}${styleBlock ? `\n\nStyle settings:\n${styleBlock}` : ''}\n\nUser's prompt idea:\n${user_prompt}`
+    const userMessage = buildRefinedPromptUserMessage(product.name, product.description, settings, user_prompt)
 
     const anthropic = new Anthropic()
     const response = await anthropic.messages.create({
@@ -70,6 +68,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ refined_prompt: text.trim() })
   } catch (err) {
+    // Log the full error internally but never echo raw error messages back to
+    // the client — they can contain API keys or internal query details.
     console.error('[BuildPrompt] Error:', err)
     await logError({
       productId: product_id,
@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
       errorSource: 'api/ai/build-prompt',
     })
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
+      { error: 'Internal server error' },
       { status: 500 }
     )
   }

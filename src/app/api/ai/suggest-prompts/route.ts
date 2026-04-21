@@ -5,18 +5,38 @@ import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import {
   buildPromptSuggestionSystemPrompt,
   parsePromptSuggestions,
+  MAX_SUGGESTION_COUNT,
 } from '@/lib/prompt-builder'
-import type { Product, Project } from '@/lib/types'
+import type { GlobalStyleSettings } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
 
 export async function POST(request: NextRequest) {
   let product_id: string | undefined
+
+  let body: { product_id?: string; count?: number }
   try {
-    const body = await request.json()
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 })
+  }
+
+  try {
     product_id = body.product_id
-    const count = body.count ?? 5
+
+    // Validate count: must be a finite integer in [1, MAX_SUGGESTION_COUNT].
+    // Passing a non-numeric value (NaN, string, undefined) would cause Math.floor(NaN)
+    // to propagate as NaN into the system prompt, producing "exactly NaN unique…".
+    const rawCount = body.count ?? 5
+    const parsedCount = Number(rawCount)
+    if (!Number.isFinite(parsedCount) || parsedCount < 1 || parsedCount > MAX_SUGGESTION_COUNT) {
+      return NextResponse.json(
+        { error: `count must be an integer between 1 and ${MAX_SUGGESTION_COUNT}` },
+        { status: 400 }
+      )
+    }
+    const count = Math.floor(parsedCount)
 
     if (!product_id) {
       return NextResponse.json(
@@ -27,35 +47,30 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
+    // Single JOIN query — fetches product + parent project in one round-trip
     const { data: product, error: productError } = await supabase
       .from(T.products)
-      .select('*')
+      .select(`id,name,description,project_id,global_style_settings,${T.projects}!fk_products_project(global_style_settings)`)
       .eq('id', product_id)
-      .single()
+      .single<{
+        id: string
+        name: string
+        description: string | null
+        project_id: string | null
+        global_style_settings: GlobalStyleSettings | null
+        prodai_projects: { global_style_settings: GlobalStyleSettings | null } | null
+      }>()
 
     if (productError || !product) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
 
-    const typedProduct = product as Product
-
-    // Fetch parent project and merge styles
-    let projectStyles = {}
-    if (typedProduct.project_id) {
-      const { data: project } = await supabase
-        .from(T.projects)
-        .select('*')
-        .eq('id', typedProduct.project_id)
-        .single()
-      if (project) {
-        projectStyles = (project as Project).global_style_settings ?? {}
-      }
-    }
-    const mergedSettings = mergeStyles(projectStyles, typedProduct.global_style_settings)
+    const projectStyles = product.prodai_projects?.global_style_settings ?? {}
+    const mergedSettings = mergeStyles(projectStyles, product.global_style_settings ?? undefined)
 
     const systemPrompt = buildPromptSuggestionSystemPrompt(
-      typedProduct.name,
-      typedProduct.description,
+      product.name,
+      product.description,
       mergedSettings,
       count
     )
@@ -80,6 +95,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ prompts })
   } catch (err) {
+    // Log the full error internally but never echo raw error messages back to
+    // the client — they can contain API keys or internal query details.
     console.error('[SuggestPrompts] Error:', err)
     await logError({
       productId: product_id,
@@ -87,7 +104,7 @@ export async function POST(request: NextRequest) {
       errorSource: 'api/ai/suggest-prompts',
     })
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
+      { error: 'Internal server error' },
       { status: 500 }
     )
   }

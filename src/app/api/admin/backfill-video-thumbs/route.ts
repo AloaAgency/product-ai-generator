@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { extractVideoThumbnail, buildThumbnailPath } from '@/lib/image-utils'
+import { isAdminAuthorized } from '@/lib/auth-constants'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -10,6 +11,10 @@ export const dynamic = 'force-dynamic'
 const DEFAULT_LIMIT = 20
 
 export async function POST(request: NextRequest) {
+  if (!isAdminAuthorized(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   try {
     const body = await request.json().catch(() => ({}))
     const limit = Math.min(Math.max(Number(body?.limit) || DEFAULT_LIMIT, 1), 100)
@@ -26,7 +31,8 @@ export async function POST(request: NextRequest) {
       .limit(limit)
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      console.error('[Admin BackfillVideoThumbs]', error)
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
     if (!videos || videos.length === 0) {

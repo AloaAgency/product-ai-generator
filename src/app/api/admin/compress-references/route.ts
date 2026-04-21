@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processReferenceImageCompression } from '@/lib/reference-image-compression'
+import { isAdminAuthorized } from '@/lib/auth-constants'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -11,6 +12,10 @@ const SIZE_THRESHOLD = 5 * 1024 * 1024 // 5 MB
 const DEFAULT_LIMIT = 50
 
 export async function POST(request: NextRequest) {
+  if (!isAdminAuthorized(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   try {
     const body = await request.json().catch(() => ({}))
     const limit = Math.min(Math.max(Number(body?.limit) || DEFAULT_LIMIT, 1), 200)
@@ -25,7 +30,8 @@ export async function POST(request: NextRequest) {
       .limit(limit)
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      console.error('[Admin CompressReferences]', error)
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
     if (!images || images.length === 0) {
