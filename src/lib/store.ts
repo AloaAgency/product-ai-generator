@@ -285,22 +285,6 @@ const endAiRequest = (set: (partial: Partial<AppState>) => void) => {
   }
 }
 
-const getGalleryQueryString = (
-  filters?: {
-    job_id?: string
-    approval_status?: string
-    media_type?: string
-    scene_id?: string
-  }
-) => {
-  const params = new URLSearchParams()
-  if (filters?.job_id) params.set('job_id', filters.job_id.trim())
-  if (filters?.approval_status) params.set('approval_status', filters.approval_status.trim())
-  if (filters?.media_type) params.set('media_type', filters.media_type.trim())
-  if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
-  return params.toString()
-}
-
 interface AppState {
   // Projects
   projects: Project[]
