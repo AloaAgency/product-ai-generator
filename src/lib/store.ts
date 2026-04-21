@@ -54,6 +54,11 @@ const beginTrackedRequest = (key: string) => {
   return version
 }
 
+const invalidateTrackedRequest = (key: string) => {
+  const version = (requestVersions.get(key) ?? 0) + 1
+  requestVersions.set(key, version)
+}
+
 const isLatestRequest = (key: string, version: number) =>
   (requestVersions.get(key) ?? 0) === version
 
@@ -806,6 +811,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         : s.currentJob,
     }))
   },
+    const activeGalleryScope = getActiveSliceScope('gallery')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
+    if (activeGalleryScope) invalidateTrackedRequest(activeGalleryScope)
+    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
   deleteImage: async (imageId) => {
     await api(`/api/images/${buildApiPath(imageId)}`, { method: 'DELETE' })
     set((s) => ({
@@ -822,6 +831,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const sanitizedIds = sanitizeStringArray(imageIds)
     if (sanitizedIds.length === 0) return
     await api('/api/images/bulk-delete', {
+    const activeGalleryScope = getActiveSliceScope('gallery')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
+    if (activeGalleryScope) invalidateTrackedRequest(activeGalleryScope)
+    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ imageIds: sanitizedIds }),
@@ -841,6 +854,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Settings Templates
   settingsTemplates: [],
   loadingSettingsTemplates: false,
+    const activeGalleryScope = getActiveSliceScope('gallery')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
+    if (activeGalleryScope) invalidateTrackedRequest(activeGalleryScope)
+    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
   fetchSettingsTemplates: async (productId) => {
     const requestKey = `settingsTemplates:${productId.trim()}`
     if (updateSliceScope('settingsTemplates', requestKey)) {
