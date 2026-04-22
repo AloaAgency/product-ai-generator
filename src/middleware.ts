@@ -106,15 +106,23 @@ export async function middleware(request: NextRequest) {
   }
 
   if (pathname.startsWith('/api/')) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json(
+      { error: 'Unauthorized' },
+      { status: 401, headers: { 'cache-control': 'no-store' } }
+    )
   }
 
   // Show login page, preserving the intended destination. Return 200 so the
   // browser renders the gate as a normal document instead of a failed request.
+  // cache-control: no-store prevents CDNs or proxies from caching the login
+  // gate and serving it to users who subsequently authenticate.
   const showError = request.nextUrl.searchParams.has('error')
   return new NextResponse(loginPage(showError, pathname), {
     status: 200,
-    headers: { 'content-type': 'text/html' },
+    headers: {
+      'content-type': 'text/html',
+      'cache-control': 'no-store',
+    },
   })
 }
 

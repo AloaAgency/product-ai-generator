@@ -19,6 +19,12 @@ function safeCompare(a: string, b: string): boolean {
   }
 }
 
+// Hard cap on input sizes accepted by the login endpoint.
+// A legitimate password will never approach these limits; rejecting early
+// prevents DoS via expensive HMAC computation on oversized payloads.
+const MAX_PASSWORD_BYTES = 1024   // ~1 KiB — far above any real password
+const MAX_REDIRECT_LENGTH = 2048  // characters, not bytes
+
 export async function POST(request: NextRequest) {
   // Fail closed: if SITE_PASSWORD is not configured, deny all logins rather
   // than falling back to a well-known hardcoded credential.
@@ -36,11 +42,18 @@ export async function POST(request: NextRequest) {
   const rawRedirect = formData.get('redirect')
   const redirectPath = typeof rawRedirect === 'string' ? rawRedirect : '/'
 
+  // Reject oversized passwords before doing any crypto work.
+  if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
+    return new NextResponse(null, { status: 400 })
+  }
+
   // Validate redirect path: must be a simple relative path starting with /
   // and NOT a protocol-relative URL (//host) to prevent open-redirect attacks.
+  // Also cap length to avoid storing/reflecting arbitrarily long strings.
+  const trimmedRedirect = redirectPath.slice(0, MAX_REDIRECT_LENGTH)
   const safeRedirect =
-    redirectPath.startsWith('/') && !redirectPath.startsWith('//')
-      ? redirectPath
+    trimmedRedirect.startsWith('/') && !trimmedRedirect.startsWith('//')
+      ? trimmedRedirect
       : '/'
 
   if (safeCompare(password, PASSWORD)) {

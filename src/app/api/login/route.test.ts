@@ -190,6 +190,46 @@ describe('POST /api/login — open-redirect prevention', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Input length limits — DoS protection
+// ---------------------------------------------------------------------------
+
+describe('POST /api/login — input length limits', () => {
+  beforeEach(() => {
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+  })
+
+  afterEach(() => {
+    delete process.env.SITE_PASSWORD
+  })
+
+  it('returns 400 when the password field exceeds 1024 bytes', async () => {
+    const oversizedPassword = 'a'.repeat(1025)
+    const req = buildLoginRequest({ password: oversizedPassword, redirect: '/' })
+    const res = await POST(req)
+    expect(res.status).toBe(400)
+  })
+
+  it('accepts a password exactly at the 1024-byte limit', async () => {
+    const atLimit = 'a'.repeat(1024)
+    const req = buildLoginRequest({ password: atLimit, redirect: '/' })
+    const res = await POST(req)
+    // Wrong password → 303 with error, but NOT a 400 (no limit rejection)
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toContain('error=1')
+  })
+
+  it('truncates a redirect path longer than 2048 characters', async () => {
+    const longRedirect = '/products/' + 'a'.repeat(2100)
+    const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: longRedirect })
+    const res = await POST(req)
+    expect(res.status).toBe(303)
+    const location = res.headers.get('location') ?? ''
+    const pathname = location.startsWith('http') ? new URL(location).pathname : location.split('?')[0]
+    expect(pathname.length).toBeLessThanOrEqual(2048)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Malformed form inputs — robustness
 // ---------------------------------------------------------------------------
 
