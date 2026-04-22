@@ -8,6 +8,7 @@ import {
   getFailureTimestamp,
   getGenerationJobProgress,
   POLL_MS,
+  shouldPollGenerationQueue,
 } from './globalGenerationQueue.helpers'
 import { getSafeQueueErrorMessage } from './errorDisplay.helpers'
 
@@ -29,37 +30,7 @@ export default function GlobalGenerationQueue({
   const [clearing, setClearing] = useState(false)
   const [clearingFailures, setClearingFailures] = useState(false)
   const isPollingRef = useRef(false)
-
-  useEffect(() => {
-    let cancelled = false
-
-    const runPoll = async () => {
-      if (cancelled || document.visibilityState === 'hidden' || isPollingRef.current) return
-      isPollingRef.current = true
-      try {
-        await fetchGenerationJobs(productId)
-      } finally {
-        isPollingRef.current = false
-      }
-    }
-
-    void runPoll()
-    const interval = window.setInterval(() => {
-      void runPoll()
-    }, POLL_MS)
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        void runPoll()
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    return () => {
-      cancelled = true
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.clearInterval(interval)
-    }
-  }, [productId, fetchGenerationJobs])
+  const lastPollAtRef = useRef(0)
 
   const {
     activeJobs,
@@ -71,6 +42,59 @@ export default function GlobalGenerationQueue({
     overallProgress,
     hasActiveJobs,
   } = useMemo(() => deriveGenerationQueueState(generationJobs), [generationJobs])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const runPoll = async ({ force = false }: { force?: boolean } = {}) => {
+      if (cancelled) return
+
+      const now = Date.now()
+      if (!force && !shouldPollGenerationQueue({
+        hasActiveJobs,
+        isDocumentVisible: document.visibilityState === 'visible',
+        isPolling: isPollingRef.current,
+        timeSinceLastPollMs: now - lastPollAtRef.current,
+      })) {
+        return
+      }
+
+      if (isPollingRef.current) return
+
+      isPollingRef.current = true
+      try {
+        await fetchGenerationJobs(productId)
+        lastPollAtRef.current = now
+      } finally {
+        isPollingRef.current = false
+      }
+    }
+
+    if (hasActiveJobs) {
+      void runPoll({ force: true })
+    }
+
+    const interval = window.setInterval(() => {
+      void runPoll()
+    }, POLL_MS)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void runPoll()
+      }
+    }
+    const handleOnline = () => {
+      void runPoll()
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('online', handleOnline)
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('online', handleOnline)
+      window.clearInterval(interval)
+    }
+  }, [fetchGenerationJobs, hasActiveJobs, productId])
 
   return (
     <section

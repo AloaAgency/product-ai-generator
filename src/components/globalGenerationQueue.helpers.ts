@@ -60,3 +60,20 @@ export const deriveGenerationQueueState = (generationJobs: GenerationJob[]) => {
 
 export const getGenerationJobProgress = (job: Pick<GenerationJob, 'completed_count' | 'variation_count'>) =>
   getJobProgress(job.completed_count, job.variation_count)
+
+export const shouldPollGenerationQueue = ({
+  hasActiveJobs,
+  isDocumentVisible,
+  isPolling,
+  timeSinceLastPollMs,
+  minIntervalMs = POLL_MS,
+}: {
+  hasActiveJobs: boolean
+  isDocumentVisible: boolean
+  isPolling: boolean
+  timeSinceLastPollMs: number
+  minIntervalMs?: number
+}) => {
+  if (!hasActiveJobs || !isDocumentVisible || isPolling) return false
+  return timeSinceLastPollMs >= minIntervalMs
+}
