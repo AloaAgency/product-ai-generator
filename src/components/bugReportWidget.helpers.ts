@@ -82,14 +82,6 @@ export const buildBugReportSubmission = ({
   imageCount: String(images.length),
 })
 
-export const parseBugReportResponse = (raw: string) => {
-  try {
-    return JSON.parse(raw) as { success?: boolean; message?: string } | null
-  } catch {
-    return null
-  }
-}
-
 export const buildSelectedBugReportImages = (files: File[]): SelectedBugReportImage[] =>
   files.map((file) => ({
     file,
@@ -128,4 +120,12 @@ export const createBugReportFormData = ({
   })
   formData.append('imageCount', submission.imageCount)
   return formData
+}
+
+export const parseBugReportResponse = (raw: string) => {
+  try {
+    return JSON.parse(raw) as { success?: boolean; message?: string } | null
+  } catch {
+    return null
+  }
 }

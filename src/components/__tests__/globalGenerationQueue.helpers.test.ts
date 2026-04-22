@@ -8,6 +8,7 @@ import {
   getGenerationJobUnitLabel,
   getGenerationQueueOutputLabel,
   getGenerationQueueSummary,
+  shouldPollGenerationQueue,
   shouldShowIndeterminateJobProgress,
 } from '../globalGenerationQueue.helpers.js'
 
@@ -82,6 +83,54 @@ test('getGenerationJobProgress clamps invalid and over-complete jobs into a safe
   assert.equal(getGenerationJobProgress({ completed_count: 0, variation_count: 0 }), 0)
   assert.equal(getGenerationJobProgress({ completed_count: -1, variation_count: 4 }), 0)
   assert.equal(getGenerationJobProgress({ completed_count: 7, variation_count: 4 }), 100)
+})
+
+test('shouldPollGenerationQueue only polls while visible, active, and outside the debounce window', () => {
+  assert.equal(
+    shouldPollGenerationQueue({
+      hasActiveJobs: true,
+      isDocumentVisible: true,
+      isPolling: false,
+      timeSinceLastPollMs: 5000,
+    }),
+    true
+  )
+  assert.equal(
+    shouldPollGenerationQueue({
+      hasActiveJobs: false,
+      isDocumentVisible: true,
+      isPolling: false,
+      timeSinceLastPollMs: 5000,
+    }),
+    false
+  )
+  assert.equal(
+    shouldPollGenerationQueue({
+      hasActiveJobs: true,
+      isDocumentVisible: false,
+      isPolling: false,
+      timeSinceLastPollMs: 5000,
+    }),
+    false
+  )
+  assert.equal(
+    shouldPollGenerationQueue({
+      hasActiveJobs: true,
+      isDocumentVisible: true,
+      isPolling: true,
+      timeSinceLastPollMs: 5000,
+    }),
+    false
+  )
+  assert.equal(
+    shouldPollGenerationQueue({
+      hasActiveJobs: true,
+      isDocumentVisible: true,
+      isPolling: false,
+      timeSinceLastPollMs: 4999,
+    }),
+    false
+  )
 })
 
 test('getFailureTimestamp returns null for invalid timestamps', () => {

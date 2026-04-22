@@ -152,3 +152,20 @@ export const getGenerationJobUnitLabel = (job: Pick<GenerationJob, 'job_type' | 
   const singularLabel = job.job_type === 'video' ? 'video' : 'image'
   return job.variation_count === 1 ? singularLabel : `${singularLabel}s`
 }
+
+export const shouldPollGenerationQueue = ({
+  hasActiveJobs,
+  isDocumentVisible,
+  isPolling,
+  timeSinceLastPollMs,
+  minIntervalMs = POLL_MS,
+}: {
+  hasActiveJobs: boolean
+  isDocumentVisible: boolean
+  isPolling: boolean
+  timeSinceLastPollMs: number
+  minIntervalMs?: number
+}) => {
+  if (!hasActiveJobs || !isDocumentVisible || isPolling) return false
+  return timeSinceLastPollMs >= minIntervalMs
+}

@@ -11,6 +11,7 @@ import {
   getFailureTimestamp,
   getGenerationJobProgress,
   POLL_MS,
+  shouldPollGenerationQueue,
   shouldShowIndeterminateJobProgress,
 } from './globalGenerationQueue.helpers'
 import { getSafeQueueErrorMessage } from './errorDisplay.helpers'
@@ -25,26 +26,42 @@ function useGenerationQueuePolling({
   hasActiveJobs: boolean
 }) {
   const isPollingRef = useRef(false)
+  const lastPollAtRef = useRef(0)
 
   useEffect(() => {
     let cancelled = false
 
-    const runPoll = async () => {
-      if (cancelled || document.visibilityState === 'hidden' || isPollingRef.current) return
+    const runPoll = async ({ force = false }: { force?: boolean } = {}) => {
+      if (cancelled) return
+
+      const now = Date.now()
+      if (!force && !shouldPollGenerationQueue({
+        hasActiveJobs,
+        isDocumentVisible: document.visibilityState === 'visible',
+        isPolling: isPollingRef.current,
+        timeSinceLastPollMs: now - lastPollAtRef.current,
+      })) {
+        return
+      }
+
+      if (isPollingRef.current) return
+
       isPollingRef.current = true
       try {
         await fetchGenerationJobs(productId)
+        lastPollAtRef.current = now
       } finally {
         isPollingRef.current = false
       }
     }
 
-    void runPoll()
     if (!hasActiveJobs) {
       return () => {
         cancelled = true
       }
     }
+
+    void runPoll({ force: true })
 
     const interval = window.setInterval(() => {
       void runPoll()
@@ -54,11 +71,16 @@ function useGenerationQueuePolling({
         void runPoll()
       }
     }
+    const handleOnline = () => {
+      void runPoll()
+    }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('online', handleOnline)
     return () => {
       cancelled = true
       document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('online', handleOnline)
       window.clearInterval(interval)
     }
   }, [fetchGenerationJobs, hasActiveJobs, productId])
