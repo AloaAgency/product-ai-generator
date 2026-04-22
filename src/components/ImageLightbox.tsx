@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useCallback, useState, useRef } from 'react'
+import { useEffect, useCallback, useState, useRef, useId } from 'react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import {
   X,
@@ -18,6 +18,8 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import {
+  buildRegenerateUrl,
+  getFixImageHref,
   getDisplayImageUrl,
   getDownloadImageUrl,
   getKeyboardAction,
@@ -67,17 +69,6 @@ interface ImageLightboxProps {
   } | null>
 }
 
-/** Build generate URL with all job settings pre-filled for regeneration */
-function buildRegenerateUrl(projectId: string, image: LightboxImage): string {
-  const params = new URLSearchParams()
-  if (image.prompt) params.set('prompt', image.prompt)
-  if (image.reference_set_id) params.set('reference_set_id', image.reference_set_id)
-  if (image.texture_set_id) params.set('texture_set_id', image.texture_set_id)
-  if (image.product_image_count != null) params.set('product_image_count', String(image.product_image_count))
-  if (image.texture_image_count != null) params.set('texture_image_count', String(image.texture_image_count))
-  return `/projects/${projectId}/products/${image.productId}/generate?${params.toString()}`
-}
-
 export function ImageLightbox({
   images,
   currentIndex,
@@ -89,11 +80,13 @@ export function ImageLightbox({
   projectId,
   onRequestSignedUrls,
 }: ImageLightboxProps) {
+  const dialogTitleId = useId()
   const [isUpdating, setIsUpdating] = useState(false)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
   const [notesValue, setNotesValue] = useState('')
   const notesInputRef = useRef<HTMLInputElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
 
   const currentImage = images[currentIndex]
   const hasPrev = currentIndex > 0
@@ -215,6 +208,15 @@ export function ImageLightbox({
   })
 
   useEffect(() => {
+    dialogRef.current?.focus()
+    const originalOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = originalOverflow
+    }
+  }, [])
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const { action, preventDefault } = getKeyboardAction({
         key: e.key,
@@ -273,6 +275,12 @@ export function ImageLightbox({
   if (!currentImage) return null
 
   const imageUrl = getDisplayImageUrl(currentImage)
+  const regenerateHref = buildRegenerateUrl({ projectId, image: currentImage })
+  const fixImageHref = getFixImageHref({
+    projectId,
+    productId: currentImage.productId,
+    imageId: currentImage.id,
+  })
 
   return (
     <div
@@ -280,16 +288,18 @@ export function ImageLightbox({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Generated image lightbox"
+      aria-labelledby={dialogTitleId}
     >
       <div
+        ref={dialogRef}
         className="relative flex flex-col w-full max-w-6xl h-full max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
+        tabIndex={-1}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-3 py-2 sm:px-4 sm:py-3 bg-gray-900/80 rounded-t-xl">
           <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-            <span className="text-white font-medium text-sm sm:text-base whitespace-nowrap">
+            <span id={dialogTitleId} className="text-white font-medium text-sm sm:text-base whitespace-nowrap">
               Variation {currentImage.variation_number ?? currentIndex + 1}
             </span>
             {promptName && (
@@ -334,9 +344,9 @@ export function ImageLightbox({
               >
                 {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
               </button>
-              {projectId && currentImage.productId && (
+              {regenerateHref !== '#' && (
                 <a
-                  href={buildRegenerateUrl(projectId, currentImage)}
+                  href={regenerateHref}
                   className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
                   title="Regenerate with this prompt"
                 >
@@ -415,9 +425,9 @@ export function ImageLightbox({
                 isRequestChanges ? 'focus:border-orange-500' : 'focus:border-red-500'
               }`}
             />
-            {isRequestChanges && projectId && currentImage.productId && (
+            {isRequestChanges && fixImageHref && (
               <a
-                href={`/projects/${projectId}/products/${currentImage.productId}/fix-image?sourceImageId=${currentImage.id}`}
+                href={fixImageHref}
                 className="flex items-center gap-1.5 shrink-0 rounded-lg bg-orange-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-500 transition-colors"
               >
                 <Wand2 className="w-3.5 h-3.5" />
@@ -533,9 +543,9 @@ export function ImageLightbox({
                 <span className="hidden sm:inline">Delete</span>
               </button>
             )}
-            {projectId && currentImage.productId && currentImage.prompt && (
+            {currentImage.prompt && regenerateHref !== '#' && (
               <a
-                href={buildRegenerateUrl(projectId, currentImage)}
+                href={regenerateHref}
                 className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium bg-gray-700 text-gray-200 hover:bg-purple-600 hover:text-white transition-colors"
                 title="Regenerate with this prompt"
               >
@@ -544,6 +554,7 @@ export function ImageLightbox({
               </a>
             )}
             <button
+              type="button"
               onClick={handleDownload}
               className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg font-medium bg-gray-700 text-gray-200 hover:bg-blue-600 hover:text-white transition-colors"
               title="Download (D)"
