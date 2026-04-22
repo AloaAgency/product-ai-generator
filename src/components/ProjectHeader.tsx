@@ -6,9 +6,6 @@ import { usePathname } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
 import { getSafeErrorMessage } from './errorDisplay.helpers'
 
-const MAX_PROJECT_NAME_LENGTH = 120
-const normalizeProjectName = (value: string) => value.trim().replace(/\s+/g, ' ').slice(0, MAX_PROJECT_NAME_LENGTH)
-
 interface ProjectHeaderProps {
   projectId: string
   projectName: string | undefined
@@ -28,7 +25,6 @@ export function ProjectHeader({
   const [editingName, setEditingName] = useState(false)
   const [nameValue, setNameValue] = useState('')
   const [nameError, setNameError] = useState<string | null>(null)
-  const [savingName, setSavingName] = useState(false)
   const nameInputRef = useRef<HTMLInputElement>(null)
 
   const isGallery = pathname.endsWith('/gallery')
@@ -40,18 +36,15 @@ export function ProjectHeader({
   }, [editingName])
 
   const handleNameSave = async () => {
-    if (savingName) return
-    const normalizedName = normalizeProjectName(nameValue)
-    if (!normalizedName) {
+    const trimmed = nameValue.trim()
+    if (!trimmed) {
       setNameError('Project name is required.')
       return
     }
     try {
-      setSavingName(true)
-      if (normalizedName !== projectName) {
-        await onNameSave(normalizedName)
+      if (trimmed !== projectName) {
+        await onNameSave(trimmed)
       }
-      setNameValue(normalizedName)
       setNameError(null)
       setEditingName(false)
     } catch (error) {
@@ -61,9 +54,19 @@ export function ProjectHeader({
           'Failed to save project name. Please try again.'
         )
       )
-    } finally {
-      setSavingName(false)
     }
+  }
+
+  const handleStartEditing = () => {
+    setNameValue(projectName ?? '')
+    setNameError(null)
+    setEditingName(true)
+  }
+
+  const handleCancelEditing = () => {
+    setNameValue(projectName ?? '')
+    setNameError(null)
+    setEditingName(false)
   }
 
   const tabs = [
@@ -92,22 +95,17 @@ export function ProjectHeader({
                     ref={nameInputRef}
                     value={nameValue}
                     onChange={(e) => {
-                      setNameValue(e.target.value.slice(0, MAX_PROJECT_NAME_LENGTH))
+                      setNameValue(e.target.value)
                       if (nameError) setNameError(null)
                     }}
                     onBlur={() => void handleNameSave()}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') void handleNameSave()
-                      if (e.key === 'Escape') {
-                        setNameValue(projectName ?? '')
-                        setNameError(null)
-                        setEditingName(false)
-                      }
+                      if (e.key === 'Escape') handleCancelEditing()
                     }}
                     className="rounded bg-zinc-800 px-2 py-1 text-xl font-semibold tracking-tight text-zinc-100 outline-none focus:ring-1 focus:ring-blue-500"
                     aria-invalid={nameError ? 'true' : 'false'}
                     aria-describedby={nameError ? 'project-name-error' : undefined}
-                    maxLength={MAX_PROJECT_NAME_LENGTH}
                     autoFocus
                   />
                   {nameError && (
@@ -119,16 +117,14 @@ export function ProjectHeader({
               ) : (
                 <button
                   type="button"
-                  className="cursor-pointer text-left text-xl font-semibold tracking-tight transition-colors hover:text-blue-400"
-                  onClick={() => {
-                    setNameValue(projectName ?? '')
-                    setNameError(null)
-                    setEditingName(true)
-                  }}
+                  className="cursor-pointer text-left text-xl font-semibold tracking-tight transition-colors hover:text-blue-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
+                  onClick={handleStartEditing}
                   title="Click to edit"
                   aria-label={`Edit project name${projectName ? `: ${projectName}` : ''}`}
                 >
-                  {projectName ?? 'Loading...'}
+                  <span className="text-xl font-semibold tracking-tight">
+                    {projectName ?? 'Loading...'}
+                  </span>
                 </button>
               )}
               <Link

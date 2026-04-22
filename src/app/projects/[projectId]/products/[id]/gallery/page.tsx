@@ -4,9 +4,12 @@ import { use, useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
+import { GalleryContextMenu, type ContextMenuAction } from '@/components/GalleryContextMenu'
+import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
 import type { PromptTemplate } from '@/lib/types'
 import {
   ArrowLeft,
+  ArrowUpDown,
   Filter,
   Download,
   ImageIcon,
@@ -24,6 +27,7 @@ import {
 import Link from 'next/link'
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'request_changes'
+type SortOption = 'newest' | 'oldest' | 'variation'
 
 const STATUS_FILTERS: { label: string; value: StatusFilter }[] = [
   { label: 'All', value: 'all' },
@@ -48,19 +52,22 @@ export default function GalleryPage({
 }) {
   const { projectId, id } = use(params)
 
-  const {
-    galleryImages,
-    loadingGallery,
-    fetchGallery,
-    updateImageApproval,
-    deleteImage,
-    bulkDeleteImages,
-    fetchGenerationJobs,
-  } = useAppStore()
+  const galleryImages = useAppStore((state) => state.galleryImages)
+  const galleryTotal = useAppStore((state) => state.galleryTotal)
+  const galleryHasMore = useAppStore((state) => state.galleryHasMore)
+  const loadingGallery = useAppStore((state) => state.loadingGallery)
+  const loadingGalleryMore = useAppStore((state) => state.loadingGalleryMore)
+  const fetchGallery = useAppStore((state) => state.fetchGallery)
+  const fetchGalleryMore = useAppStore((state) => state.fetchGalleryMore)
+  const updateImageApproval = useAppStore((state) => state.updateImageApproval)
+  const deleteImage = useAppStore((state) => state.deleteImage)
+  const bulkDeleteImages = useAppStore((state) => state.bulkDeleteImages)
+  const fetchGenerationJobs = useAppStore((state) => state.fetchGenerationJobs)
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [mediaFilter, setMediaFilter] = useState<'all' | 'image' | 'video'>('all')
   const [jobFilter, setJobFilter] = useState<string>('all')
+  const [sortOption, setSortOption] = useState<SortOption>('newest')
   const [groupByScene, setGroupByScene] = useState(false)
   const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null)
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
@@ -70,13 +77,33 @@ export default function GalleryPage({
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const signedUrlsRef = useRef(signedUrlsById)
+  const signedUrlRequestsRef = useRef<Record<string, Promise<SignedImageUrls | null>>>({})
+  const batchSignedUrlRequestsRef = useRef<Record<string, Promise<Record<string, SignedImageUrls>>>>({})
 
   const [uploadingGallery, setUploadingGallery] = useState(false)
   const galleryFileInputRef = useRef<HTMLInputElement>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null } | null>(null)
+  const loadMoreRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     signedUrlsRef.current = signedUrlsById
   }, [signedUrlsById])
+
+  // Infinite scroll observer
+  useEffect(() => {
+    const sentinel = loadMoreRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && galleryHasMore && !loadingGalleryMore) {
+          fetchGalleryMore(id, { sort: sortOption })
+        }
+      },
+      { rootMargin: '400px' }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [galleryHasMore, loadingGalleryMore, fetchGalleryMore, id, sortOption])
 
   async function handleGalleryUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const fileList = e.target.files
@@ -98,6 +125,7 @@ export default function GalleryPage({
 
       // Upload each file to its signed URL
       const fileArray = Array.from(fileList)
+      const uploadedImageIds: string[] = []
       for (let i = 0; i < results.length; i++) {
         const result = results[i]
         if (!result.signed_url) continue
@@ -107,9 +135,18 @@ export default function GalleryPage({
           headers: { 'Content-Type': file.type || 'application/octet-stream' },
           body: file,
         })
+        if (result.image?.id) uploadedImageIds.push(result.image.id)
+      }
+      // Generate thumbnails for uploaded images
+      if (uploadedImageIds.length > 0) {
+        await fetch('/api/images/generate-thumbs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_ids: uploadedImageIds }),
+        }).catch(() => {})
       }
       // Refresh gallery
-      await fetchGallery(id)
+      await fetchGallery(id, { sort: sortOption })
     } catch (err) {
       console.error('[GalleryUpload] Error:', err)
     } finally {
@@ -119,13 +156,13 @@ export default function GalleryPage({
   }
 
   useEffect(() => {
-    fetchGallery(id)
+    fetchGallery(id, { sort: sortOption })
     fetchGenerationJobs(id)
     fetch(`/api/products/${id}/prompts`)
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setPromptTemplates(data) })
       .catch(() => {})
-  }, [id, fetchGallery, fetchGenerationJobs])
+  }, [id, sortOption, fetchGallery, fetchGenerationJobs])
 
   // Unique job IDs for filter dropdown
   const jobIds = useMemo(() => {
@@ -186,6 +223,14 @@ export default function GalleryPage({
     [filteredImages]
   )
 
+  const imageIndexById = useMemo(() => {
+    const indexMap = new Map<string, number>()
+    imageOnly.forEach((img, index) => {
+      indexMap.set(img.id, index)
+    })
+    return indexMap
+  }, [imageOnly])
+
   // Group images by scene (prompt_template_id)
   const sceneGroups = useMemo(() => {
     if (!groupByScene || mediaFilter === 'video') return null
@@ -240,14 +285,85 @@ export default function GalleryPage({
       return cached
     }
 
-    const res = await fetch(`/api/images/${imageId}/signed`)
-    if (!res.ok) return null
-    const data = (await res.json()) as SignedImageUrls
-    const next = { ...signedUrlsRef.current, [imageId]: data }
-    signedUrlsRef.current = next
-    setSignedUrlsById(next)
-    return data
+    const inFlight = signedUrlRequestsRef.current[imageId]
+    if (inFlight) return inFlight
+
+    const request = fetch(`/api/images/${imageId}/signed`)
+      .then(async (res) => {
+        if (!res.ok) return null
+        const data = (await res.json()) as SignedImageUrls
+        const next = { ...signedUrlsRef.current, [imageId]: data }
+        signedUrlsRef.current = next
+        setSignedUrlsById(next)
+        return data
+      })
+      .finally(() => {
+        delete signedUrlRequestsRef.current[imageId]
+      })
+
+    signedUrlRequestsRef.current[imageId] = request
+    return request
   }, [])
+
+  const ensureSignedUrlsBatch = useCallback(async (imageIds: string[]) => {
+    const pendingIds = Array.from(new Set(imageIds)).filter((imageId) => {
+      const cached = signedUrlsRef.current[imageId]
+      return !(cached?.expires_at && cached.expires_at - Date.now() > 60_000)
+    })
+    if (pendingIds.length === 0) return {}
+
+    const requestKey = pendingIds.slice().sort().join(',')
+    const inFlight = batchSignedUrlRequestsRef.current[requestKey]
+    if (inFlight) return inFlight
+
+    const request = fetch('/api/images/signed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_ids: pendingIds }),
+    })
+      .then(async (res) => {
+        if (!res.ok) return {}
+        const data = await res.json() as { signed_urls?: Record<string, SignedImageUrls> }
+        const updates = data.signed_urls ?? {}
+        if (Object.keys(updates).length > 0) {
+          const next = { ...signedUrlsRef.current, ...updates }
+          signedUrlsRef.current = next
+          setSignedUrlsById(next)
+        }
+        return updates
+      })
+      .finally(() => {
+        delete batchSignedUrlRequestsRef.current[requestKey]
+      })
+
+    batchSignedUrlRequestsRef.current[requestKey] = request
+    return request
+  }, [])
+
+  useEffect(() => {
+    if (lightboxIndex !== null) return
+    if (imageOnly.length === 0) return
+
+    const warmIds = imageOnly.slice(0, 6).map((img) => img.id)
+    const timeout = window.setTimeout(() => {
+      void ensureSignedUrlsBatch(warmIds)
+    }, 150)
+
+    return () => window.clearTimeout(timeout)
+  }, [ensureSignedUrlsBatch, imageOnly, lightboxIndex])
+
+  const warmLightboxAssets = useCallback((imageId: string) => {
+    const index = imageIndexById.get(imageId)
+    if (index === undefined) return
+
+    const warmIndexes = [index, index - 1, index + 1, index + 2]
+    const warmIds = warmIndexes
+      .map((warmIndex) => imageOnly[warmIndex]?.id)
+      .filter((value): value is string => Boolean(value))
+    if (warmIds.length > 0) {
+      void ensureSignedUrlsBatch(warmIds)
+    }
+  }, [ensureSignedUrlsBatch, imageIndexById, imageOnly])
 
   useModalShortcuts({
     isOpen: !!playingVideoUrl,
@@ -258,7 +374,7 @@ export default function GalleryPage({
     await updateImageApproval(imageId, status, notes)
   }
 
-  const handleDelete = async (imageId: string) => {
+  const handleDelete = useCallback(async (imageId: string) => {
     await deleteImage(imageId)
     // Adjust lightbox after deletion
     if (lightboxIndex !== null) {
@@ -269,7 +385,57 @@ export default function GalleryPage({
         setLightboxIndex(newFiltered.length - 1)
       }
     }
-  }
+  }, [deleteImage, imageOnly, lightboxIndex])
+
+  const handleContextMenuAction = useCallback(async (action: ContextMenuAction, imageId: string) => {
+    const img = galleryImages.find((i) => i.id === imageId)
+    if (!img) return
+
+    switch (action) {
+      case 'open': {
+        const idx = imageIndexById.get(imageId) ?? -1
+        if (idx !== -1) setLightboxIndex(idx)
+        break
+      }
+      case 'approve':
+        await updateImageApproval(imageId, img.approval_status === 'approved' ? null : 'approved')
+        break
+      case 'reject':
+        await updateImageApproval(imageId, img.approval_status === 'rejected' ? null : 'rejected')
+        break
+      case 'request_changes':
+        await updateImageApproval(imageId, img.approval_status === 'request_changes' ? null : 'request_changes')
+        break
+      case 'download': {
+        const signed = await ensureSignedUrls(imageId)
+        const url = signed?.download_url || signed?.signed_url || img.public_url
+        if (!url) break
+        try {
+          const fileName = img.storage_path?.split('/').pop() ?? `product-gen-${img.variation_number || 0}.png`
+          const resp = await fetch(url)
+          const blob = await resp.blob()
+          const blobUrl = URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          link.href = blobUrl
+          link.download = fileName
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+          URL.revokeObjectURL(blobUrl)
+        } catch (err) {
+          console.error('Download failed for image', imageId, err)
+        }
+        break
+      }
+      case 'delete':
+        if (img.approval_status === 'rejected') {
+          if (window.confirm('Permanently delete this image? This cannot be undone.')) {
+            await handleDelete(imageId)
+          }
+        }
+        break
+    }
+  }, [galleryImages, imageIndexById, updateImageApproval, ensureSignedUrls, handleDelete])
 
   const toggleSelectMode = () => {
     setSelectMode((v) => {
@@ -293,7 +459,7 @@ export default function GalleryPage({
     setBulkDeleting(true)
     try {
       await bulkDeleteImages(Array.from(selectedIds))
-      await fetchGallery(id)
+      await fetchGallery(id, { sort: sortOption })
       setSelectedIds(new Set())
       setSelectMode(false)
     } finally {
@@ -310,7 +476,7 @@ export default function GalleryPage({
     setBulkDeleting(true)
     try {
       await bulkDeleteImages(rejectedIds)
-      await fetchGallery(id)
+      await fetchGallery(id, { sort: sortOption })
     } finally {
       setBulkDeleting(false)
     }
@@ -355,9 +521,9 @@ export default function GalleryPage({
       const hasActive = hasActiveJobs()
       if (!isMounted) return
       if (hasActive) {
-        await fetchGallery(id)
+        await fetchGallery(id, { sort: sortOption })
       } else if (prevHadActive && !hasActive) {
-        await fetchGallery(id)
+        await fetchGallery(id, { sort: sortOption })
       }
       prevHadActive = hasActive
     }
@@ -372,26 +538,24 @@ export default function GalleryPage({
       isMounted = false
       clearInterval(interval)
     }
-  }, [id, fetchGallery, fetchGenerationJobs])
+  }, [id, sortOption, fetchGallery, fetchGenerationJobs])
 
   // Clear selection when filters change
   useEffect(() => {
     setSelectedIds(new Set())
     setSelectMode(false)
-  }, [statusFilter, mediaFilter, jobFilter])
+  }, [statusFilter, mediaFilter, jobFilter, sortOption])
 
   useEffect(() => {
     if (lightboxIndex === null) return
-    const current = imageOnly[lightboxIndex]
-    if (!current) return
-    void ensureSignedUrls(current.id)
-
-    const next = imageOnly[lightboxIndex + 1]
-    if (next) void ensureSignedUrls(next.id)
-
-    const prev = imageOnly[lightboxIndex - 1]
-    if (prev) void ensureSignedUrls(prev.id)
-  }, [lightboxIndex, imageOnly, ensureSignedUrls])
+    const warmIndexes = [lightboxIndex, lightboxIndex - 1, lightboxIndex + 1, lightboxIndex - 2, lightboxIndex + 2]
+    const warmIds = warmIndexes
+      .map((index) => imageOnly[index]?.id)
+      .filter((value): value is string => Boolean(value))
+    if (warmIds.length > 0) {
+      void ensureSignedUrlsBatch(warmIds)
+    }
+  }, [ensureSignedUrlsBatch, imageOnly, lightboxIndex])
 
   const statusBadge = (status: string | null) => {
     switch (status) {
@@ -436,7 +600,7 @@ export default function GalleryPage({
             </Link>
             <h1 className="text-xl font-semibold">Image Gallery</h1>
             <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm text-zinc-400">
-              {filteredImages.length} image{filteredImages.length !== 1 ? 's' : ''}
+              {galleryTotal > filteredImages.length ? `${filteredImages.length} of ${galleryTotal}` : filteredImages.length} image{galleryTotal !== 1 ? 's' : ''}
             </span>
           </div>
 
@@ -552,6 +716,21 @@ export default function GalleryPage({
             Select
           </button>
 
+          <div className="mx-2 hidden sm:block h-5 w-px bg-zinc-700" />
+
+          <div className="flex items-center gap-1.5">
+            <ArrowUpDown className="h-4 w-4 text-zinc-500" />
+            <select
+              value={sortOption}
+              onChange={(e) => setSortOption(e.target.value as SortOption)}
+              className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 outline-none focus:border-zinc-500"
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="variation">Variation #</option>
+            </select>
+          </div>
+
           {jobIds.length > 1 && (
             <select
               value={jobFilter}
@@ -612,9 +791,11 @@ export default function GalleryPage({
                     {group.images.length}
                   </span>
                 </div>
-                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-                  {group.images.map((img) => {
-                    const globalIndex = imageOnly.findIndex((item) => item.id === img.id)
+                <VirtualizedSquareGrid
+                  items={group.images}
+                  getItemKey={(img) => img.id}
+                  renderItem={(img) => {
+                    const globalIndex = imageIndexById.get(img.id) ?? -1
                     const isRejected = img.approval_status === 'rejected'
                     const isChanges = img.approval_status === 'request_changes'
                     const isSelected = selectedIds.has(img.id)
@@ -628,6 +809,12 @@ export default function GalleryPage({
                             setLightboxIndex(globalIndex)
                           }
                         }}
+                        onContextMenu={(e) => {
+                          e.preventDefault()
+                          setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status })
+                        }}
+                        onMouseEnter={() => warmLightboxAssets(img.id)}
+                        onFocus={() => warmLightboxAssets(img.id)}
                         className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
                           isSelected
                             ? 'border-blue-500 ring-2 ring-blue-500'
@@ -640,8 +827,10 @@ export default function GalleryPage({
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
-                          src={img.thumb_public_url ?? img.public_url ?? undefined}
+                          src={img.thumb_public_url ?? img.preview_public_url ?? img.public_url ?? undefined}
                           alt={`Variation ${img.variation_number}`}
+                          loading="lazy"
+                          decoding="async"
                           className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
                         />
                         {selectMode && (
@@ -668,106 +857,132 @@ export default function GalleryPage({
                         )}
                       </button>
                     )
-                  })}
-                </div>
+                  }}
+                />
               </div>
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-4 px-4 sm:px-6 py-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-            {filteredImages.map((img) => {
-              const isVideo = (img as unknown as Record<string, unknown>).media_type === 'video'
-              const isRejected = img.approval_status === 'rejected'
-              const isChanges = img.approval_status === 'request_changes'
-              const imageIndex = imageOnly.findIndex((item) => item.id === img.id)
-              const isSelected = selectedIds.has(img.id)
-              return (
-                <button
-                  key={img.id}
-                  onClick={() => {
-                    if (selectMode) {
-                      toggleImageSelection(img.id)
-                    } else if (isVideo && img.public_url) {
-                      setPlayingVideoUrl(img.public_url)
-                    } else {
-                      if (imageIndex !== -1) setLightboxIndex(imageIndex)
-                    }
-                  }}
-                  className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
-                    isSelected
-                      ? 'border-blue-500 ring-2 ring-blue-500'
-                      : isRejected
-                        ? 'border-red-600/60 hover:border-red-500'
-                        : isChanges
-                          ? 'border-orange-600/60 hover:border-orange-500'
-                          : 'border-zinc-800 hover:border-zinc-600'
-                  }`}
-                >
-                  {isVideo ? (
-                    <>
-                      {img.thumb_public_url ? (
-                        /* eslint-disable-next-line @next/next/no-img-element */
-                        <img
-                          src={img.thumb_public_url}
-                          alt="Video thumbnail"
-                          className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                        />
-                      ) : (
-                        <video
-                          src={`${img.public_url}#t=0.1`}
-                          preload="metadata"
-                          muted
-                          playsInline
-                          className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                        />
-                      )}
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="rounded-full bg-black/50 p-3">
-                          <Play className="h-6 w-6 text-white fill-white" />
+          <div className="px-4 py-6 sm:px-6">
+            <VirtualizedSquareGrid
+              items={filteredImages}
+              getItemKey={(img) => img.id}
+              renderItem={(img) => {
+                const isVideo = (img as unknown as Record<string, unknown>).media_type === 'video'
+                const isRejected = img.approval_status === 'rejected'
+                const isChanges = img.approval_status === 'request_changes'
+                const imageIndex = imageIndexById.get(img.id) ?? -1
+                const isSelected = selectedIds.has(img.id)
+                return (
+                  <button
+                    key={img.id}
+                    onClick={() => {
+                      if (selectMode) {
+                        toggleImageSelection(img.id)
+                      } else if (isVideo && img.public_url) {
+                        setPlayingVideoUrl(img.public_url)
+                      } else {
+                        if (imageIndex !== -1) setLightboxIndex(imageIndex)
+                      }
+                    }}
+                    onContextMenu={(e) => {
+                      if (isVideo) return
+                      e.preventDefault()
+                      setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status })
+                    }}
+                    onMouseEnter={() => {
+                      if (!isVideo) warmLightboxAssets(img.id)
+                    }}
+                    onFocus={() => {
+                      if (!isVideo) warmLightboxAssets(img.id)
+                    }}
+                    className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
+                      isSelected
+                        ? 'border-blue-500 ring-2 ring-blue-500'
+                        : isRejected
+                          ? 'border-red-600/60 hover:border-red-500'
+                          : isChanges
+                            ? 'border-orange-600/60 hover:border-orange-500'
+                            : 'border-zinc-800 hover:border-zinc-600'
+                    }`}
+                  >
+                    {isVideo ? (
+                      <>
+                        {img.thumb_public_url ? (
+                          /* eslint-disable-next-line @next/next/no-img-element */
+                          <img
+                            src={img.thumb_public_url}
+                            alt="Video thumbnail"
+                            loading="lazy"
+                            decoding="async"
+                            className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                          />
+                        ) : (
+                          <video
+                            src={`${img.public_url}#t=0.1`}
+                            preload="metadata"
+                            muted
+                            playsInline
+                            className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                          />
+                        )}
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <div className="rounded-full bg-black/50 p-3">
+                            <Play className="h-6 w-6 text-white fill-white" />
+                          </div>
                         </div>
+                      </>
+                    ) : (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={img.thumb_public_url ?? img.preview_public_url ?? img.public_url ?? undefined}
+                        alt={`Variation ${img.variation_number}`}
+                        loading="lazy"
+                        decoding="async"
+                        className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                      />
+                    )}
+                    {selectMode && (
+                      <div className="absolute top-2 left-2 z-10">
+                        {isSelected ? (
+                          <div className="flex h-5 w-5 items-center justify-center rounded bg-blue-500">
+                            <Check className="h-3.5 w-3.5 text-white" />
+                          </div>
+                        ) : (
+                          <Square className="h-5 w-5 text-white drop-shadow" />
+                        )}
                       </div>
-                    </>
-                  ) : (
-                    /* eslint-disable-next-line @next/next/no-img-element */
-                    <img
-                      src={img.thumb_public_url ?? img.public_url ?? undefined}
-                      alt={`Variation ${img.variation_number}`}
-                      className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                    />
-                  )}
-                  {selectMode && (
-                    <div className="absolute top-2 left-2 z-10">
-                      {isSelected ? (
-                        <div className="flex h-5 w-5 items-center justify-center rounded bg-blue-500">
-                          <Check className="h-3.5 w-3.5 text-white" />
-                        </div>
-                      ) : (
-                        <Square className="h-5 w-5 text-white drop-shadow" />
-                      )}
-                    </div>
-                  )}
-                  {isVideo && (
-                    <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded bg-purple-600/80 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                      <Video className="h-3 w-3" /> Video
-                    </span>
-                  )}
-                  {statusBadge(img.approval_status)}
-                  {isRejected && img.notes && (
-                    <div className="absolute bottom-0 inset-x-0 bg-black/70 px-2 py-1">
-                      <p className="text-[10px] text-red-300 truncate">{img.notes}</p>
-                    </div>
-                  )}
-                  {isChanges && img.notes && (
-                    <div className="absolute bottom-0 inset-x-0 bg-black/70 px-2 py-1">
-                      <p className="text-[10px] text-orange-300 truncate">{img.notes}</p>
-                    </div>
-                  )}
-                </button>
-              )
-            })}
+                    )}
+                    {isVideo && (
+                      <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded bg-purple-600/80 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                        <Video className="h-3 w-3" /> Video
+                      </span>
+                    )}
+                    {statusBadge(img.approval_status)}
+                    {isRejected && img.notes && (
+                      <div className="absolute bottom-0 inset-x-0 bg-black/70 px-2 py-1">
+                        <p className="text-[10px] text-red-300 truncate">{img.notes}</p>
+                      </div>
+                    )}
+                    {isChanges && img.notes && (
+                      <div className="absolute bottom-0 inset-x-0 bg-black/70 px-2 py-1">
+                        <p className="text-[10px] text-orange-300 truncate">{img.notes}</p>
+                      </div>
+                    )}
+                  </button>
+                )
+              }}
+            />
           </div>
         )
       }
+
+      {/* Infinite scroll sentinel */}
+      {!loadingGallery && galleryHasMore && (
+        <div ref={loadMoreRef} className="flex items-center justify-center py-8">
+          {loadingGalleryMore && <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />}
+        </div>
+      )}
 
       {/* Selection action bar */}
       {selectMode && selectedIds.size > 0 && (
@@ -823,6 +1038,18 @@ export default function GalleryPage({
             />
           </div>
         </div>
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <GalleryContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          imageId={contextMenu.imageId}
+          approvalStatus={contextMenu.approvalStatus}
+          onAction={handleContextMenuAction}
+          onClose={() => setContextMenu(null)}
+        />
       )}
 
       {/* Lightbox */}

@@ -6,8 +6,8 @@ import {
   clampBugReportText,
   createBugReportFormData,
   MAX_BUG_REPORT_CAPTION_LENGTH,
-  MAX_BUG_REPORT_DESCRIPTION_LENGTH,
   MAX_BUG_REPORT_FILE_SIZE,
+  MAX_BUG_REPORT_DESCRIPTION_LENGTH,
   normalizeBugReportMultiline,
   normalizeBugReportSingleLine,
   parseBugReportResponse,
@@ -54,7 +54,7 @@ test('buildBugReportSubmission trims fields and fills default screenshot caption
 
   const submission = buildBugReportSubmission({
     type: 'feature',
-    title: '  Add queue filters  ',
+    title: '  Add queue filters \u0000  ',
     description: '  More precise filtering please  ',
     images,
   })

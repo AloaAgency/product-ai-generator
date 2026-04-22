@@ -34,7 +34,7 @@ export function ReferenceImagePicker({ isOpen, onClose, onSelect, productId }: R
     if (!isOpen) return
     setTab('gallery')
     setLoadingGallery(true)
-    api(`/api/products/${productId}/gallery?media_type=image&approval_status=approved`)
+    api(`/api/products/${productId}/gallery?media_type=image&approval_status=approved&limit=200`)
       .then((data) => setGalleryImages(data.images ?? data))
       .catch(() => setGalleryImages([]))
       .finally(() => setLoadingGallery(false))
@@ -80,11 +80,17 @@ export function ReferenceImagePicker({ isOpen, onClose, onSelect, productId }: R
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={onClose}>
-      <div className="relative w-full max-w-2xl mx-4 rounded-xl border border-zinc-700 bg-zinc-900 p-5" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80" onClick={onClose}>
+      <div
+        className="relative w-full max-w-2xl sm:mx-4 rounded-t-xl sm:rounded-xl border border-zinc-700 bg-zinc-900 p-4 sm:p-5 max-h-[85dvh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-zinc-200">Select Reference Image</h2>
-          <button onClick={onClose} className="rounded p-1 text-zinc-400 hover:text-zinc-100">
+          <button
+            onClick={onClose}
+            className="rounded p-2 text-zinc-400 hover:text-zinc-100 min-w-[44px] min-h-[44px] flex items-center justify-center"
+          >
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -93,20 +99,20 @@ export function ReferenceImagePicker({ isOpen, onClose, onSelect, productId }: R
         <div className="flex gap-2 mb-4 border-b border-zinc-700 pb-2">
           <button
             onClick={() => setTab('gallery')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${tab === 'gallery' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-zinc-400 hover:text-zinc-200'}`}
+            className={`px-4 py-2.5 text-xs font-medium rounded-t transition-colors min-h-[44px] ${tab === 'gallery' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-zinc-400 hover:text-zinc-200'}`}
           >
             Gallery
           </button>
           <button
             onClick={() => setTab('upload')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${tab === 'upload' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-zinc-400 hover:text-zinc-200'}`}
+            className={`px-4 py-2.5 text-xs font-medium rounded-t transition-colors min-h-[44px] ${tab === 'upload' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-zinc-400 hover:text-zinc-200'}`}
           >
             Upload
           </button>
         </div>
 
         {tab === 'gallery' ? (
-          <div className="max-h-80 overflow-y-auto">
+          <div className="overflow-y-auto flex-1 min-h-0">
             {loadingGallery ? (
               <div className="flex justify-center py-8">
                 <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
@@ -114,12 +120,12 @@ export function ReferenceImagePicker({ isOpen, onClose, onSelect, productId }: R
             ) : galleryImages.length === 0 ? (
               <p className="text-center text-sm text-zinc-500 py-8">No approved images in gallery.</p>
             ) : (
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 pb-2">
                 {galleryImages.map((img) => (
                   <button
                     key={img.id}
                     onClick={() => onSelect(img.id, img.thumb_public_url || img.public_url || null)}
-                    className="h-24 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 hover:border-blue-500 transition-colors"
+                    className="aspect-square overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 hover:border-blue-500 transition-colors min-h-[80px]"
                   >
                     {(img.thumb_public_url || img.public_url) ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -155,10 +161,10 @@ export function ReferenceImagePicker({ isOpen, onClose, onSelect, productId }: R
             ) : (
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-zinc-700 px-12 py-8 text-zinc-400 hover:border-blue-500 hover:text-blue-400 transition-colors"
+                className="w-full flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-zinc-700 px-8 py-10 text-zinc-400 hover:border-blue-500 hover:text-blue-400 transition-colors"
               >
                 <Upload className="h-8 w-8" />
-                <span className="text-sm font-medium">Click to upload an image</span>
+                <span className="text-sm font-medium">Tap to upload an image</span>
                 <span className="text-xs text-zinc-500">PNG, JPG, WebP</span>
               </button>
             )}

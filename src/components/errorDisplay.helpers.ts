@@ -12,9 +12,17 @@ const INTERNAL_ERROR_PATTERNS = [
   /\b(?:https?:\/\/|s3:\/\/|gs:\/\/)[^\s]+/i,
 ]
 
+const SECRET_TEXT_PATTERNS = [
+  /([?&](?:access_token|api[_-]?key|authorization|signature|sig|token|x-amz-[^=]+|x-goog-[^=]+)=)[^&\s]+/gi,
+  /((?:api[_-]?key|authorization|bearer|secret|signature|token|password|cookie|set-cookie)\s*[:=]\s*)[^\s,;]+/gi,
+]
+
 const normalizeWhitespace = (value: string) => value.replace(/\s+/g, ' ').trim()
 
 const stripStackTrace = (value: string) => value.split(/\n\s*at\s+/)[0] ?? value
+
+const redactSensitiveText = (value: string) =>
+  SECRET_TEXT_PATTERNS.reduce((current, pattern) => current.replace(pattern, '$1[redacted]'), value)
 
 const isInternalErrorMessage = (value: string) =>
   INTERNAL_ERROR_PATTERNS.some((pattern) => pattern.test(value))
@@ -27,6 +35,7 @@ export const getSafeErrorMessage = (
   fallback = GENERIC_ERROR_MESSAGE
 ) => {
   if (!raw) return fallback
+  if (/\n\s*at\s+/.test(raw)) return fallback
 
   const normalized = normalizeWhitespace(stripStackTrace(raw))
   if (!normalized || isInternalErrorMessage(normalized)) {
@@ -49,14 +58,14 @@ export const getSafeErrorContext = (context: Record<string, unknown> | null | un
     const sanitized = JSON.stringify(
       context,
       (key, value) => {
+        if (/(api[_ -]?key|authorization|bearer|token|secret|password|cookie|signature|x-amz-|x-goog-)/i.test(key)) {
+          return '[redacted]'
+        }
         if (typeof value !== 'string') return value
-        if (/(api[_ -]?key|authorization|bearer|token|secret|password|cookie)/i.test(key)) {
+        if (/(api[_ -]?key|authorization|bearer|token|secret|password|cookie|signature)/i.test(value)) {
           return '[redacted]'
         }
-        if (/(api[_ -]?key|authorization|bearer|token|secret|password|cookie)/i.test(value)) {
-          return '[redacted]'
-        }
-        return value
+        return redactSensitiveText(value)
       },
       2
     )

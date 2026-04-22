@@ -1,36 +1,51 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { buildFullPrompt } from '@/lib/prompt-builder'
+import { buildFullPrompt, MAX_STYLE_VALUE_LEN } from '@/lib/prompt-builder'
 import type { Product, Project, ReferenceSet, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
 import { processGenerationJob } from '@/lib/generation-worker'
+import { kickWorkerForJob } from '@/lib/video-job-request'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
 
+const MAX_PROMPT_LENGTH = 10000
+const DEFAULT_JOBS_LIMIT = 50
+const MAX_JOBS_LIMIT = 200
+
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: productId } = await params
   try {
+    const { searchParams } = new URL(request.url)
+    const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_JOBS_LIMIT, 1), MAX_JOBS_LIMIT)
+    const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
+    const status = searchParams.get('status') // optional filter
+
     const supabase = createServiceClient()
-    const { data, error } = await supabase
+    let query = supabase
       .from(T.generation_jobs)
       .select('*')
       .eq('product_id', productId)
       .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
+
+    if (status) {
+      query = query.eq('status', status)
+    }
+
+    const { data, error } = await query
     if (error) {
       return NextResponse.json({ error: 'Failed to fetch jobs' }, { status: 500 })
     }
     return NextResponse.json(data || [])
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('[Generate GET]', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
@@ -41,7 +56,10 @@ export async function POST(
   const { id: productId } = await params
 
   try {
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
     const {
       prompt_template_id = null,
       prompt_text,
@@ -66,6 +84,9 @@ export async function POST(
     if (!prompt_text) {
       return NextResponse.json({ error: 'prompt_text is required' }, { status: 400 })
     }
+    if (typeof prompt_text === 'string' && prompt_text.length > MAX_PROMPT_LENGTH) {
+      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+    }
 
     const parsedVariationCount = Number(variation_count)
     if (
@@ -83,55 +104,46 @@ export async function POST(
 
     const supabase = createServiceClient()
 
-    // Validate source_image_id if provided
-    if (source_image_id) {
-      const { data: sourceImg, error: sourceErr } = await supabase
-        .from(T.generated_images)
-        .select('id')
-        .eq('id', source_image_id)
-        .single()
-      if (sourceErr || !sourceImg) {
-        return NextResponse.json({ error: 'Source image not found' }, { status: 400 })
-      }
-    }
+    // Fetch product and validate source image in parallel (independent queries)
+    const refSetQuery = reference_set_id
+      ? supabase
+          .from(T.reference_sets)
+          .select('*')
+          .eq('id', reference_set_id)
+          .eq('product_id', productId)
+          .single()
+      : supabase
+          .from(T.reference_sets)
+          .select('*')
+          .eq('product_id', productId)
+          .eq('is_active', true)
+          .single()
 
-    // Fetch product
-    const { data: product, error: productError } = await supabase
-      .from(T.products)
-      .select('*')
-      .eq('id', productId)
-      .single()
+    const [productResult, refSetResult, sourceImgResult] = await Promise.all([
+      supabase.from(T.products).select('*').eq('id', productId).single(),
+      refSetQuery,
+      source_image_id
+        ? supabase.from(T.generated_images).select('id').eq('id', source_image_id).single()
+        : Promise.resolve({ data: null, error: null }),
+    ])
 
-    if (productError || !product) {
+    if (productResult.error || !productResult.data) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
 
+    if (source_image_id && (sourceImgResult.error || !sourceImgResult.data)) {
+      return NextResponse.json({ error: 'Source image not found' }, { status: 400 })
+    }
+
+    const product = productResult.data
+
     // Find reference set: use provided ID or fall back to active set
     let refSet: ReferenceSet | null = null
-    if (reference_set_id) {
-      const { data, error } = await supabase
-        .from(T.reference_sets)
-        .select('*')
-        .eq('id', reference_set_id)
-        .eq('product_id', productId)
-        .single()
+    {
+      const { data, error } = refSetResult
       if (error || !data) {
         return NextResponse.json(
-          { error: 'Reference set not found' },
-          { status: 400 }
-        )
-      }
-      refSet = data as ReferenceSet
-    } else {
-      const { data, error } = await supabase
-        .from(T.reference_sets)
-        .select('*')
-        .eq('product_id', productId)
-        .eq('is_active', true)
-        .single()
-      if (error || !data) {
-        return NextResponse.json(
-          { error: 'No active reference set found for this product' },
+          { error: reference_set_id ? 'Reference set not found' : 'No active reference set found for this product' },
           { status: 400 }
         )
       }
@@ -145,39 +157,47 @@ export async function POST(
       )
     }
 
-    // Fetch reference images
-    const { data: refImages } = await supabase
-      .from(T.reference_images)
-      .select('*')
-      .eq('reference_set_id', refSet.id)
-      .order('display_order', { ascending: true })
+    // Fetch reference images, texture set, and project styles in parallel
+    const typedProduct = product as Product
+    const [refImagesResult, textureSetResult, projectResult] = await Promise.all([
+      supabase
+        .from(T.reference_images)
+        .select('*')
+        .eq('reference_set_id', refSet.id)
+        .order('display_order', { ascending: true }),
+      texture_set_id
+        ? supabase
+            .from(T.reference_sets)
+            .select('*')
+            .eq('id', texture_set_id)
+            .eq('product_id', productId)
+            .single()
+        : Promise.resolve({ data: null, error: null }),
+      typedProduct.project_id
+        ? supabase
+            .from(T.projects)
+            .select('global_style_settings')
+            .eq('id', typedProduct.project_id)
+            .single()
+        : Promise.resolve({ data: null }),
+    ])
 
-    const referenceImages: ReferenceImage[] = refImages || []
+    const referenceImages: ReferenceImage[] = refImagesResult.data || []
 
-    // Fetch texture set and images if provided
+    // Validate and resolve texture set
     let textureSet: ReferenceSet | null = null
     let textureImages: ReferenceImage[] = []
     if (texture_set_id) {
-      const { data: texSet, error: texSetError } = await supabase
-        .from(T.reference_sets)
-        .select('*')
-        .eq('id', texture_set_id)
-        .eq('product_id', productId)
-        .single()
-      if (texSetError || !texSet) {
-        return NextResponse.json(
-          { error: 'Texture set not found' },
-          { status: 400 }
-        )
+      if (textureSetResult.error || !textureSetResult.data) {
+        return NextResponse.json({ error: 'Texture set not found' }, { status: 400 })
       }
-      textureSet = texSet as ReferenceSet
+      textureSet = textureSetResult.data as ReferenceSet
       if (textureSet.type && textureSet.type !== 'texture') {
         return NextResponse.json(
           { error: 'texture_set_id must be a texture reference set' },
           { status: 400 }
         )
       }
-
       const { data: texImages } = await supabase
         .from(T.reference_images)
         .select('*')
@@ -206,27 +226,18 @@ export async function POST(
       )
     }
 
-    // Fetch parent project and merge styles
-    const typedProduct = product as Product
-    let projectStyles = {}
-    if (typedProduct.project_id) {
-      const { data: project } = await supabase
-        .from(T.projects)
-        .select('*')
-        .eq('id', typedProduct.project_id)
-        .single()
-      if (project) {
-        projectStyles = (project as Project).global_style_settings ?? {}
-      }
-    }
+    const projectStyles = (projectResult.data as Project | null)?.global_style_settings ?? {}
     const mergedSettings = mergeStyles(projectStyles, typedProduct.global_style_settings)
 
-    // Apply per-generation photographic overrides
-    if (overrideLens) mergedSettings.lens = overrideLens
-    if (overrideCameraHeight) mergedSettings.camera_height = overrideCameraHeight
-    if (overrideLighting) mergedSettings.lighting = overrideLighting
-    if (overrideColorGrading) mergedSettings.color_grading = overrideColorGrading
-    if (overrideStyle) mergedSettings.style = overrideStyle
+    // Apply per-generation photographic overrides — cap at MAX_STYLE_VALUE_LEN to prevent
+    // oversized or injected values from the request body reaching the AI prompt unchecked.
+    const capStyle = (v: unknown): string | undefined =>
+      typeof v === 'string' && v.trim() ? v.slice(0, MAX_STYLE_VALUE_LEN) : undefined
+    if (capStyle(overrideLens)) mergedSettings.lens = capStyle(overrideLens)
+    if (capStyle(overrideCameraHeight)) mergedSettings.camera_height = capStyle(overrideCameraHeight)
+    if (capStyle(overrideLighting)) mergedSettings.lighting = capStyle(overrideLighting)
+    if (capStyle(overrideColorGrading)) mergedSettings.color_grading = capStyle(overrideColorGrading)
+    if (capStyle(overrideStyle)) mergedSettings.style = capStyle(overrideStyle)
 
     // Build final prompt
     let userPrompt = prompt_text
@@ -286,39 +297,22 @@ export async function POST(
       const finalBatch = Number.isFinite(overrideBatch) && overrideBatch > 0 ? overrideBatch : batchSize
       const finalParallel = Number.isFinite(overrideParallel) && overrideParallel > 0 ? overrideParallel : parallelism
       const finalBudget = Number.isFinite(overrideBudget) && overrideBudget > 0 ? overrideBudget : timeBudgetMs
-      void processGenerationJob(job.id, { batchSize: finalBatch, parallelism: finalParallel, timeBudgetMs: finalBudget })
+      void processGenerationJob(job.id, { batchSize: finalBatch, parallelism: finalParallel, timeBudgetMs: finalBudget }).catch(async (err) => {
+        const message = err instanceof Error ? err.message : 'Inline generation job failed'
+        console.error('[Generate] Inline job failed:', err)
+        await logError({
+          productId,
+          errorMessage: message,
+          errorSource: 'api/products/generate:inline',
+          errorContext: { jobId: job.id },
+        })
+      })
     } else {
-      const cronSecret = process.env.CRON_SECRET
-      if (cronSecret) {
-        const url = new URL('/api/worker/generate', request.url)
-        url.searchParams.set('jobId', job.id)
-        const batchSize = process.env.GENERATION_BATCH_SIZE
-        const parallelism = process.env.GENERATION_PARALLELISM
-        const budget = process.env.GENERATION_TIME_BUDGET_MS
-        if (batchSize) url.searchParams.set('batch', batchSize)
-        if (parallelism) url.searchParams.set('parallel', parallelism)
-        if (budget) url.searchParams.set('budget', budget)
-
-        void (async () => {
-          try {
-            const res = await fetch(url.toString(), {
-              method: 'GET',
-              headers: {
-                Authorization: `Bearer ${cronSecret}`,
-              },
-            })
-            console.log('[Generate] Worker kick', {
-              jobId: job.id,
-              status: res.status,
-            })
-          } catch (err) {
-            console.warn('[Generate] Worker kick failed', {
-              jobId: job.id,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        })()
-      }
+      kickWorkerForJob(job.id, request.url, '[Generate]', {
+        batch: process.env.GENERATION_BATCH_SIZE ?? '',
+        parallel: process.env.GENERATION_PARALLELISM ?? '',
+        budget: process.env.GENERATION_TIME_BUDGET_MS ?? '',
+      })
     }
 
     return NextResponse.json({ job }, { status: 201 })
@@ -329,10 +323,7 @@ export async function POST(
       errorMessage: err instanceof Error ? err.message : 'Internal server error',
       errorSource: 'api/products/generate',
     })
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
@@ -342,8 +333,13 @@ export async function DELETE(
 ) {
   const { id: productId } = await params
   try {
-    const supabase = createServiceClient()
     const scope = new URL(request.url).searchParams.get('scope') || 'active'
+
+    if (!['active', 'failed', 'all', 'log'].includes(scope)) {
+      return NextResponse.json({ error: 'Invalid scope. Use "active", "failed", "all", or "log".' }, { status: 400 })
+    }
+
+    const supabase = createServiceClient()
     const now = new Date().toISOString()
 
     let cancelled = 0
@@ -362,7 +358,8 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        console.error('[Generate DELETE cancel]', error)
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       cancelled = data?.length || 0
     }
@@ -376,7 +373,8 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        console.error('[Generate DELETE failed]', error)
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       clearedFailed = data?.length || 0
     }
@@ -391,20 +389,15 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        console.error('[Generate DELETE log]', error)
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       clearedLog = data?.length || 0
     }
 
-    if (!['active', 'failed', 'all', 'log'].includes(scope)) {
-      return NextResponse.json({ error: 'Invalid scope. Use "active", "failed", "all", or "log".' }, { status: 400 })
-    }
-
     return NextResponse.json({ cancelled, cleared_failed: clearedFailed, cleared_log: clearedLog })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('[Generate DELETE]', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

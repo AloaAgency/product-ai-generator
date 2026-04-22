@@ -1,0 +1,45 @@
+name: Security Audit
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+  schedule:
+    # Run weekly on Monday mornings (same cadence as Dependabot)
+    - cron: '0 14 * * 1'
+
+jobs:
+  audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    # Non-blocking: continue-on-error means this check shows as warning, not failure
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run security audit
+        run: |
+          echo "## Security Audit Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Capture audit output
+          if npm audit --audit-level=critical 2>&1; then
+            echo "✅ No critical vulnerabilities found" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Critical vulnerabilities detected — review required" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            npm audit --audit-level=high 2>&1 | tail -60 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            # Exit 1 so the check shows as failed (but continue-on-error keeps it non-blocking)
+            exit 1
+          fi

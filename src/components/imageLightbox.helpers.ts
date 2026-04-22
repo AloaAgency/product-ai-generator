@@ -32,10 +32,25 @@ export const sanitizeRouteSegment = (value?: string | null) => {
   return trimmed ? encodeURIComponent(trimmed) : null
 }
 
-export const getDisplayImageUrl = (image: LightboxImage) =>
+export const getPreviewImageUrl = (image: LightboxImage) =>
   getFirstSafeUrl(
     image.preview_signed_url,
     image.preview_public_url,
+    image.thumb_signed_url,
+    image.thumb_public_url
+  )
+
+export const getFullImageUrl = (image: LightboxImage) =>
+  getFirstSafeUrl(image.signed_url, image.public_url)
+
+export const getDisplayImageUrl = (image: LightboxImage) =>
+  getPreviewImageUrl(image) ||
+  getFullImageUrl(image)
+
+export const getLightboxThumbnailUrl = (image: LightboxImage) =>
+  getFirstSafeUrl(
+    image.thumb_signed_url,
+    image.thumb_public_url,
     image.signed_url,
     image.public_url
   )
@@ -56,6 +71,7 @@ export const getDownloadImageUrl = (
 
 export const shouldRequestSignedUrls = (image: LightboxImage, hasRequester: boolean) => {
   if (!hasRequester) return false
+  // Request full-size signed URL if we don't have one yet (even if a thumbnail is available)
   return !sanitizeUrlCandidate(image.signed_url) && !sanitizeUrlCandidate(image.public_url)
 }
 
@@ -63,6 +79,24 @@ export const getNextApprovalStatus = (
   currentStatus: ApprovalStatus | undefined,
   targetStatus: Exclude<ApprovalStatus, 'pending' | null>
 ): ApprovalStatus => (currentStatus === targetStatus ? null : targetStatus)
+
+export const getLightboxDisplayName = ({
+  fileName,
+  variationNumber,
+  currentIndex,
+}: {
+  fileName?: string | null
+  variationNumber?: number | null
+  currentIndex: number
+}) => fileName || `Variation ${variationNumber ?? currentIndex + 1}`
+
+export const getLightboxWarmupIndexes = (currentIndex: number) => [
+  currentIndex,
+  currentIndex - 1,
+  currentIndex + 1,
+  currentIndex - 2,
+  currentIndex + 2,
+]
 
 export const getFixImageHref = ({
   projectId,
@@ -73,11 +107,11 @@ export const getFixImageHref = ({
   productId?: string | null
   imageId?: string | null
 }) => {
-  const safeProjectId = sanitizeRouteSegment(projectId)
-  const safeProductId = sanitizeRouteSegment(productId)
-  const safeImageId = sanitizeRouteSegment(imageId)
-  return safeProjectId && safeProductId && safeImageId
-    ? `/projects/${safeProjectId}/products/${safeProductId}/fix-image?sourceImageId=${safeImageId}`
+  const safeFixProjectId = sanitizeRouteSegment(projectId)
+  const safeFixProductId = sanitizeRouteSegment(productId)
+  const safeFixImageId = sanitizeRouteSegment(imageId)
+  return safeFixProjectId && safeFixProductId && safeFixImageId
+    ? `/projects/${safeFixProjectId}/products/${safeFixProductId}/fix-image?sourceImageId=${safeFixImageId}`
     : null
 }
 
@@ -109,6 +143,8 @@ export type LightboxKeyboardAction =
   | 'close'
   | 'prev'
   | 'next'
+  | 'first'
+  | 'last'
   | 'approve'
   | 'reject'
   | 'download'
@@ -142,6 +178,10 @@ export const getKeyboardAction = ({
       return { action: 'prev', preventDefault: true }
     case 'ArrowRight':
       return { action: 'next', preventDefault: true }
+    case 'Home':
+      return { action: 'first', preventDefault: true }
+    case 'End':
+      return { action: 'last', preventDefault: true }
     case 'Enter':
       return { action: 'approve', preventDefault: true }
     case 'Delete':

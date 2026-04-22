@@ -1,0 +1,43 @@
+# Automated dependency updates — security patches + minor/patch bumps
+# Major version bumps are excluded — those should be deliberate migrations
+# Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    # Group minor/patch updates into single PRs to reduce noise
+    groups:
+      production-dependencies:
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+      dev-dependencies:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+    # Block major version bumps — those require manual migration
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+    # Security updates get their own ungrouped PRs (faster review)
+    open-pull-requests-limit: 15
+    rebase-strategy: "auto"
+    labels:
+      - "dependencies"
+      - "security"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"

@@ -5,7 +5,11 @@ import {
   deriveGenerationQueueState,
   getFailureTimestamp,
   getGenerationJobProgress,
+  getGenerationJobUnitLabel,
+  getGenerationQueueOutputLabel,
+  getGenerationQueueSummary,
   shouldPollGenerationQueue,
+  shouldShowIndeterminateJobProgress,
 } from '../globalGenerationQueue.helpers.js'
 
 const buildJob = (overrides: Partial<GenerationJob>): GenerationJob => ({
@@ -61,6 +65,18 @@ test('deriveGenerationQueueState summarizes active and failed jobs without count
   assert.deepEqual(state.totals, { totalVariations: 5, totalCompleted: 3 })
   assert.equal(state.overallProgress, 60)
   assert.equal(state.hasActiveJobs, true)
+})
+
+test('deriveGenerationQueueState keeps only the three newest failures without sorting the full history', () => {
+  const state = deriveGenerationQueueState([
+    buildJob({ id: 'failed-1', status: 'failed', completed_at: '2024-03-01T12:00:00.000Z' }),
+    buildJob({ id: 'failed-3', status: 'failed', completed_at: '2024-03-03T12:00:00.000Z' }),
+    buildJob({ id: 'failed-2', status: 'failed', completed_at: '2024-03-02T12:00:00.000Z' }),
+    buildJob({ id: 'failed-4', status: 'failed', completed_at: '2024-03-04T12:00:00.000Z' }),
+  ])
+
+  assert.equal(state.failedCount, 4)
+  assert.deepEqual(state.recentFailedJobs.map((job) => job.id), ['failed-4', 'failed-3', 'failed-2'])
 })
 
 test('getGenerationJobProgress clamps invalid and over-complete jobs into a safe percentage range', () => {
@@ -121,4 +137,53 @@ test('getFailureTimestamp returns null for invalid timestamps', () => {
   assert.equal(getFailureTimestamp('not-a-date'), null)
   assert.equal(getFailureTimestamp(undefined), null)
   assert.match(getFailureTimestamp('2024-03-02T12:00:00.000Z') || '', /\d{4}|\d{1,2}/)
+})
+
+test('queue display helpers keep summary and progress labels aligned with queue state', () => {
+  assert.equal(
+    getGenerationQueueSummary({
+      loadingJobs: true,
+      generationJobCount: 0,
+      hasActiveJobs: false,
+      pendingCount: 0,
+      runningCount: 0,
+      failedCount: 0,
+    }),
+    'Checking queue...'
+  )
+  assert.equal(
+    getGenerationQueueSummary({
+      loadingJobs: false,
+      generationJobCount: 2,
+      hasActiveJobs: true,
+      pendingCount: 1,
+      runningCount: 1,
+      failedCount: 2,
+    }),
+    '1 pending · 1 running · 2 failed'
+  )
+  assert.equal(
+    getGenerationQueueOutputLabel({
+      hasActiveJobs: true,
+      failedCount: 0,
+      totals: { totalCompleted: 3, totalVariations: 5 },
+    }),
+    '3/5 outputs'
+  )
+  assert.equal(
+    getGenerationQueueOutputLabel({
+      hasActiveJobs: false,
+      failedCount: 2,
+      totals: { totalCompleted: 0, totalVariations: 0 },
+    }),
+    '2 failed'
+  )
+})
+
+test('job display helpers derive unit labels and indeterminate progress safely', () => {
+  assert.equal(getGenerationJobUnitLabel(buildJob({ job_type: 'image', variation_count: 2 })), 'images')
+  assert.equal(getGenerationJobUnitLabel(buildJob({ job_type: 'video', variation_count: 1 })), 'video')
+  assert.equal(shouldShowIndeterminateJobProgress(buildJob({ status: 'pending', completed_count: 1 })), true)
+  assert.equal(shouldShowIndeterminateJobProgress(buildJob({ status: 'running', completed_count: 0 })), true)
+  assert.equal(shouldShowIndeterminateJobProgress(buildJob({ status: 'running', completed_count: 1 })), false)
 })

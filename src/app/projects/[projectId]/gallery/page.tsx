@@ -5,6 +5,8 @@ import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { ProjectHeader } from '@/components/ProjectHeader'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
+import { GalleryContextMenu, type ContextMenuAction } from '@/components/GalleryContextMenu'
+import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
 import type { GeneratedImage } from '@/lib/types'
 import {
   Filter,
@@ -47,10 +49,17 @@ export default function ProjectGalleryPage({
   params: Promise<{ projectId: string }>
 }) {
   const { projectId } = use(params)
-  const { currentProject, fetchProject, updateProject, bulkDeleteImages } = useAppStore()
+  const currentProject = useAppStore((state) => state.currentProject)
+  const fetchProject = useAppStore((state) => state.fetchProject)
+  const updateProject = useAppStore((state) => state.updateProject)
+  const bulkDeleteImages = useAppStore((state) => state.bulkDeleteImages)
 
   const [productGroups, setProductGroups] = useState<ProductGroup[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [galleryTotal, setGalleryTotal] = useState(0)
+  const [currentOffset, setCurrentOffset] = useState(0)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [mediaFilter, setMediaFilter] = useState<'all' | 'image' | 'video'>('all')
   const [productFilter, setProductFilter] = useState<string>('all')
@@ -61,6 +70,10 @@ export default function ProjectGalleryPage({
   const [requestChangesCount, setRequestChangesCount] = useState(0)
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const signedUrlsRef = useRef(signedUrlsById)
+  const signedUrlRequestsRef = useRef<Record<string, Promise<SignedImageUrls | null>>>({})
+  const batchSignedUrlRequestsRef = useRef<Record<string, Promise<Record<string, SignedImageUrls>>>>({})
+  const loadMoreRef = useRef<HTMLDivElement>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null } | null>(null)
 
   useEffect(() => {
     signedUrlsRef.current = signedUrlsById
@@ -70,18 +83,27 @@ export default function ProjectGalleryPage({
     fetchProject(projectId)
   }, [projectId, fetchProject])
 
+  const buildParams = useCallback((extraOffset?: number) => {
+    const params = new URLSearchParams()
+    if (statusFilter !== 'all') params.set('approval_status', statusFilter)
+    if (mediaFilter !== 'all') params.set('media_type', mediaFilter)
+    if (productFilter !== 'all') params.set('product_id', productFilter)
+    params.set('limit', '48')
+    params.set('offset', String(extraOffset ?? 0))
+    return params
+  }, [statusFilter, mediaFilter, productFilter])
+
   const fetchProjectGallery = useCallback(async () => {
     setLoading(true)
     try {
-      const params = new URLSearchParams()
-      if (statusFilter !== 'all') params.set('approval_status', statusFilter)
-      if (mediaFilter !== 'all') params.set('media_type', mediaFilter)
-      if (productFilter !== 'all') params.set('product_id', productFilter)
-
+      const params = buildParams(0)
       const res = await fetch(`/api/projects/${projectId}/gallery?${params}`)
       if (!res.ok) throw new Error('Failed to fetch')
       const data = await res.json()
       setProductGroups(data.products || [])
+      setGalleryTotal(data.total ?? 0)
+      setHasMore(data.has_more ?? false)
+      setCurrentOffset((data.products || []).reduce((sum: number, g: ProductGroup) => sum + g.images.length, 0))
       if (typeof data.rejected_count === 'number') {
         setRejectedCount(data.rejected_count)
       }
@@ -94,11 +116,62 @@ export default function ProjectGalleryPage({
     } finally {
       setLoading(false)
     }
-  }, [projectId, statusFilter, mediaFilter, productFilter])
+  }, [projectId, buildParams])
+
+  const fetchMore = useCallback(async () => {
+    if (!hasMore || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const params = buildParams(currentOffset)
+      const res = await fetch(`/api/projects/${projectId}/gallery?${params}`)
+      if (!res.ok) throw new Error('Failed to fetch more')
+      const data = await res.json()
+      const newGroups: ProductGroup[] = data.products || []
+      // Merge into existing groups by product_id
+      setProductGroups((prev) => {
+        const merged = new Map<string, ProductGroup>()
+        for (const g of prev) merged.set(g.product_id, { ...g, images: [...g.images] })
+        for (const g of newGroups) {
+          const existing = merged.get(g.product_id)
+          if (existing) {
+            const existingIds = new Set(existing.images.map((img) => img.id))
+            const unique = g.images.filter((img) => !existingIds.has(img.id))
+            existing.images.push(...unique)
+          } else {
+            merged.set(g.product_id, g)
+          }
+        }
+        return Array.from(merged.values())
+      })
+      const newImageCount = newGroups.reduce((sum, g) => sum + g.images.length, 0)
+      setCurrentOffset((prev) => prev + newImageCount)
+      setHasMore(data.has_more ?? false)
+    } catch (err) {
+      console.error('[ProjectGallery] Fetch more error:', err)
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [projectId, buildParams, currentOffset, hasMore, loadingMore])
 
   useEffect(() => {
     fetchProjectGallery()
   }, [fetchProjectGallery])
+
+  // Infinite scroll observer
+  useEffect(() => {
+    const sentinel = loadMoreRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasMore && !loadingMore) {
+          fetchMore()
+        }
+      },
+      { rootMargin: '400px' }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMore, loadingMore, fetchMore])
 
   // All unique product names for filter dropdown
   const allProducts = useMemo(() => {
@@ -126,6 +199,14 @@ export default function ProjectGalleryPage({
     return result
   }, [productGroups])
 
+  const imageIndexById = useMemo(() => {
+    const indexMap = new Map<string, number>()
+    allImageOnly.forEach((img, index) => {
+      indexMap.set(img.id, index)
+    })
+    return indexMap
+  }, [allImageOnly])
+
   const lightboxImages: LightboxImage[] = useMemo(() => {
     return allImageOnly.map((img) => ({
       id: img.id,
@@ -151,30 +232,101 @@ export default function ProjectGalleryPage({
       return cached
     }
 
-    const res = await fetch(`/api/images/${imageId}/signed`)
-    if (!res.ok) return null
-    const data = (await res.json()) as SignedImageUrls
-    const next = { ...signedUrlsRef.current, [imageId]: data }
-    signedUrlsRef.current = next
-    setSignedUrlsById(next)
-    return data
+    const inFlight = signedUrlRequestsRef.current[imageId]
+    if (inFlight) return inFlight
+
+    const request = fetch(`/api/images/${imageId}/signed`)
+      .then(async (res) => {
+        if (!res.ok) return null
+        const data = (await res.json()) as SignedImageUrls
+        const next = { ...signedUrlsRef.current, [imageId]: data }
+        signedUrlsRef.current = next
+        setSignedUrlsById(next)
+        return data
+      })
+      .finally(() => {
+        delete signedUrlRequestsRef.current[imageId]
+      })
+
+    signedUrlRequestsRef.current[imageId] = request
+    return request
   }, [])
+
+  const ensureSignedUrlsBatch = useCallback(async (imageIds: string[]) => {
+    const pendingIds = Array.from(new Set(imageIds)).filter((imageId) => {
+      const cached = signedUrlsRef.current[imageId]
+      return !(cached?.expires_at && cached.expires_at - Date.now() > 60_000)
+    })
+    if (pendingIds.length === 0) return {}
+
+    const requestKey = pendingIds.slice().sort().join(',')
+    const inFlight = batchSignedUrlRequestsRef.current[requestKey]
+    if (inFlight) return inFlight
+
+    const request = fetch('/api/images/signed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_ids: pendingIds }),
+    })
+      .then(async (res) => {
+        if (!res.ok) return {}
+        const data = await res.json() as { signed_urls?: Record<string, SignedImageUrls> }
+        const updates = data.signed_urls ?? {}
+        if (Object.keys(updates).length > 0) {
+          const next = { ...signedUrlsRef.current, ...updates }
+          signedUrlsRef.current = next
+          setSignedUrlsById(next)
+        }
+        return updates
+      })
+      .finally(() => {
+        delete batchSignedUrlRequestsRef.current[requestKey]
+      })
+
+    batchSignedUrlRequestsRef.current[requestKey] = request
+    return request
+  }, [])
+
+  useEffect(() => {
+    if (lightboxIndex !== null) return
+    if (allImageOnly.length === 0) return
+
+    const warmIds = allImageOnly.slice(0, 6).map((img) => img.id)
+    const timeout = window.setTimeout(() => {
+      void ensureSignedUrlsBatch(warmIds)
+    }, 150)
+
+    return () => window.clearTimeout(timeout)
+  }, [allImageOnly, ensureSignedUrlsBatch, lightboxIndex])
+
+  const warmLightboxAssets = useCallback((imageId: string) => {
+    const index = imageIndexById.get(imageId)
+    if (index === undefined) return
+
+    const warmIndexes = [index, index - 1, index + 1, index + 2]
+    const warmIds = warmIndexes
+      .map((warmIndex) => allImageOnly[warmIndex]?.id)
+      .filter((value): value is string => Boolean(value))
+    if (warmIds.length > 0) {
+      void ensureSignedUrlsBatch(warmIds)
+    }
+  }, [allImageOnly, ensureSignedUrlsBatch, imageIndexById])
 
   useModalShortcuts({
     isOpen: !!playingVideoUrl,
     onClose: () => setPlayingVideoUrl(null),
   })
 
-  const handleApprovalChange = async (imageId: string, status: ApprovalStatus, notes?: string) => {
+  const handleApprovalChange = useCallback(async (imageId: string, status: ApprovalStatus, notes?: string) => {
     await fetch(`/api/images/${imageId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ approval_status: status, ...(notes !== undefined ? { notes } : {}) }),
     })
     await fetchProjectGallery()
-  }
+  }, [fetchProjectGallery])
 
-  const handleDelete = async (imageId: string) => {
+  const handleDelete = useCallback(async (imageId: string) => {
     await fetch(`/api/images/${imageId}`, { method: 'DELETE' })
     await fetchProjectGallery()
     // Adjust lightbox after deletion
@@ -186,7 +338,7 @@ export default function ProjectGalleryPage({
         setLightboxIndex(newTotal - 1)
       }
     }
-  }
+  }, [allImageOnly, fetchProjectGallery, lightboxIndex])
 
   const handleBulkDelete = async () => {
     const rejectedIds = allImageOnly
@@ -203,6 +355,56 @@ export default function ProjectGalleryPage({
     }
   }
 
+  const handleContextMenuAction = useCallback(async (action: ContextMenuAction, imageId: string) => {
+    const img = allImageOnly.find((i) => i.id === imageId)
+    if (!img) return
+
+    switch (action) {
+      case 'open': {
+        const idx = imageIndexById.get(imageId) ?? -1
+        if (idx !== -1) setLightboxIndex(idx)
+        break
+      }
+      case 'approve':
+        await handleApprovalChange(imageId, img.approval_status === 'approved' ? null : 'approved')
+        break
+      case 'reject':
+        await handleApprovalChange(imageId, img.approval_status === 'rejected' ? null : 'rejected')
+        break
+      case 'request_changes':
+        await handleApprovalChange(imageId, img.approval_status === 'request_changes' ? null : 'request_changes')
+        break
+      case 'download': {
+        const signed = await ensureSignedUrls(imageId)
+        const url = signed?.download_url || signed?.signed_url || img.public_url
+        if (!url) break
+        try {
+          const fileName = img.storage_path?.split('/').pop() ?? `product-gen-${img.variation_number || 0}.png`
+          const resp = await fetch(url)
+          const blob = await resp.blob()
+          const blobUrl = URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          link.href = blobUrl
+          link.download = fileName
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+          URL.revokeObjectURL(blobUrl)
+        } catch (err) {
+          console.error('Download failed for image', imageId, err)
+        }
+        break
+      }
+      case 'delete':
+        if (img.approval_status === 'rejected') {
+          if (window.confirm('Permanently delete this image? This cannot be undone.')) {
+            await handleDelete(imageId)
+          }
+        }
+        break
+    }
+  }, [allImageOnly, imageIndexById, handleApprovalChange, ensureSignedUrls, handleDelete])
+
   const handleNameSave = async (name: string) => {
     await updateProject(projectId, { name })
   }
@@ -210,14 +412,14 @@ export default function ProjectGalleryPage({
   // Prefetch signed URLs around lightbox index
   useEffect(() => {
     if (lightboxIndex === null) return
-    const current = allImageOnly[lightboxIndex]
-    if (!current) return
-    void ensureSignedUrls(current.id)
-    const next = allImageOnly[lightboxIndex + 1]
-    if (next) void ensureSignedUrls(next.id)
-    const prev = allImageOnly[lightboxIndex - 1]
-    if (prev) void ensureSignedUrls(prev.id)
-  }, [lightboxIndex, allImageOnly, ensureSignedUrls])
+    const warmIndexes = [lightboxIndex, lightboxIndex - 1, lightboxIndex + 1, lightboxIndex - 2, lightboxIndex + 2]
+    const warmIds = warmIndexes
+      .map((index) => allImageOnly[index]?.id)
+      .filter((value): value is string => Boolean(value))
+    if (warmIds.length > 0) {
+      void ensureSignedUrlsBatch(warmIds)
+    }
+  }, [allImageOnly, ensureSignedUrlsBatch, lightboxIndex])
 
   const totalImages = productGroups.reduce((sum, g) => sum + g.images.length, 0)
 
@@ -346,7 +548,7 @@ export default function ProjectGalleryPage({
               </button>
             )}
             <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm text-zinc-400">
-              {totalImages} item{totalImages !== 1 ? 's' : ''}
+              {galleryTotal > totalImages ? `${totalImages} of ${galleryTotal}` : totalImages} item{galleryTotal !== 1 ? 's' : ''}
             </span>
           </div>
         </div>
@@ -383,14 +585,14 @@ export default function ProjectGalleryPage({
                   {group.images.length}
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-                {group.images.map((img) => {
+              <VirtualizedSquareGrid
+                items={group.images}
+                getItemKey={(img) => img.id}
+                renderItem={(img) => {
                   const isVideo = img.media_type === 'video'
                   const isRejected = img.approval_status === 'rejected'
                   const isChanges = img.approval_status === 'request_changes'
-                  const globalIndex = allImageOnly.findIndex(
-                    (item) => item.id === img.id
-                  )
+                  const globalIndex = imageIndexById.get(img.id) ?? -1
                   return (
                     <button
                       key={img.id}
@@ -400,6 +602,17 @@ export default function ProjectGalleryPage({
                         } else if (globalIndex !== -1) {
                           setLightboxIndex(globalIndex)
                         }
+                      }}
+                      onContextMenu={(e) => {
+                        if (isVideo) return
+                        e.preventDefault()
+                        setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status })
+                      }}
+                      onMouseEnter={() => {
+                        if (!isVideo) warmLightboxAssets(img.id)
+                      }}
+                      onFocus={() => {
+                        if (!isVideo) warmLightboxAssets(img.id)
                       }}
                       className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
                         isRejected
@@ -416,6 +629,8 @@ export default function ProjectGalleryPage({
                             <img
                               src={img.thumb_public_url}
                               alt="Video thumbnail"
+                              loading="lazy"
+                              decoding="async"
                               className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
                             />
                           ) : (
@@ -436,8 +651,10 @@ export default function ProjectGalleryPage({
                       ) : (
                         /* eslint-disable-next-line @next/next/no-img-element */
                         <img
-                          src={img.thumb_public_url ?? img.public_url ?? undefined}
+                          src={img.thumb_public_url ?? img.preview_public_url ?? img.public_url ?? undefined}
                           alt={`Variation ${img.variation_number}`}
+                          loading="lazy"
+                          decoding="async"
                           className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
                         />
                       )}
@@ -459,10 +676,17 @@ export default function ProjectGalleryPage({
                       )}
                     </button>
                   )
-                })}
-              </div>
+                }}
+              />
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Infinite scroll sentinel */}
+      {!loading && hasMore && (
+        <div ref={loadMoreRef} className="flex items-center justify-center py-8">
+          {loadingMore && <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />}
         </div>
       )}
 
@@ -490,6 +714,18 @@ export default function ProjectGalleryPage({
             />
           </div>
         </div>
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <GalleryContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          imageId={contextMenu.imageId}
+          approvalStatus={contextMenu.approvalStatus}
+          onAction={handleContextMenuAction}
+          onClose={() => setContextMenu(null)}
+        />
       )}
 
       {/* Lightbox */}
