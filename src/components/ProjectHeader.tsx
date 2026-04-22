@@ -4,6 +4,10 @@ import { useState, useRef, useEffect, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
+import { getSafeErrorMessage } from './errorDisplay.helpers'
+
+const MAX_PROJECT_NAME_LENGTH = 120
+const normalizeProjectName = (value: string) => value.trim().replace(/\s+/g, ' ').slice(0, MAX_PROJECT_NAME_LENGTH)
 
 interface ProjectHeaderProps {
   projectId: string
@@ -23,6 +27,8 @@ export function ProjectHeader({
   const pathname = usePathname()
   const [editingName, setEditingName] = useState(false)
   const [nameValue, setNameValue] = useState('')
+  const [nameError, setNameError] = useState<string | null>(null)
+  const [savingName, setSavingName] = useState(false)
   const nameInputRef = useRef<HTMLInputElement>(null)
 
   const isGallery = pathname.endsWith('/gallery')
@@ -34,11 +40,30 @@ export function ProjectHeader({
   }, [editingName])
 
   const handleNameSave = async () => {
-    const trimmed = nameValue.trim()
-    if (trimmed && trimmed !== projectName) {
-      await onNameSave(trimmed)
+    if (savingName) return
+    const normalizedName = normalizeProjectName(nameValue)
+    if (!normalizedName) {
+      setNameError('Project name is required.')
+      return
     }
-    setEditingName(false)
+    try {
+      setSavingName(true)
+      if (normalizedName !== projectName) {
+        await onNameSave(normalizedName)
+      }
+      setNameValue(normalizedName)
+      setNameError(null)
+      setEditingName(false)
+    } catch (error) {
+      setNameError(
+        getSafeErrorMessage(
+          error instanceof Error ? error.message : null,
+          'Failed to save project name. Please try again.'
+        )
+      )
+    } finally {
+      setSavingName(false)
+    }
   }
 
   const tabs = [
@@ -60,29 +85,51 @@ export function ProjectHeader({
             </Link>
             <div className="flex items-center gap-3">
               {editingName ? (
-                <input
-                  ref={nameInputRef}
-                  value={nameValue}
-                  onChange={(e) => setNameValue(e.target.value)}
-                  onBlur={handleNameSave}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleNameSave()
-                    if (e.key === 'Escape') setEditingName(false)
-                  }}
-                  className="rounded bg-zinc-800 px-2 py-1 text-xl font-semibold tracking-tight text-zinc-100 outline-none focus:ring-1 focus:ring-blue-500"
-                  autoFocus
-                />
+                <div>
+                  <label htmlFor="project-name-input" className="sr-only">Project name</label>
+                  <input
+                    id="project-name-input"
+                    ref={nameInputRef}
+                    value={nameValue}
+                    onChange={(e) => {
+                      setNameValue(e.target.value.slice(0, MAX_PROJECT_NAME_LENGTH))
+                      if (nameError) setNameError(null)
+                    }}
+                    onBlur={() => void handleNameSave()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void handleNameSave()
+                      if (e.key === 'Escape') {
+                        setNameValue(projectName ?? '')
+                        setNameError(null)
+                        setEditingName(false)
+                      }
+                    }}
+                    className="rounded bg-zinc-800 px-2 py-1 text-xl font-semibold tracking-tight text-zinc-100 outline-none focus:ring-1 focus:ring-blue-500"
+                    aria-invalid={nameError ? 'true' : 'false'}
+                    aria-describedby={nameError ? 'project-name-error' : undefined}
+                    maxLength={MAX_PROJECT_NAME_LENGTH}
+                    autoFocus
+                  />
+                  {nameError && (
+                    <p id="project-name-error" className="mt-1 text-xs text-red-400">
+                      {nameError}
+                    </p>
+                  )}
+                </div>
               ) : (
-                <h1
-                  className="cursor-pointer text-xl font-semibold tracking-tight transition-colors hover:text-blue-400"
+                <button
+                  type="button"
+                  className="cursor-pointer text-left text-xl font-semibold tracking-tight transition-colors hover:text-blue-400"
                   onClick={() => {
                     setNameValue(projectName ?? '')
+                    setNameError(null)
                     setEditingName(true)
                   }}
                   title="Click to edit"
+                  aria-label={`Edit project name${projectName ? `: ${projectName}` : ''}`}
                 >
                   {projectName ?? 'Loading...'}
-                </h1>
+                </button>
               )}
               <Link
                 href={`/projects/${projectId}/settings`}

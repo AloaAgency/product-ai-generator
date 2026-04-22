@@ -1,11 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  buildSelectedBugReportImages,
   buildBugReportSubmission,
   clampBugReportText,
+  createBugReportFormData,
   MAX_BUG_REPORT_CAPTION_LENGTH,
+  MAX_BUG_REPORT_DESCRIPTION_LENGTH,
   MAX_BUG_REPORT_FILE_SIZE,
+  normalizeBugReportMultiline,
+  normalizeBugReportSingleLine,
   parseBugReportResponse,
+  stripBugReportControlChars,
   validateBugReportFiles,
   type SelectedBugReportImage,
 } from '../bugReportWidget.helpers.js'
@@ -65,6 +71,17 @@ test('buildBugReportSubmission trims fields and fills default screenshot caption
   )
 })
 
+test('bug report normalization removes control characters and preserves safe multiline formatting', () => {
+  assert.equal(
+    normalizeBugReportSingleLine('  bad\u0000  title \n here ', 120),
+    'bad title here'
+  )
+  assert.equal(
+    normalizeBugReportMultiline('line 1\r\n\r\n\r\nline 2\u0007', MAX_BUG_REPORT_DESCRIPTION_LENGTH),
+    'line 1\n\nline 2'
+  )
+})
+
 test('parseBugReportResponse tolerates non-JSON error bodies', () => {
   assert.deepEqual(parseBugReportResponse('{\"success\":true,\"message\":\"ok\"}'), {
     success: true,
@@ -79,4 +96,26 @@ test('clampBugReportText enforces per-field limits before submission', () => {
     clampBugReportText('x'.repeat(MAX_BUG_REPORT_CAPTION_LENGTH + 10), MAX_BUG_REPORT_CAPTION_LENGTH).length,
     MAX_BUG_REPORT_CAPTION_LENGTH
   )
+})
+
+test('bug report helpers centralize control-char stripping and form-data creation', () => {
+  assert.equal(stripBugReportControlChars('bad\u0000 title\u0007'), 'bad title')
+
+  const images = buildSelectedBugReportImages([
+    createFile({ name: 'one.png', type: 'image/png', size: 10 }),
+  ])
+  assert.equal(images[0].caption, '')
+  assert.match(images[0].preview, /^blob:/)
+
+  const formData = createBugReportFormData({
+    type: 'bug',
+    title: 'Title',
+    description: 'Description',
+    images,
+  })
+  assert.equal(formData.get('type'), 'bug')
+  assert.equal(formData.get('title'), 'Title')
+  assert.equal(formData.get('description'), 'Description')
+  assert.equal(formData.get('caption_0'), 'Screenshot 1')
+  assert.equal(formData.get('imageCount'), '1')
 })
