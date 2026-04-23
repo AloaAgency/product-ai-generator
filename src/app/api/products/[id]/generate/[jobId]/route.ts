@@ -13,24 +13,27 @@ export async function GET(
   try {
     const supabase = createServiceClient()
 
-    // Fetch job
-    const { data: job, error: jobError } = await supabase
-      .from(T.generation_jobs)
-      .select('*')
-      .eq('id', jobId)
-      .eq('product_id', productId)
-      .single()
+    // Both queries key on jobId — fetch in parallel
+    const [
+      { data: job, error: jobError },
+      { data: images },
+    ] = await Promise.all([
+      supabase
+        .from(T.generation_jobs)
+        .select('*')
+        .eq('id', jobId)
+        .eq('product_id', productId)
+        .single(),
+      supabase
+        .from(T.generated_images)
+        .select('*')
+        .eq('job_id', jobId)
+        .order('variation_number', { ascending: true }),
+    ])
 
     if (jobError || !job) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 })
     }
-
-    // Fetch generated images for this job
-    const { data: images } = await supabase
-      .from(T.generated_images)
-      .select('*')
-      .eq('job_id', jobId)
-      .order('variation_number', { ascending: true })
 
     const imageItems = (images || []).filter((img) => img.media_type !== 'video')
     const videoItems = (images || []).filter((img) => img.media_type === 'video')

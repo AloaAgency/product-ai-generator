@@ -157,9 +157,11 @@ export async function POST(
       )
     }
 
-    // Fetch reference images, texture set, and project styles in parallel
+    // Fetch reference images, texture set, project styles, and texture images in parallel.
+    // texture_set_id is from the request body so texture images can be pre-fetched alongside
+    // the texture set validation query without waiting for it to complete first.
     const typedProduct = product as Product
-    const [refImagesResult, textureSetResult, projectResult] = await Promise.all([
+    const [refImagesResult, textureSetResult, projectResult, texImagesResult] = await Promise.all([
       supabase
         .from(T.reference_images)
         .select('*')
@@ -180,6 +182,13 @@ export async function POST(
             .eq('id', typedProduct.project_id)
             .single()
         : Promise.resolve({ data: null }),
+      texture_set_id
+        ? supabase
+            .from(T.reference_images)
+            .select('*')
+            .eq('reference_set_id', texture_set_id)
+            .order('display_order', { ascending: true })
+        : Promise.resolve({ data: null, error: null }),
     ])
 
     const referenceImages: ReferenceImage[] = refImagesResult.data || []
@@ -198,12 +207,7 @@ export async function POST(
           { status: 400 }
         )
       }
-      const { data: texImages } = await supabase
-        .from(T.reference_images)
-        .select('*')
-        .eq('reference_set_id', textureSet.id)
-        .order('display_order', { ascending: true })
-      textureImages = texImages || []
+      textureImages = texImagesResult.data || []
     }
 
     // Calculate actual image counts to use

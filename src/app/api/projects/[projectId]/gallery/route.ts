@@ -123,26 +123,29 @@ export async function GET(
     }
 
     const productIds = products.map((product) => product.id)
-    const countQuery = applyProjectGalleryFilters(
-      supabase.from(T.generated_images).select('id', { count: 'exact', head: true }),
-      { productIds, approvalStatus, mediaType }
-    )
-    const { count: totalCount, error: countError } = await countQuery
+
+    // Count and image queries are independent — run in parallel
+    const [countResult, imagesResult] = await Promise.all([
+      applyProjectGalleryFilters(
+        supabase.from(T.generated_images).select('id', { count: 'exact', head: true }),
+        { productIds, approvalStatus, mediaType }
+      ),
+      applyProjectGalleryFilters(
+        supabase.from(T.generated_images).select(GALLERY_IMAGE_SELECT),
+        { productIds, approvalStatus, mediaType }
+      )
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1),
+    ])
+
+    const { count: totalCount, error: countError } = countResult
+    const { data: images, error: imagesError } = imagesResult as {
+      data: GalleryImageRecord[] | null
+      error: { message: string } | null
+    }
 
     if (countError) {
       return NextResponse.json({ error: 'Failed to count images' }, { status: 500 })
-    }
-
-    const imagesQuery = applyProjectGalleryFilters(
-      supabase.from(T.generated_images).select(GALLERY_IMAGE_SELECT),
-      { productIds, approvalStatus, mediaType }
-    )
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1)
-
-    const { data: images, error: imagesError } = await imagesQuery as {
-      data: GalleryImageRecord[] | null
-      error: { message: string } | null
     }
 
     if (imagesError) {
