@@ -279,6 +279,25 @@ async function loadGenerationJob(supabase: WorkerSupabase, jobId: string): Promi
   return data as unknown as GenerationJobRecord
 }
 
+async function claimPendingJobById(
+  supabase: WorkerSupabase,
+  jobId: string
+): Promise<GenerationJobRecord | null> {
+  const { data, error } = await supabase
+    .from(T.generation_jobs)
+    .update({ status: 'running', started_at: new Date().toISOString() })
+    .eq('id', jobId)
+    .eq('status', 'pending')
+    .select(GENERATION_JOB_SELECT)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to claim generation job: ${error.message}`)
+  }
+
+  return (data as unknown as GenerationJobRecord | null) ?? null
+}
+
 async function getLatestJobResult(supabase: WorkerSupabase, jobId: string): Promise<WorkerResult> {
   const { data, error } = await supabase
     .from(T.generation_jobs)
@@ -296,22 +315,6 @@ async function getLatestJobResult(supabase: WorkerSupabase, jobId: string): Prom
   })
 
   return createWorkerResult(jobId, data?.status || 'running', counts)
-}
-
-async function claimPendingJob(supabase: WorkerSupabase, job: GenerationJobRecord): Promise<GenerationJobRecord | null> {
-  const { data, error } = await supabase
-    .from(T.generation_jobs)
-    .update({ status: 'running', started_at: new Date().toISOString() })
-    .eq('id', job.id)
-    .eq('status', 'pending')
-    .select(GENERATION_JOB_SELECT)
-    .maybeSingle()
-
-  if (error) {
-    throw new Error(`Failed to claim generation job: ${error.message}`)
-  }
-
-  return (data as unknown as GenerationJobRecord | null) ?? null
 }
 
 async function maybeReturnNonPendingJob(job: GenerationJobRecord): Promise<WorkerResult | null> {
@@ -974,14 +977,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
 
   const supabase = createServiceClient()
   const config = parseWorkerConfig(options)
-  const initialJob = await loadGenerationJob(supabase, jobId)
-  const earlyResult = await maybeReturnNonPendingJob(initialJob)
-
-  if (earlyResult) {
-    return earlyResult
-  }
-
-  const claimedJob = await claimPendingJob(supabase, initialJob)
+  const claimedJob = await claimPendingJobById(supabase, jobId)
   if (!claimedJob) {
     return getLatestJobResult(supabase, jobId)
   }
