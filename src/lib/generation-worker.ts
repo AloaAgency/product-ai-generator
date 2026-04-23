@@ -78,12 +78,10 @@ type JobCounts = {
 }
 
 type ProductRecord = {
-  project_id: string | null
   global_style_settings: GlobalStyleSettings | null
-}
-
-type ProjectRecord = {
-  global_style_settings: GlobalStyleSettings | null
+  prodai_projects: Array<{
+    global_style_settings: GlobalStyleSettings | null
+  }> | null
 }
 
 type SourceImageRecord = {
@@ -265,18 +263,23 @@ async function markClaimedJobFailed(
   )
 }
 
-async function loadGenerationJob(supabase: WorkerSupabase, jobId: string): Promise<GenerationJobRecord> {
+async function claimPendingJobById(
+  supabase: WorkerSupabase,
+  jobId: string
+): Promise<GenerationJobRecord | null> {
   const { data, error } = await supabase
     .from(T.generation_jobs)
-    .select(GENERATION_JOB_SELECT)
+    .update({ status: 'running', started_at: new Date().toISOString() })
     .eq('id', jobId)
-    .single()
+    .eq('status', 'pending')
+    .select(GENERATION_JOB_SELECT)
+    .maybeSingle()
 
-  if (error || !data) {
-    throw new Error('Generation job not found')
+  if (error) {
+    throw new Error(`Failed to claim generation job: ${error.message}`)
   }
 
-  return data as unknown as GenerationJobRecord
+  return (data as unknown as GenerationJobRecord | null) ?? null
 }
 
 async function getLatestJobResult(supabase: WorkerSupabase, jobId: string): Promise<WorkerResult> {
@@ -296,27 +299,6 @@ async function getLatestJobResult(supabase: WorkerSupabase, jobId: string): Prom
   })
 
   return createWorkerResult(jobId, data?.status || 'running', counts)
-}
-
-async function claimPendingJob(supabase: WorkerSupabase, job: GenerationJobRecord): Promise<GenerationJobRecord | null> {
-  const { data, error } = await supabase
-    .from(T.generation_jobs)
-    .update({ status: 'running', started_at: new Date().toISOString() })
-    .eq('id', job.id)
-    .eq('status', 'pending')
-    .select(GENERATION_JOB_SELECT)
-    .maybeSingle()
-
-  if (error) {
-    throw new Error(`Failed to claim generation job: ${error.message}`)
-  }
-
-  return (data as unknown as GenerationJobRecord | null) ?? null
-}
-
-async function maybeReturnNonPendingJob(job: GenerationJobRecord): Promise<WorkerResult | null> {
-  if (job.status === 'pending') return null
-  return createWorkerResult(job.id, job.status, getJobCounts(job))
 }
 
 async function processVideoJob(
@@ -401,7 +383,7 @@ async function processVideoJob(
 async function fetchProductRecord(supabase: WorkerSupabase, productId: string): Promise<ProductRecord> {
   const { data, error } = await supabase
     .from(T.products)
-    .select('project_id, global_style_settings')
+    .select(`global_style_settings, ${T.projects}!fk_products_project(global_style_settings)`)
     .eq('id', productId)
     .single()
 
@@ -450,23 +432,12 @@ async function fetchSourceImage(
 }
 
 async function resolveGeminiApiKeyForJob(
-  supabase: WorkerSupabase,
   product: ProductRecord
 ): Promise<string | undefined> {
   const productKey = resolveGoogleApiKey(product.global_style_settings)
-  if (productKey || !product.project_id) return productKey
+  if (productKey) return productKey
 
-  const { data: project, error } = await supabase
-    .from(T.projects)
-    .select('global_style_settings')
-    .eq('id', product.project_id)
-    .single()
-
-  if (error) {
-    throw new Error(`Failed to load project settings: ${error.message}`)
-  }
-
-  return resolveGoogleApiKey((project as ProjectRecord | null)?.global_style_settings)
+  return resolveGoogleApiKey(product.prodai_projects?.[0]?.global_style_settings ?? null)
 }
 
 function limitReferenceImages(
@@ -542,17 +513,17 @@ async function buildReferenceImagePayloads(
   sourceImage: SourceImageRecord | null,
   referenceImages: WorkerReferenceImage[]
 ): Promise<Base64ReferenceImage[]> {
-  const sourcePayload = sourceImage
-    ? await downloadStorageBase64(
-      supabase,
-      'generated-images',
-      sourceImage.storage_path,
-      sourceImage.mime_type,
-      'Failed to download source image'
-    )
-    : null
-
-  const referencePayloads = await Promise.all(
+  const [sourcePayload, referencePayloads] = await Promise.all([
+    sourceImage
+      ? downloadStorageBase64(
+        supabase,
+        'generated-images',
+        sourceImage.storage_path,
+        sourceImage.mime_type,
+        'Failed to download source image'
+      )
+      : Promise.resolve(null),
+    Promise.all(
     referenceImages.map((image) => downloadStorageBase64(
       supabase,
       'reference-images',
@@ -560,7 +531,8 @@ async function buildReferenceImagePayloads(
       image.mime_type,
       'Failed to download reference image'
     ))
-  )
+    ),
+  ])
 
   return [
     ...(sourcePayload ? [sourcePayload] : []),
@@ -606,9 +578,14 @@ async function loadImageJobResources(
     ...limitReferenceImages(textureReferenceImages, job.texture_image_count),
   ]
 
+  const [geminiApiKey, referenceImages] = await Promise.all([
+    resolveGeminiApiKeyForJob(product),
+    buildReferenceImagePayloads(supabase, sourceImage, limitedReferenceImages),
+  ])
+
   return {
-    geminiApiKey: await resolveGeminiApiKeyForJob(supabase, product),
-    referenceImages: await buildReferenceImagePayloads(supabase, sourceImage, limitedReferenceImages),
+    geminiApiKey,
+    referenceImages,
   }
 }
 
@@ -974,14 +951,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
 
   const supabase = createServiceClient()
   const config = parseWorkerConfig(options)
-  const initialJob = await loadGenerationJob(supabase, jobId)
-  const earlyResult = await maybeReturnNonPendingJob(initialJob)
-
-  if (earlyResult) {
-    return earlyResult
-  }
-
-  const claimedJob = await claimPendingJob(supabase, initialJob)
+  const claimedJob = await claimPendingJobById(supabase, jobId)
   if (!claimedJob) {
     return getLatestJobResult(supabase, jobId)
   }

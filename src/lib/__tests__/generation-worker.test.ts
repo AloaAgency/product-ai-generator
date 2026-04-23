@@ -238,6 +238,11 @@ describe('processGenerationJob', () => {
     serviceClientState.current = createMockSupabase([
       {
         table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: null,
+      },
+      {
+        table: 'prodai_generation_jobs',
         type: 'select-single',
         data: { id: jobId, status: 'running', completed_count: 2, failed_count: 1 },
       },
@@ -252,17 +257,12 @@ describe('processGenerationJob', () => {
       failed: 1,
       status: 'running',
     })
-    expect(serviceClientState.current?.updates).toHaveLength(0)
+    expect(serviceClientState.current?.updates).toHaveLength(1)
   })
 
   it('returns the latest job state when another worker claims the pending job first', async () => {
     const jobId = '12345678-1234-4234-8234-123456789012'
     serviceClientState.current = createMockSupabase([
-      {
-        table: 'prodai_generation_jobs',
-        type: 'select-single',
-        data: { id: jobId, status: 'pending', completed_count: 1, failed_count: 0 },
-      },
       {
         table: 'prodai_generation_jobs',
         type: 'update-maybeSingle',
@@ -271,7 +271,7 @@ describe('processGenerationJob', () => {
       {
         table: 'prodai_generation_jobs',
         type: 'select-single',
-        data: { status: 'running', completed_count: 1, failed_count: 0 },
+        data: { id: jobId, status: 'running', completed_count: 1, failed_count: 0 },
       },
     ])
 
@@ -292,24 +292,19 @@ describe('processGenerationJob', () => {
     serviceClientState.current = createMockSupabase([
       {
         table: 'prodai_generation_jobs',
-        type: 'select-single',
-        data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId, { reference_set_id: null }),
       },
-        {
-          table: 'prodai_generation_jobs',
-          type: 'update-maybeSingle',
-          data: createImageJobRecord(jobId, { reference_set_id: null }),
-        },
-        {
-          table: 'prodai_generation_jobs',
-          type: 'select-maybeSingle',
-          data: { completed_count: 0, failed_count: 0 },
-        },
-        {
-          table: 'prodai_generation_jobs',
-          type: 'update-maybeSingle',
-          data: { id: jobId },
-        },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-maybeSingle',
+        data: { completed_count: 0, failed_count: 0 },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
     ])
 
     const { processGenerationJob } = await import('../generation-worker')
@@ -326,11 +321,6 @@ describe('processGenerationJob', () => {
     const jobId = '22222222-2222-4222-8222-222222222222'
     serviceClientState.current = createMockSupabase(
       [
-        {
-          table: 'prodai_generation_jobs',
-          type: 'select-single',
-          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-        },
         {
           table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
@@ -425,11 +415,6 @@ describe('processGenerationJob', () => {
       [
         {
           table: 'prodai_generation_jobs',
-          type: 'select-single',
-          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-        },
-        {
-          table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId),
         },
@@ -512,11 +497,6 @@ describe('processGenerationJob', () => {
     serviceClientState.current = createMockSupabase([
       {
         table: 'prodai_generation_jobs',
-        type: 'select-single',
-        data: { id: jobId, status: 'pending', completed_count: 1, failed_count: 0 },
-      },
-      {
-        table: 'prodai_generation_jobs',
         type: 'update-maybeSingle',
         data: createImageJobRecord(jobId, {
           variation_count: 1,
@@ -552,11 +532,6 @@ describe('processGenerationJob', () => {
 
     serviceClientState.current = createMockSupabase(
       [
-        {
-          table: 'prodai_generation_jobs',
-          type: 'select-single',
-          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-        },
         {
           table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
@@ -633,11 +608,6 @@ describe('processGenerationJob', () => {
       [
         {
           table: 'prodai_generation_jobs',
-          type: 'select-single',
-          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-        },
-        {
-          table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId, { error_message: 'Previous tick failed' }),
         },
@@ -711,11 +681,6 @@ describe('processGenerationJob', () => {
       [
         {
           table: 'prodai_generation_jobs',
-          type: 'select-single',
-          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-        },
-        {
-          table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId, {
             texture_set_id: 'texture-1',
@@ -727,7 +692,10 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_products',
           type: 'select-single',
-          data: { project_id: 'project-1', global_style_settings: null },
+          data: {
+            global_style_settings: null,
+            prodai_projects: [{ global_style_settings: { gemini_api_key: 'project-key' } }],
+          },
         },
         {
           table: 'prodai_reference_images',
@@ -748,11 +716,6 @@ describe('processGenerationJob', () => {
           table: 'prodai_generated_images',
           type: 'select-maybeSingle',
           data: { storage_path: 'generated/source.png', mime_type: 'image/png' },
-        },
-        {
-          table: 'prodai_projects',
-          type: 'select-single',
-          data: { global_style_settings: { gemini_api_key: 'project-key' } },
         },
         {
           table: 'prodai_generation_jobs',
@@ -817,11 +780,6 @@ describe('processGenerationJob', () => {
     const jobId = '56565656-5656-4565-8565-565656565656'
     serviceClientState.current = createMockSupabase(
       [
-        {
-          table: 'prodai_generation_jobs',
-          type: 'select-single',
-          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-        },
         {
           table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
@@ -910,11 +868,6 @@ describe('processGenerationJob', () => {
       [
         {
           table: 'prodai_generation_jobs',
-          type: 'select-single',
-          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-        },
-        {
-          table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId, { variation_count: 2 }),
         },
@@ -994,11 +947,6 @@ describe('processGenerationJob', () => {
       [
         {
           table: 'prodai_generation_jobs',
-          type: 'select-single',
-          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-        },
-        {
-          table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId, { variation_count: 2 }),
         },
@@ -1068,11 +1016,6 @@ describe('processGenerationJob', () => {
     const jobId = '77777777-7777-4777-8777-777777777777'
     serviceClientState.current = createMockSupabase(
       [
-        {
-          table: 'prodai_generation_jobs',
-          type: 'select-single',
-          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-        },
         {
           table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
@@ -1145,11 +1088,6 @@ describe('processGenerationJob', () => {
     const jobId = '78787878-7878-4787-8787-787878787878'
     serviceClientState.current = createMockSupabase(
       [
-        {
-          table: 'prodai_generation_jobs',
-          type: 'select-single',
-          data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-        },
         {
           table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
@@ -1227,11 +1165,6 @@ describe('processGenerationJob', () => {
     serviceClientState.current = createMockSupabase([
       {
         table: 'prodai_generation_jobs',
-        type: 'select-single',
-        data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-      },
-      {
-        table: 'prodai_generation_jobs',
         type: 'update-maybeSingle',
         data: createVideoJobRecord(jobId, { error_message: 'Old video error' }),
       },
@@ -1265,11 +1198,6 @@ describe('processGenerationJob', () => {
   it('sanitizes video generation failures before persisting them', async () => {
     const jobId = '99999999-9999-4999-8999-999999999999'
     serviceClientState.current = createMockSupabase([
-      {
-        table: 'prodai_generation_jobs',
-        type: 'select-single',
-        data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-      },
       {
         table: 'prodai_generation_jobs',
         type: 'update-maybeSingle',
@@ -1306,11 +1234,6 @@ describe('processGenerationJob', () => {
   it('fails when it cannot load the latest job state after another worker claims the job first', async () => {
     const jobId = '13131313-1313-4313-8313-131313131313'
     serviceClientState.current = createMockSupabase([
-      {
-        table: 'prodai_generation_jobs',
-        type: 'select-single',
-        data: { id: jobId, status: 'pending', completed_count: 0, failed_count: 0 },
-      },
       {
         table: 'prodai_generation_jobs',
         type: 'update-maybeSingle',
