@@ -692,7 +692,10 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_products',
           type: 'select-single',
-          data: { project_id: 'project-1', global_style_settings: null },
+          data: {
+            global_style_settings: null,
+            prodai_projects: { global_style_settings: { gemini_api_key: 'project-key' } },
+          },
         },
         {
           table: 'prodai_reference_images',
@@ -713,11 +716,6 @@ describe('processGenerationJob', () => {
           table: 'prodai_generated_images',
           type: 'select-maybeSingle',
           data: { storage_path: 'generated/source.png', mime_type: 'image/png' },
-        },
-        {
-          table: 'prodai_projects',
-          type: 'select-single',
-          data: { global_style_settings: { gemini_api_key: 'project-key' } },
         },
         {
           table: 'prodai_generation_jobs',

@@ -78,12 +78,10 @@ type JobCounts = {
 }
 
 type ProductRecord = {
-  project_id: string | null
   global_style_settings: GlobalStyleSettings | null
-}
-
-type ProjectRecord = {
-  global_style_settings: GlobalStyleSettings | null
+  prodai_projects: {
+    global_style_settings: GlobalStyleSettings | null
+  } | null
 }
 
 type SourceImageRecord = {
@@ -404,7 +402,7 @@ async function processVideoJob(
 async function fetchProductRecord(supabase: WorkerSupabase, productId: string): Promise<ProductRecord> {
   const { data, error } = await supabase
     .from(T.products)
-    .select('project_id, global_style_settings')
+    .select(`global_style_settings, ${T.projects}!fk_products_project(global_style_settings)`)
     .eq('id', productId)
     .single()
 
@@ -453,23 +451,12 @@ async function fetchSourceImage(
 }
 
 async function resolveGeminiApiKeyForJob(
-  supabase: WorkerSupabase,
   product: ProductRecord
 ): Promise<string | undefined> {
   const productKey = resolveGoogleApiKey(product.global_style_settings)
-  if (productKey || !product.project_id) return productKey
+  if (productKey) return productKey
 
-  const { data: project, error } = await supabase
-    .from(T.projects)
-    .select('global_style_settings')
-    .eq('id', product.project_id)
-    .single()
-
-  if (error) {
-    throw new Error(`Failed to load project settings: ${error.message}`)
-  }
-
-  return resolveGoogleApiKey((project as ProjectRecord | null)?.global_style_settings)
+  return resolveGoogleApiKey(product.prodai_projects?.global_style_settings ?? null)
 }
 
 function limitReferenceImages(
@@ -610,7 +597,7 @@ async function loadImageJobResources(
   ]
 
   return {
-    geminiApiKey: await resolveGeminiApiKeyForJob(supabase, product),
+    geminiApiKey: await resolveGeminiApiKeyForJob(product),
     referenceImages: await buildReferenceImagePayloads(supabase, sourceImage, limitedReferenceImages),
   }
 }
