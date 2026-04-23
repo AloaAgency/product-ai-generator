@@ -694,7 +694,7 @@ describe('processGenerationJob', () => {
           type: 'select-single',
           data: {
             global_style_settings: null,
-            prodai_projects: { global_style_settings: { gemini_api_key: 'project-key' } },
+            prodai_projects: [{ global_style_settings: { gemini_api_key: 'project-key' } }],
           },
         },
         {

@@ -79,9 +79,9 @@ type JobCounts = {
 
 type ProductRecord = {
   global_style_settings: GlobalStyleSettings | null
-  prodai_projects: {
+  prodai_projects: Array<{
     global_style_settings: GlobalStyleSettings | null
-  } | null
+  }> | null
 }
 
 type SourceImageRecord = {
@@ -263,20 +263,6 @@ async function markClaimedJobFailed(
   )
 }
 
-async function loadGenerationJob(supabase: WorkerSupabase, jobId: string): Promise<GenerationJobRecord> {
-  const { data, error } = await supabase
-    .from(T.generation_jobs)
-    .select(GENERATION_JOB_SELECT)
-    .eq('id', jobId)
-    .single()
-
-  if (error || !data) {
-    throw new Error('Generation job not found')
-  }
-
-  return data as unknown as GenerationJobRecord
-}
-
 async function claimPendingJobById(
   supabase: WorkerSupabase,
   jobId: string
@@ -313,11 +299,6 @@ async function getLatestJobResult(supabase: WorkerSupabase, jobId: string): Prom
   })
 
   return createWorkerResult(jobId, data?.status || 'running', counts)
-}
-
-async function maybeReturnNonPendingJob(job: GenerationJobRecord): Promise<WorkerResult | null> {
-  if (job.status === 'pending') return null
-  return createWorkerResult(job.id, job.status, getJobCounts(job))
 }
 
 async function processVideoJob(
@@ -456,7 +437,7 @@ async function resolveGeminiApiKeyForJob(
   const productKey = resolveGoogleApiKey(product.global_style_settings)
   if (productKey) return productKey
 
-  return resolveGoogleApiKey(product.prodai_projects?.global_style_settings ?? null)
+  return resolveGoogleApiKey(product.prodai_projects?.[0]?.global_style_settings ?? null)
 }
 
 function limitReferenceImages(
