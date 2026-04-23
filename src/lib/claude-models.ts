@@ -20,9 +20,9 @@ export const CLAUDE_FAST_MODEL: ModelConfig = {
 };
 
 export const CLAUDE_SMART_MODEL: ModelConfig = {
-  name: 'claude-sonnet-4-5-20250929',
+  name: 'claude-sonnet-4-6',
   maxTokens: 8192,
-  description: 'Claude Sonnet 4.5 - Advanced reasoning and creativity',
+  description: 'Claude Sonnet 4.6 - Advanced reasoning and creativity',
   costPer1kTokens: { input: 0.003, output: 0.015 },
 };
 
