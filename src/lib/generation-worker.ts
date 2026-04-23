@@ -532,17 +532,17 @@ async function buildReferenceImagePayloads(
   sourceImage: SourceImageRecord | null,
   referenceImages: WorkerReferenceImage[]
 ): Promise<Base64ReferenceImage[]> {
-  const sourcePayload = sourceImage
-    ? await downloadStorageBase64(
-      supabase,
-      'generated-images',
-      sourceImage.storage_path,
-      sourceImage.mime_type,
-      'Failed to download source image'
-    )
-    : null
-
-  const referencePayloads = await Promise.all(
+  const [sourcePayload, referencePayloads] = await Promise.all([
+    sourceImage
+      ? downloadStorageBase64(
+        supabase,
+        'generated-images',
+        sourceImage.storage_path,
+        sourceImage.mime_type,
+        'Failed to download source image'
+      )
+      : Promise.resolve(null),
+    Promise.all(
     referenceImages.map((image) => downloadStorageBase64(
       supabase,
       'reference-images',
@@ -550,7 +550,8 @@ async function buildReferenceImagePayloads(
       image.mime_type,
       'Failed to download reference image'
     ))
-  )
+    ),
+  ])
 
   return [
     ...(sourcePayload ? [sourcePayload] : []),
@@ -596,9 +597,14 @@ async function loadImageJobResources(
     ...limitReferenceImages(textureReferenceImages, job.texture_image_count),
   ]
 
+  const [geminiApiKey, referenceImages] = await Promise.all([
+    resolveGeminiApiKeyForJob(product),
+    buildReferenceImagePayloads(supabase, sourceImage, limitedReferenceImages),
+  ])
+
   return {
-    geminiApiKey: await resolveGeminiApiKeyForJob(product),
-    referenceImages: await buildReferenceImagePayloads(supabase, sourceImage, limitedReferenceImages),
+    geminiApiKey,
+    referenceImages,
   }
 }
 
