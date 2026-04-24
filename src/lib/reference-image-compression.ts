@@ -4,14 +4,23 @@ import { T } from '@/lib/db-tables'
 
 const BUCKET = 'reference-images'
 
-export type CompressionResult = {
-  imageId: string
-  wasCompressed: boolean
-  originalSize: number
-  compressedSize: number
-  newStoragePath?: string
-  error?: string
-}
+export type CompressionResult =
+  | {
+      imageId: string
+      wasCompressed: false
+      originalSize: number
+      compressedSize: number
+      newStoragePath?: undefined
+      error?: string
+    }
+  | {
+      imageId: string
+      wasCompressed: true
+      originalSize: number
+      compressedSize: number
+      newStoragePath: string
+      error?: string
+    }
 
 /**
  * Download a reference image from Supabase, compress if needed,
