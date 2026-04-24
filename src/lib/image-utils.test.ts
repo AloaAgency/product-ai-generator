@@ -21,6 +21,7 @@ import {
   compressReferenceImage,
   createThumbnail,
   createPreview,
+  extractVideoThumbnail,
 } from './image-utils'
 
 // ---------------------------------------------------------------------------
@@ -481,5 +482,19 @@ describe('createPreview', () => {
     const result = await createPreview(src, 800)
     const meta = await sharp(result.buffer).metadata()
     expect(meta.width).toBe(800)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// extractVideoThumbnail — guard tests (no ffmpeg required)
+// The empty-buffer guard fires before ensureFfmpegPath(), so these tests
+// run without a real video file or ffmpeg binary.
+// ---------------------------------------------------------------------------
+
+describe('extractVideoThumbnail', () => {
+  it('throws when given an empty buffer', async () => {
+    await expect(extractVideoThumbnail(Buffer.alloc(0))).rejects.toThrow(
+      'extractVideoThumbnail: video buffer is empty'
+    )
   })
 })

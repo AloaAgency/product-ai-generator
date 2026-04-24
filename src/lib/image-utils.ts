@@ -274,6 +274,7 @@ export const extractVideoThumbnail = async (
 
     const frameBuffer = await readFile(tmpFrame)
     const thumb = await sharp(frameBuffer)
+      .rotate()
       .resize({ width, withoutEnlargement: true })
       .webp({ quality: 72 })
       .toBuffer()
