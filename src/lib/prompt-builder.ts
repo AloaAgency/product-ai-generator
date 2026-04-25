@@ -70,9 +70,9 @@ export function buildRefinedPromptUserMessage(
   settings: GlobalStyleSettings,
   userPrompt: string
 ): string {
-  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN).replace(/"/g, '\u2033')
+  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN).replace(/"/g, '\u2033').replace(/[\r\n]/g, ' ')
   const safeDesc = productDescription
-    ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN).replace(/"/g, '\u2033')
+    ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN).replace(/"/g, '\u2033').replace(/[\r\n]/g, ' ')
     : null
   const safePrompt = userPrompt.slice(0, MAX_USER_PROMPT_LEN)
   const styleBlock = buildStyleBlock(settings)
@@ -125,9 +125,9 @@ export function buildFullPrompt(
   // User prompt — truncated to prevent oversized API payloads
   parts.push(`IMAGE TO GENERATE:\n${userPrompt.trim().slice(0, MAX_USER_PROMPT_LEN)}`)
 
-  // Resolution/aspect suffix
-  const resolution = settings.default_resolution || '4K'
-  const aspect = settings.default_aspect_ratio || '16:9'
+  // Resolution/aspect suffix — cap to match MAX_STYLE_VALUE_LEN guard applied to all other style fields
+  const resolution = cap(settings.default_resolution) || '4K'
+  const aspect = cap(settings.default_aspect_ratio) || '16:9'
   parts.push(`${aspect} aspect ratio, ${resolution} resolution, professional quality`)
 
   if (settings.custom_suffix?.trim()) {
@@ -149,9 +149,9 @@ export function buildPromptSuggestionSystemPrompt(
   // Sanitize interpolated fields to prevent prompt injection and oversized API payloads.
   // Double-quotes are replaced with a typographic alternative so they cannot break out of
   // the inline "product name" context in the assembled system prompt.
-  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN).replace(/"/g, '\u2033')
+  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN).replace(/"/g, '\u2033').replace(/[\r\n]/g, ' ')
   const safeDesc = productDescription
-    ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN).replace(/"/g, '\u2033')
+    ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN).replace(/"/g, '\u2033').replace(/[\r\n]/g, ' ')
     : null
   const safeCount = Math.max(1, Math.min(Math.floor(count), MAX_SUGGESTION_COUNT))
 
