@@ -94,21 +94,43 @@ function isPublicPath(pathname: string): boolean {
   return pathname === '/api/login' || pathname.startsWith('/api/worker/')
 }
 
+// Security headers applied to every middleware response.
+// - X-Frame-Options: DENY prevents the login page from being iframed, which
+//   blocks clickjacking attacks aimed at capturing the site password.
+// - X-Content-Type-Options: nosniff stops browsers from MIME-sniffing responses
+//   away from the declared content type (reduces content-confusion attack surface).
+// - Referrer-Policy: strict-origin-when-cross-origin avoids leaking full URL
+//   paths (which could contain auth-related query params) to third-party origins.
+const SECURITY_HEADERS: Record<string, string> = {
+  'x-frame-options': 'DENY',
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+}
+
+function applySecurityHeaders(response: NextResponse): NextResponse {
+  for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
+    response.headers.set(key, value)
+  }
+  return response
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   if (isPublicPath(pathname)) {
-    return NextResponse.next()
+    return applySecurityHeaders(NextResponse.next())
   }
 
   if (await isAuthenticated(request)) {
-    return NextResponse.next()
+    return applySecurityHeaders(NextResponse.next())
   }
 
   if (pathname.startsWith('/api/')) {
-    return NextResponse.json(
-      { error: 'Unauthorized' },
-      { status: 401, headers: { 'cache-control': 'no-store' } }
+    return applySecurityHeaders(
+      NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401, headers: { 'cache-control': 'no-store' } }
+      )
     )
   }
 
@@ -117,13 +139,15 @@ export async function middleware(request: NextRequest) {
   // cache-control: no-store prevents CDNs or proxies from caching the login
   // gate and serving it to users who subsequently authenticate.
   const showError = request.nextUrl.searchParams.has('error')
-  return new NextResponse(loginPage(showError, pathname), {
-    status: 200,
-    headers: {
-      'content-type': 'text/html',
-      'cache-control': 'no-store',
-    },
-  })
+  return applySecurityHeaders(
+    new NextResponse(loginPage(showError, pathname), {
+      status: 200,
+      headers: {
+        'content-type': 'text/html',
+        'cache-control': 'no-store',
+      },
+    })
+  )
 }
 
 export const config = {
