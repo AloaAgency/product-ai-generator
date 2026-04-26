@@ -1,23 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { timingSafeEqual } from 'crypto'
 import { AUTH_COOKIE_NAME, deriveAuthToken } from '@/lib/auth-constants'
-
-/** Compare two strings in constant time to mitigate timing attacks. */
-function safeCompare(a: string, b: string): boolean {
-  try {
-    const bufA = Buffer.from(a, 'utf8')
-    const bufB = Buffer.from(b, 'utf8')
-    if (bufA.length !== bufB.length) {
-      // Still run the comparison on equally-sized buffers so execution time
-      // doesn't reveal which side is shorter.
-      timingSafeEqual(bufA, bufA)
-      return false
-    }
-    return timingSafeEqual(bufA, bufB)
-  } catch {
-    return false
-  }
-}
+import { secretsEqual } from '@/lib/server-secrets'
 
 // Hard cap on input sizes accepted by the login endpoint.
 // A legitimate password will never approach these limits; rejecting early
@@ -56,7 +39,7 @@ export async function POST(request: NextRequest) {
       ? trimmedRedirect
       : '/'
 
-  if (safeCompare(password, PASSWORD)) {
+  if (secretsEqual(password, PASSWORD)) {
     const response = NextResponse.redirect(new URL(safeRedirect, request.url), 303)
     response.cookies.set(AUTH_COOKIE_NAME, await deriveAuthToken(PASSWORD), {
       httpOnly: true,
