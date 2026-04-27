@@ -94,21 +94,41 @@ function isPublicPath(pathname: string): boolean {
   return pathname === '/api/login' || pathname.startsWith('/api/worker/')
 }
 
+// Security headers applied to every response generated directly by middleware.
+// Responses that pass through to Next.js pages/API routes receive these via
+// next.config.ts headers(); direct middleware responses bypass that pipeline.
+const SECURITY_HEADERS: Record<string, string> = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',
+}
+
+function withSecurityHeaders(response: NextResponse): NextResponse {
+  for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
+    response.headers.set(key, value)
+  }
+  return response
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   if (isPublicPath(pathname)) {
-    return NextResponse.next()
+    return withSecurityHeaders(NextResponse.next())
   }
 
   if (await isAuthenticated(request)) {
-    return NextResponse.next()
+    return withSecurityHeaders(NextResponse.next())
   }
 
   if (pathname.startsWith('/api/')) {
-    return NextResponse.json(
-      { error: 'Unauthorized' },
-      { status: 401, headers: { 'cache-control': 'no-store' } }
+    return withSecurityHeaders(
+      NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401, headers: { 'cache-control': 'no-store' } }
+      )
     )
   }
 
@@ -117,13 +137,15 @@ export async function middleware(request: NextRequest) {
   // cache-control: no-store prevents CDNs or proxies from caching the login
   // gate and serving it to users who subsequently authenticate.
   const showError = request.nextUrl.searchParams.has('error')
-  return new NextResponse(loginPage(showError, pathname), {
-    status: 200,
-    headers: {
-      'content-type': 'text/html',
-      'cache-control': 'no-store',
-    },
-  })
+  return withSecurityHeaders(
+    new NextResponse(loginPage(showError, pathname), {
+      status: 200,
+      headers: {
+        'content-type': 'text/html',
+        'cache-control': 'no-store',
+      },
+    })
+  )
 }
 
 export const config = {
