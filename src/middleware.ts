@@ -94,20 +94,18 @@ function isPublicPath(pathname: string): boolean {
   return pathname === '/api/login' || pathname.startsWith('/api/worker/')
 }
 
-// Security headers applied to every middleware response.
-// - X-Frame-Options: DENY prevents the login page from being iframed, which
-//   blocks clickjacking attacks aimed at capturing the site password.
-// - X-Content-Type-Options: nosniff stops browsers from MIME-sniffing responses
-//   away from the declared content type (reduces content-confusion attack surface).
-// - Referrer-Policy: strict-origin-when-cross-origin avoids leaking full URL
-//   paths (which could contain auth-related query params) to third-party origins.
+// Security headers applied to every response generated directly by middleware.
+// Responses that pass through to Next.js pages/API routes receive these via
+// next.config.ts headers(); direct middleware responses bypass that pipeline.
 const SECURITY_HEADERS: Record<string, string> = {
-  'x-frame-options': 'DENY',
-  'x-content-type-options': 'nosniff',
-  'referrer-policy': 'strict-origin-when-cross-origin',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',
 }
 
-function applySecurityHeaders(response: NextResponse): NextResponse {
+function withSecurityHeaders(response: NextResponse): NextResponse {
   for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
     response.headers.set(key, value)
   }
@@ -118,15 +116,15 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   if (isPublicPath(pathname)) {
-    return applySecurityHeaders(NextResponse.next())
+    return withSecurityHeaders(NextResponse.next())
   }
 
   if (await isAuthenticated(request)) {
-    return applySecurityHeaders(NextResponse.next())
+    return withSecurityHeaders(NextResponse.next())
   }
 
   if (pathname.startsWith('/api/')) {
-    return applySecurityHeaders(
+    return withSecurityHeaders(
       NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401, headers: { 'cache-control': 'no-store' } }
@@ -139,7 +137,7 @@ export async function middleware(request: NextRequest) {
   // cache-control: no-store prevents CDNs or proxies from caching the login
   // gate and serving it to users who subsequently authenticate.
   const showError = request.nextUrl.searchParams.has('error')
-  return applySecurityHeaders(
+  return withSecurityHeaders(
     new NextResponse(loginPage(showError, pathname), {
       status: 200,
       headers: {
