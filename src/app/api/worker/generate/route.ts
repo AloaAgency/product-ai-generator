@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { timingSafeEqual } from 'crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { processGenerationJob } from '@/lib/generation-worker'
 import { logError } from '@/lib/error-logger'
 import { T } from '@/lib/db-tables'
+import { secretsEqual } from '@/lib/server-secrets'
 import {
   isValidGenerationJobId,
   MAX_GENERATION_BATCH_SIZE,
@@ -17,23 +17,6 @@ import {
 export const runtime = 'nodejs'
 export const maxDuration = 800
 export const dynamic = 'force-dynamic'
-
-/** Compare two strings in constant time to mitigate timing attacks. */
-function secretsEqual(a: string, b: string): boolean {
-  try {
-    const bufA = Buffer.from(a, 'utf8')
-    const bufB = Buffer.from(b, 'utf8')
-    if (bufA.length !== bufB.length) {
-      // Still run a comparison on equal-length buffers so execution time
-      // doesn't reveal whether the provided secret has the right length.
-      timingSafeEqual(bufA, bufA)
-      return false
-    }
-    return timingSafeEqual(bufA, bufB)
-  } catch {
-    return false
-  }
-}
 
 function isAuthorized(request: NextRequest) {
   const secret = process.env.CRON_SECRET
