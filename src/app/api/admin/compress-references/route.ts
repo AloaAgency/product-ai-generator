@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processReferenceImageCompression } from '@/lib/reference-image-compression'
-import { isAdminAuthorized } from '@/lib/auth-constants'
+import { isAdminAuthorizedNode } from '@/lib/server-secrets'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -12,7 +12,7 @@ const SIZE_THRESHOLD = 5 * 1024 * 1024 // 5 MB
 const DEFAULT_LIMIT = 50
 
 export async function POST(request: NextRequest) {
-  if (!isAdminAuthorized(request)) {
+  if (!isAdminAuthorizedNode(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 

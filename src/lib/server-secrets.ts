@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'crypto'
+import type { NextRequest } from 'next/server'
 
 /**
  * Compare two strings in constant time to mitigate timing attacks.
@@ -22,4 +23,22 @@ export function secretsEqual(a: string, b: string): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * Returns true when the request carries the correct ADMIN_SECRET header.
+ *
+ * Node.js-only counterpart to `isAdminAuthorized` in auth-constants.ts.
+ * Uses `crypto.timingSafeEqual` (hardware-level constant time) instead of
+ * the XOR-based fallback, which is suitable for Edge Runtime but weaker.
+ * Import this in Node.js API routes; import the other in middleware.
+ *
+ * Fails closed: if ADMIN_SECRET is not configured, all requests are denied.
+ */
+export function isAdminAuthorizedNode(request: NextRequest): boolean {
+  const adminSecret = process.env.ADMIN_SECRET
+  if (!adminSecret) return false
+  const provided = request.headers.get('x-admin-secret') ?? ''
+  if (provided.length === 0) return false
+  return secretsEqual(provided, adminSecret)
 }
