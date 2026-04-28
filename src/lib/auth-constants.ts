@@ -16,7 +16,7 @@ export const AUTH_COOKIE_NAME = 'site-auth'
  * and the Edge Runtime (no `crypto` import required) and eliminates the most
  * obvious timing side-channel.
  */
-function timingResistantEqual(provided: string, expected: string): boolean {
+export function timingResistantEqual(provided: string, expected: string): boolean {
   const n = expected.length
   // Accumulate length mismatch into diff so we never return early based on length.
   let diff = provided.length !== n ? 1 : 0

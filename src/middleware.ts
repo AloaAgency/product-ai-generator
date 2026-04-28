@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { AUTH_COOKIE_NAME, deriveAuthToken } from '@/lib/auth-constants'
+import { AUTH_COOKIE_NAME, deriveAuthToken, timingResistantEqual } from '@/lib/auth-constants'
 
 // Static parts of the login page HTML, split so the form (which varies per request)
 // can be inserted between them without re-declaring the surrounding boilerplate.
@@ -82,7 +82,8 @@ async function isAuthenticated(request: NextRequest): Promise<boolean> {
   // Cookie value is an HMAC derived from SITE_PASSWORD — a predictable static
   // string like "authenticated" would allow anyone who reads the source to
   // forge a valid cookie.
-  return auth?.value === await getExpectedToken(password)
+  if (!auth?.value) return false
+  return timingResistantEqual(auth.value, await getExpectedToken(password))
 }
 
 /**

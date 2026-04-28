@@ -182,6 +182,11 @@ export const createThumbnailAndPreview = (
 const REF_MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
 const REF_MAX_DIMENSION = 4096             // px
 
+// Raster formats accepted as reference images. SVG and jp2 are excluded:
+// SVG is an XML format Sharp parses via librsvg (larger attack surface),
+// and jp2/raw are not valid user-upload targets for this app.
+const ALLOWED_REF_FORMATS = new Set(['jpeg', 'png', 'webp', 'gif', 'avif', 'tiff', 'heif'])
+
 export type CompressResult = {
   buffer: Buffer
   mimeType: string
@@ -201,6 +206,9 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   }
   const originalSize = buffer.length
   const meta = await sharp(buffer).metadata()
+  if (!meta.format || !ALLOWED_REF_FORMATS.has(meta.format)) {
+    throw new Error(`compressReferenceImage: unsupported format '${meta.format ?? 'unknown'}'`)
+  }
   const w = meta.width ?? 0
   const h = meta.height ?? 0
 

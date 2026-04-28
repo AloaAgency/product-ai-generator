@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { extractVideoThumbnail, buildThumbnailPath } from '@/lib/image-utils'
-import { isAdminAuthorized } from '@/lib/auth-constants'
+import { isAdminAuthorizedNode } from '@/lib/server-secrets'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic'
 const DEFAULT_LIMIT = 20
 
 export async function POST(request: NextRequest) {
-  if (!isAdminAuthorized(request)) {
+  if (!isAdminAuthorizedNode(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
