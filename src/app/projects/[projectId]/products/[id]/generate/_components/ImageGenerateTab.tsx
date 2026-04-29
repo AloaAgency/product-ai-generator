@@ -322,13 +322,26 @@ export function ImageGenerateTab({
     ? (canRetry && currentJob.status !== 'failed' ? 'failed' : currentJob.status)
     : null
 
+  const disabledReasons: string[] = []
+  if (!prompt.trim()) disabledReasons.push('Enter a prompt')
+  if (!selectedRefSetId) disabledReasons.push('Select a product reference set')
+  if (!variationCountValue) disabledReasons.push('Enter a variation count (1–100)')
+  if (selectedTextureSetId) {
+    if ((productImageCountValue ?? 0) < 1) disabledReasons.push('Set product image count to 1 or more')
+    if ((textureImageCountValue ?? 0) < 1) disabledReasons.push('Set texture image count to 1 or more')
+    if (totalImageCount > 14) disabledReasons.push(`Reduce total image count (currently ${totalImageCount}, max 14)`)
+  }
+  const isGenerateDisabled = aiLoading || generating || disabledReasons.length > 0
+
   return (
     <div className="space-y-8">
       {/* Reference Set Selectors */}
       <section className="space-y-4">
         {/* Product Reference Set */}
         <div className="space-y-1.5">
-          <label className="text-xs font-medium text-zinc-400">Product Reference Set</label>
+          <label className="text-xs font-medium text-zinc-400">
+            Product Reference Set <span className="text-zinc-500">(Required)</span>
+          </label>
           {productSets.length === 0 ? (
             <div className="flex items-center gap-2 rounded-lg border border-yellow-600 bg-yellow-950/40 px-4 py-3 text-yellow-300 text-sm">
               <AlertTriangle className="h-4 w-4 shrink-0" />
@@ -754,28 +767,38 @@ export function ImageGenerateTab({
       </section>
 
       {/* Generate Button */}
-      <button
-        onClick={handleGenerate}
-        disabled={
-          !prompt.trim() ||
-          !selectedRefSetId ||
-          aiLoading ||
-          generating ||
-          !variationCountValue ||
-          (!!selectedTextureSetId &&
-            ((productImageCountValue ?? 0) < 1 ||
-              (textureImageCountValue ?? 0) < 1 ||
-              totalImageCount > 14))
-        }
-        className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-6 py-3 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-      >
-        {generating ? (
-          <Loader2 className="h-5 w-5 animate-spin" />
-        ) : (
-          <Play className="h-5 w-5" />
+      <div className="space-y-2">
+        <button
+          onClick={handleGenerate}
+          disabled={isGenerateDisabled}
+          title={
+            disabledReasons.length > 0
+              ? `To generate:\n• ${disabledReasons.join('\n• ')}`
+              : undefined
+          }
+          className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-6 py-3 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          {generating ? (
+            <Loader2 className="h-5 w-5 animate-spin" />
+          ) : (
+            <Play className="h-5 w-5" />
+          )}
+          {generating ? 'Generating...' : 'Generate Images'}
+        </button>
+        {!generating && !aiLoading && disabledReasons.length > 0 && (
+          <div className="flex items-start gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-400">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-yellow-500 mt-0.5" />
+            <div>
+              <span className="font-medium text-zinc-300">To generate, you need to:</span>
+              <ul className="mt-1 space-y-0.5">
+                {disabledReasons.map((reason) => (
+                  <li key={reason}>• {reason}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
         )}
-        {generating ? 'Generating...' : 'Generate Images'}
-      </button>
+      </div>
 
       {/* Active Job Monitor */}
       {currentJob && activeJobId && (displayStatus === 'running' || displayStatus === 'pending' || displayStatus === 'completed' || displayStatus === 'failed') && (
