@@ -76,14 +76,20 @@ async function getExpectedToken(password: string): Promise<string> {
 
 /** Returns true when the request carries a valid site-auth cookie. */
 async function isAuthenticated(request: NextRequest): Promise<boolean> {
-  const password = process.env.SITE_PASSWORD
-  if (!password) return false
-  const auth = request.cookies.get(AUTH_COOKIE_NAME)
-  // Cookie value is an HMAC derived from SITE_PASSWORD — a predictable static
-  // string like "authenticated" would allow anyone who reads the source to
-  // forge a valid cookie.
-  if (!auth?.value) return false
-  return timingResistantEqual(auth.value, await getExpectedToken(password))
+  try {
+    const password = process.env.SITE_PASSWORD
+    if (!password) return false
+    const auth = request.cookies.get(AUTH_COOKIE_NAME)
+    // Cookie value is an HMAC derived from SITE_PASSWORD — a predictable static
+    // string like "authenticated" would allow anyone who reads the source to
+    // forge a valid cookie.
+    if (!auth?.value) return false
+    return timingResistantEqual(auth.value, await getExpectedToken(password))
+  } catch {
+    // Fail closed: if Web Crypto is unavailable or throws, deny access rather
+    // than propagating an unhandled rejection through the middleware.
+    return false
+  }
 }
 
 /**
@@ -116,37 +122,55 @@ function withSecurityHeaders(response: NextResponse): NextResponse {
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  if (isPublicPath(pathname)) {
-    return withSecurityHeaders(NextResponse.next())
-  }
+  try {
+    if (isPublicPath(pathname)) {
+      return withSecurityHeaders(NextResponse.next())
+    }
 
-  if (await isAuthenticated(request)) {
-    return withSecurityHeaders(NextResponse.next())
-  }
+    if (await isAuthenticated(request)) {
+      return withSecurityHeaders(NextResponse.next())
+    }
 
-  if (pathname.startsWith('/api/')) {
-    return withSecurityHeaders(
-      NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401, headers: { 'cache-control': 'no-store' } }
+    if (pathname.startsWith('/api/')) {
+      return withSecurityHeaders(
+        NextResponse.json(
+          { error: 'Unauthorized' },
+          { status: 401, headers: { 'cache-control': 'no-store' } }
+        )
       )
-    )
-  }
+    }
 
-  // Show login page, preserving the intended destination. Return 200 so the
-  // browser renders the gate as a normal document instead of a failed request.
-  // cache-control: no-store prevents CDNs or proxies from caching the login
-  // gate and serving it to users who subsequently authenticate.
-  const showError = request.nextUrl.searchParams.has('error')
-  return withSecurityHeaders(
-    new NextResponse(loginPage(showError, pathname), {
-      status: 200,
-      headers: {
-        'content-type': 'text/html',
-        'cache-control': 'no-store',
-      },
+    // Show login page, preserving the intended destination. Return 200 so the
+    // browser renders the gate as a normal document instead of a failed request.
+    // cache-control: no-store prevents CDNs or proxies from caching the login
+    // gate and serving it to users who subsequently authenticate.
+    const showError = request.nextUrl.searchParams.has('error')
+    return withSecurityHeaders(
+      new NextResponse(loginPage(showError, pathname), {
+        status: 200,
+        headers: {
+          'content-type': 'text/html',
+          'cache-control': 'no-store',
+        },
+      })
+    )
+  } catch (err) {
+    // Last-resort handler: if an unexpected error escapes (e.g. a Node/Edge
+    // runtime fault unrelated to auth), return a structured error response
+    // instead of letting the middleware throw an unhandled exception, which
+    // would surface as an opaque 500 with no useful headers.
+    console.error('[Middleware] Unexpected error', err)
+    if (pathname.startsWith('/api/')) {
+      return new NextResponse(
+        JSON.stringify({ error: 'Service unavailable' }),
+        { status: 503, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }
+      )
+    }
+    return new NextResponse('Service unavailable', {
+      status: 503,
+      headers: { 'content-type': 'text/plain', 'cache-control': 'no-store' },
     })
-  )
+  }
 }
 
 export const config = {

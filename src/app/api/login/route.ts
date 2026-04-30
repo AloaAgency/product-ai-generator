@@ -17,7 +17,15 @@ export async function POST(request: NextRequest) {
     return new NextResponse(null, { status: 503 })
   }
 
-  const formData = await request.formData()
+  // Malformed Content-Type or body (e.g. application/json sent to a form
+  // endpoint) causes formData() to throw. Catch it and return 400 rather than
+  // letting Next.js surface an opaque 500 for a client-side mistake.
+  let formData: FormData
+  try {
+    formData = await request.formData()
+  } catch {
+    return new NextResponse(null, { status: 400 })
+  }
   // formData.get() returns string | File | null — guard against File objects
   // (e.g. multipart abuse) before passing to safeCompare.
   const rawPassword = formData.get('password')
