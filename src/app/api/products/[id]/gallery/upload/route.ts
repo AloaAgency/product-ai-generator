@@ -70,9 +70,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       jobId = newJob.id
     }
 
-    const results = []
-
-    for (const file of files) {
+    const results = await Promise.all(files.map(async (file) => {
       const extension = file.file_name.includes('.')
         ? `.${file.file_name.split('.').pop()?.toLowerCase()}`
         : ''
@@ -84,8 +82,7 @@ export async function POST(request: NextRequest, { params }: Params) {
         .createSignedUploadUrl(storagePath, { upsert: true })
 
       if (signError || !signedData?.signedUrl) {
-        results.push({ file_name: file.file_name, error: signError?.message || 'Failed to sign' })
-        continue
+        return { file_name: file.file_name, error: signError?.message || 'Failed to sign' }
       }
 
       const imageId = randomUUID()
@@ -106,15 +103,11 @@ export async function POST(request: NextRequest, { params }: Params) {
         .single()
 
       if (insertError || !image) {
-        results.push({ file_name: file.file_name, error: insertError?.message || 'Insert failed' })
-        continue
+        return { file_name: file.file_name, error: insertError?.message || 'Insert failed' }
       }
 
-      results.push({
-        signed_url: signedData.signedUrl,
-        image,
-      })
-    }
+      return { signed_url: signedData.signedUrl, image }
+    }))
 
     // Return results immediately so client can start uploading.
     // After response, we'll generate thumbnails asynchronously via a separate call.
