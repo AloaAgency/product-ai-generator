@@ -112,13 +112,19 @@ export async function POST(
 
     const supabase = createServiceClient()
 
-    // Fetch scene and product in parallel — independent queries
+    // Fetch scene and product (with project styles via JOIN) in parallel — independent queries.
+    // Including project styles in the product JOIN avoids a second sequential round-trip
+    // when the product has no per-product API key (the common case).
     const [
       { data: scene, error: sceneError },
       { data: product },
     ] = await Promise.all([
       supabase.from(T.storyboard_scenes).select('*').eq('id', sceneId).single(),
-      supabase.from(T.products).select('*').eq('id', productId).single(),
+      supabase
+        .from(T.products)
+        .select(`*, ${T.projects}!fk_products_project(global_style_settings)`)
+        .eq('id', productId)
+        .single(),
     ])
 
     if (sceneError || !scene) {
@@ -130,14 +136,12 @@ export async function POST(
     }
 
     // Resolve API key from product-level settings first, then project-level defaults.
-    let geminiApiKey = resolveGoogleApiKey((product as Product).global_style_settings)
-    if (!geminiApiKey && product.project_id) {
-      const { data: project } = await supabase
-        .from(T.projects)
-        .select('global_style_settings')
-        .eq('id', product.project_id)
-        .single()
-      geminiApiKey = resolveGoogleApiKey(project?.global_style_settings as Product['global_style_settings'] | null)
+    const productWithProject = product as Product & {
+      prodai_projects: { global_style_settings: Product['global_style_settings'] } | null
+    }
+    let geminiApiKey = resolveGoogleApiKey(productWithProject.global_style_settings)
+    if (!geminiApiKey) {
+      geminiApiKey = resolveGoogleApiKey(productWithProject.prodai_projects?.global_style_settings ?? null)
     }
 
     // Find reference set
@@ -163,7 +167,7 @@ export async function POST(
       .order('display_order', { ascending: true })
 
     const referenceImages: ReferenceImage[] = refImages || []
-    const settings = (product as Product).global_style_settings
+    const settings = productWithProject.global_style_settings
 
     const result: { start_frame_image_id?: string; end_frame_image_id?: string } = {}
 

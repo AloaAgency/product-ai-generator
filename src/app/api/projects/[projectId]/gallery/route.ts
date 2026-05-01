@@ -124,8 +124,15 @@ export async function GET(
 
     const productIds = products.map((product) => product.id)
 
-    // Count and image queries are independent — run in parallel
-    const [countResult, imagesResult] = await Promise.all([
+    const scopedStatusCount = (status: string) => {
+      const q = productIds.length === 1
+        ? supabase.from(T.generated_images).select('id', { count: 'exact', head: true }).eq('product_id', productIds[0])
+        : supabase.from(T.generated_images).select('id', { count: 'exact', head: true }).in('product_id', productIds)
+      return q.eq('approval_status', status)
+    }
+
+    // All four queries are independent once we have productIds — run together to save a round-trip.
+    const [countResult, imagesResult, rejectedResult, changesResult] = await Promise.all([
       applyProjectGalleryFilters(
         supabase.from(T.generated_images).select('id', { count: 'exact', head: true }),
         { productIds, approvalStatus, mediaType }
@@ -136,6 +143,8 @@ export async function GET(
       )
         .order('created_at', { ascending: false })
         .range(offset, offset + limit - 1),
+      approvalStatus !== 'rejected' ? scopedStatusCount('rejected') : Promise.resolve({ count: null }),
+      approvalStatus !== 'request_changes' ? scopedStatusCount('request_changes') : Promise.resolve({ count: null }),
     ])
 
     const { count: totalCount, error: countError } = countResult
@@ -259,19 +268,6 @@ export async function GET(
     const filtered = productIdFilter
       ? result
       : result.filter((product) => product.images.length > 0)
-
-    const scopedStatusCount = async (status: string) => {
-      const query = productIds.length === 1
-        ? supabase.from(T.generated_images).select('id', { count: 'exact', head: true }).eq('product_id', productIds[0])
-        : supabase.from(T.generated_images).select('id', { count: 'exact', head: true }).in('product_id', productIds)
-
-      return query.eq('approval_status', status)
-    }
-
-    const [rejectedResult, changesResult] = await Promise.all([
-      approvalStatus !== 'rejected' ? scopedStatusCount('rejected') : Promise.resolve({ count: null }),
-      approvalStatus !== 'request_changes' ? scopedStatusCount('request_changes') : Promise.resolve({ count: null }),
-    ])
 
     const total = totalCount ?? (images || []).length
 

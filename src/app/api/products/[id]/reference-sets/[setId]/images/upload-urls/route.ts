@@ -64,10 +64,9 @@ export async function POST(
       )
     }
 
-    let nextOrder = (existing?.[0]?.display_order ?? -1) + 1
-    const results = []
+    const nextOrderBase = (existing?.[0]?.display_order ?? -1) + 1
 
-    for (const file of files) {
+    const results = await Promise.all(files.map(async (file, index) => {
       const extension = file.name.includes('.')
         ? `.${file.name.split('.').pop()?.toLowerCase()}`
         : ''
@@ -79,20 +78,19 @@ export async function POST(
         .createSignedUploadUrl(storagePath, { upsert: true })
 
       if (error || !data?.signedUrl) {
-        results.push({ clientId: file.clientId, error: error?.message || 'Failed to sign upload' })
-        continue
+        return { clientId: file.clientId, error: error?.message || 'Failed to sign upload' }
       }
 
-      results.push({
+      return {
         clientId: file.clientId,
         signedUrl: data.signedUrl,
         storage_path: storagePath,
         file_name: file.name,
         mime_type: file.type,
         file_size: file.size,
-        display_order: nextOrder++,
-      })
-    }
+        display_order: nextOrderBase + index,
+      }
+    }))
 
     return NextResponse.json(results, { status: 201 })
   } catch {
