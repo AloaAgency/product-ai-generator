@@ -142,6 +142,9 @@ async function resizeToWebP(
   if (buffer.length === 0) {
     throw new Error('resizeToWebP: buffer is empty')
   }
+  if (buffer.length > MAX_BUFFER_BYTES) {
+    throw new Error('resizeToWebP: buffer exceeds maximum size limit')
+  }
   const outBuffer = await sharp(buffer)
     .rotate()
     .resize({ width, withoutEnlargement: true })
@@ -182,10 +185,26 @@ export const createThumbnailAndPreview = (
 const REF_MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
 const REF_MAX_DIMENSION = 4096             // px
 
+// Hard ceiling applied before any Sharp pipeline runs. Prevents memory
+// exhaustion if upstream size limits (e.g. multipart validation) are bypassed.
+const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
+
 // Raster formats accepted as reference images. SVG and jp2 are excluded:
 // SVG is an XML format Sharp parses via librsvg (larger attack surface),
 // and jp2/raw are not valid user-upload targets for this app.
 const ALLOWED_REF_FORMATS = new Set(['jpeg', 'png', 'webp', 'gif', 'avif', 'tiff', 'heif'])
+
+// Explicit whitelist from Sharp format identifiers to IANA MIME types.
+// Avoids interpolating an external string directly into a MIME type header.
+const FORMAT_MIME_MAP: Readonly<Record<string, string>> = {
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  avif: 'image/avif',
+  tiff: 'image/tiff',
+  heif: 'image/heif',
+}
 
 export type CompressResult = {
   buffer: Buffer
@@ -204,6 +223,9 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   if (buffer.length === 0) {
     throw new Error('compressReferenceImage: buffer is empty')
   }
+  if (buffer.length > MAX_BUFFER_BYTES) {
+    throw new Error('compressReferenceImage: buffer exceeds maximum size limit')
+  }
   const originalSize = buffer.length
   const meta = await sharp(buffer).metadata()
   if (!meta.format || !ALLOWED_REF_FORMATS.has(meta.format)) {
@@ -218,7 +240,7 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   if (!needsResize && !needsCompress) {
     return {
       buffer,
-      mimeType: meta.format ? `image/${meta.format}` : 'application/octet-stream',
+      mimeType: (meta.format && FORMAT_MIME_MAP[meta.format]) ?? 'application/octet-stream',
       extension: meta.format ?? 'bin',
       originalSize,
       compressedSize: originalSize,
