@@ -189,6 +189,10 @@ export function parsePromptSuggestions(raw: string): { name: string; prompt_text
     const prompts = Array.isArray(parsed) ? parsed : parsed?.prompts
     if (!Array.isArray(prompts)) return []
     return prompts
+      // Guard against null/non-object array items from a malformed AI response —
+      // without this, a null element would throw inside .map() and the outer catch
+      // would silently discard every valid suggestion in the response.
+      .filter((p: unknown): p is Record<string, unknown> => p !== null && typeof p === 'object')
       .map((p: any) => ({
         // Cap fields so an oversized or adversarial AI response cannot push unbounded
         // strings into DB inserts or API responses downstream.
