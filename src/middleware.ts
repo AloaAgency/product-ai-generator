@@ -12,15 +12,16 @@ const LOGIN_PAGE_PREFIX = `<!DOCTYPE html>
   <title>Login - Aloa AI Product Imager</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, sans-serif; background: #09090b; color: #f4f4f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #09090b; color: #f4f4f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 0 1rem; }
     .card { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 2rem; width: 100%; max-width: 380px; }
     h1 { font-size: 1.25rem; margin-bottom: 1.5rem; text-align: center; }
     label { display: block; font-size: 0.875rem; color: #a1a1aa; margin-bottom: 0.375rem; }
-    input { width: 100%; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid #3f3f46; background: #27272a; color: #f4f4f5; font-size: 0.875rem; outline: none; }
+    input { width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid #3f3f46; background: #27272a; color: #f4f4f5; font-size: 1rem; outline: none; min-height: 2.75rem; }
     input:focus { border-color: #71717a; box-shadow: 0 0 0 2px rgba(113, 113, 122, 0.2); }
-    button { width: 100%; margin-top: 1rem; padding: 0.5rem; border-radius: 8px; border: none; background: #fff; color: #09090b; font-size: 0.875rem; font-weight: 500; cursor: pointer; }
+    button { width: 100%; margin-top: 1rem; padding: 0.75rem; border-radius: 8px; border: none; background: #fff; color: #09090b; font-size: 1rem; font-weight: 500; cursor: pointer; min-height: 2.75rem; }
     button:hover { background: #e4e4e7; }
     .error { color: #ef4444; font-size: 0.8rem; margin-top: 0.75rem; text-align: center; }
+    @media (max-width: 420px) { .card { padding: 1.5rem 1.25rem; } }
   </style>
 </head>
 <body>
@@ -54,7 +55,7 @@ function loginPage(showError: boolean, redirectPath: string) {
     `\n    <form method="POST" action="/api/login">
       <input type="hidden" name="redirect" value="${safeRedirect}" />
       <label for="password">Password</label>
-      <input type="password" id="password" name="password" autocomplete="current-password" placeholder="Enter password" autofocus required />
+      <input type="password" id="password" name="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="Enter password" autofocus required />
       <button type="submit">Sign In</button>
       ${showError ? ERROR_HTML : ''}
     </form>\n` +
