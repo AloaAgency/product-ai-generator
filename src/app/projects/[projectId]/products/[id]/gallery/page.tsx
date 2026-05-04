@@ -10,6 +10,8 @@ import type { PromptTemplate } from '@/lib/types'
 import {
   ArrowLeft,
   ArrowUpDown,
+  ChevronLeft,
+  ChevronRight,
   Filter,
   Download,
   ImageIcon,
@@ -25,6 +27,7 @@ import {
   Check,
 } from 'lucide-react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'request_changes'
 type SortOption = 'newest' | 'oldest' | 'variation'
@@ -51,7 +54,10 @@ export default function GalleryPage({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { projectId, id } = use(params)
+  const router = useRouter()
 
+  const products = useAppStore((state) => state.products)
+  const fetchProducts = useAppStore((state) => state.fetchProducts)
   const galleryImages = useAppStore((state) => state.galleryImages)
   const galleryTotal = useAppStore((state) => state.galleryTotal)
   const galleryHasMore = useAppStore((state) => state.galleryHasMore)
@@ -163,6 +169,33 @@ export default function GalleryPage({
       .then((data) => { if (Array.isArray(data)) setPromptTemplates(data) })
       .catch(() => {})
   }, [id, sortOption, fetchGallery, fetchGenerationJobs])
+
+  useEffect(() => {
+    fetchProducts(projectId)
+  }, [projectId, fetchProducts])
+
+  const projectProducts = useMemo(
+    () => products.filter((p) => p.project_id === projectId),
+    [products, projectId]
+  )
+  const currentProductIndex = useMemo(
+    () => projectProducts.findIndex((p) => p.id === id),
+    [projectProducts, id]
+  )
+  const prevProductId = currentProductIndex > 0 ? projectProducts[currentProductIndex - 1].id : null
+  const nextProductId =
+    currentProductIndex >= 0 && currentProductIndex < projectProducts.length - 1
+      ? projectProducts[currentProductIndex + 1].id
+      : null
+
+  const navigateToProduct = useCallback(
+    (productId: string) => {
+      if (productId && productId !== id) {
+        router.push(`/projects/${projectId}/products/${productId}/gallery`)
+      }
+    },
+    [router, projectId, id]
+  )
 
   // Unique job IDs for filter dropdown
   const jobIds = useMemo(() => {
@@ -581,14 +614,46 @@ export default function GalleryPage({
       {/* Header */}
       <div className="border-b border-zinc-800 px-4 sm:px-6 py-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <Link
               href={`/projects/${projectId}/products/${id}`}
               className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
             >
               <ArrowLeft className="h-5 w-5" />
             </Link>
-            <h1 className="text-xl font-semibold">Image Gallery</h1>
+            <button
+              type="button"
+              onClick={() => prevProductId && navigateToProduct(prevProductId)}
+              disabled={!prevProductId}
+              aria-label="Previous product"
+              className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-zinc-400 transition-colors"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            {projectProducts.length > 0 && currentProductIndex !== -1 ? (
+              <select
+                value={id}
+                onChange={(e) => navigateToProduct(e.target.value)}
+                className="max-w-[260px] truncate rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-base font-semibold text-zinc-100 outline-none focus:border-zinc-500"
+              >
+                {projectProducts.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <h1 className="text-xl font-semibold">Image Gallery</h1>
+            )}
+            <button
+              type="button"
+              onClick={() => nextProductId && navigateToProduct(nextProductId)}
+              disabled={!nextProductId}
+              aria-label="Next product"
+              className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-zinc-400 transition-colors"
+            >
+              <ChevronRight className="h-5 w-5" />
+            </button>
             <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm text-zinc-400">
               {galleryTotal > filteredImages.length ? `${filteredImages.length} of ${galleryTotal}` : filteredImages.length} image{galleryTotal !== 1 ? 's' : ''}
             </span>
