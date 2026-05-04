@@ -179,17 +179,7 @@ export default function GalleryPage({
   // Filtered images
   const filteredImages = useMemo(() => {
     return galleryImages.filter((img) => {
-      if (statusFilter === 'all') {
-        // "All" excludes rejected and request_changes
-        const imgStatus = img.approval_status ?? 'pending'
-        if (imgStatus === 'rejected' || imgStatus === 'request_changes') return false
-      } else if (statusFilter === 'rejected') {
-        const imgStatus = img.approval_status ?? 'pending'
-        if (imgStatus !== 'rejected') return false
-      } else if (statusFilter === 'request_changes') {
-        const imgStatus = img.approval_status ?? 'pending'
-        if (imgStatus !== 'request_changes') return false
-      } else {
+      if (statusFilter !== 'all') {
         const imgStatus = img.approval_status ?? 'pending'
         if (imgStatus !== statusFilter) return false
       }
