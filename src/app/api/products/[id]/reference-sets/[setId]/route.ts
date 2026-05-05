@@ -9,7 +9,10 @@ export async function PATCH(
   try {
     const { id: productId, setId } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
 
     // If setting is_active=true, deactivate other sets first
     if (body.is_active === true) {

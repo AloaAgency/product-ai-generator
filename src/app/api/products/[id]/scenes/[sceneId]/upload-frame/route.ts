@@ -21,7 +21,10 @@ export async function POST(request: NextRequest, { params }: Params) {
   try {
     const { id: productId, sceneId } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
 
     const slot = body.slot as 'start' | 'end'
     const fileName = body.file_name as string

@@ -30,7 +30,10 @@ export async function POST(
   try {
     const { id: productId } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
     const { name, image_ids } = body
 
     if (!name || !Array.isArray(image_ids) || image_ids.length === 0) {

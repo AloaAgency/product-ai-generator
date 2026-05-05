@@ -29,7 +29,10 @@ export async function POST(
 
     const contentType = request.headers.get('content-type') || ''
     if (contentType.includes('application/json')) {
-      const body = await request.json()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let body: any = {}
+      try { body = await request.json() }
+      catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
       const uploads = (body?.uploads || []) as Array<{
         storage_path: string
         file_name: string

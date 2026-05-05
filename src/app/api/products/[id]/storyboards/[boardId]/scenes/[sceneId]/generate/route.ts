@@ -102,7 +102,10 @@ export async function POST(
   const { id: productId, sceneId } = await params
 
   try {
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
     const frame: string = body.frame // 'start' | 'end' | 'both'
     const referenceSetId: string | undefined = body.reference_set_id
 
