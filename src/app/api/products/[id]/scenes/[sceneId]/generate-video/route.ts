@@ -49,13 +49,12 @@ export async function POST(
     return NextResponse.json({ job }, { status: 201 })
   } catch (err) {
     console.error('[GenerateVideo] Error:', err)
-    const message = err instanceof Error ? err.message : 'Internal server error'
     await logError({
       productId,
-      errorMessage: message,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
       errorSource: 'api/products/scenes/generate-video',
       errorContext: { sceneId },
     })
-    return NextResponse.json({ error: message }, { status: 500 })
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
