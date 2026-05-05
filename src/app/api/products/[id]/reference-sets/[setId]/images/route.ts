@@ -3,21 +3,17 @@ import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processReferenceImageCompression } from '@/lib/reference-image-compression'
+import {
+  MAX_REFERENCE_IMAGES,
+  ALLOWED_REFERENCE_IMAGE_TYPES,
+  MAX_REFERENCE_IMAGE_SIZE_BYTES,
+} from '@/lib/request-guards'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
 export const dynamic = 'force-dynamic'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
-const MAX_REFERENCE_IMAGES = 14
-const ALLOWED_IMAGE_TYPES = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/gif',
-  'image/avif',
-])
-const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50 MB
 
 export async function POST(
   request: NextRequest,
@@ -104,10 +100,10 @@ export async function POST(
     }
 
     for (const file of files) {
-      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+      if (!ALLOWED_REFERENCE_IMAGE_TYPES.has(file.type)) {
         return NextResponse.json({ error: `File type "${file.type}" is not allowed. Allowed types: JPEG, PNG, WebP, GIF, AVIF` }, { status: 400 })
       }
-      if (file.size > MAX_FILE_SIZE_BYTES) {
+      if (file.size > MAX_REFERENCE_IMAGE_SIZE_BYTES) {
         return NextResponse.json({ error: `File "${file.name}" exceeds the 50 MB size limit` }, { status: 400 })
       }
     }
