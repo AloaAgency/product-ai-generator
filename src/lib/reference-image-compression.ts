@@ -43,33 +43,33 @@ export async function processReferenceImageCompression(
       wasCompressed: false,
       originalSize: 0,
       compressedSize: 0,
-      error: 'Download failed',
+      error: downloadError?.message ?? 'Download failed',
     }
   }
 
   let buffer: Buffer
   try {
     buffer = Buffer.from(await fileData.arrayBuffer())
-  } catch {
+  } catch (err) {
     return {
       imageId,
       wasCompressed: false,
       originalSize: 0,
       compressedSize: 0,
-      error: 'Buffer conversion failed',
+      error: err instanceof Error ? err.message : 'Buffer conversion failed',
     }
   }
 
   let result: CompressResult
   try {
     result = await compressReferenceImage(buffer)
-  } catch {
+  } catch (err) {
     return {
       imageId,
       wasCompressed: false,
       originalSize: buffer.length,
       compressedSize: buffer.length,
-      error: 'Compression failed',
+      error: err instanceof Error ? err.message : 'Compression failed',
     }
   }
 
@@ -99,7 +99,7 @@ export async function processReferenceImageCompression(
       wasCompressed: false,
       originalSize: result.originalSize,
       compressedSize: result.compressedSize,
-      error: 'Upload failed',
+      error: uploadError.message ?? 'Upload failed',
     }
   }
 
@@ -121,7 +121,7 @@ export async function processReferenceImageCompression(
       originalSize: result.originalSize,
       compressedSize: result.compressedSize,
       newStoragePath,
-      error: 'DB update failed',
+      error: dbError.message ?? 'DB update failed',
     }
   }
 
