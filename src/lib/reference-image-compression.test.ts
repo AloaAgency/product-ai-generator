@@ -94,7 +94,7 @@ describe('processReferenceImageCompression — download failures', () => {
     expect(result.wasCompressed).toBe(false)
     expect(result.originalSize).toBe(0)
     expect(result.compressedSize).toBe(0)
-    expect(result.error).toBe('Download failed')
+    expect(result.error).toBe('object not found')
     expect(result.imageId).toBe(FAKE_IMAGE_ID)
   })
 
@@ -166,7 +166,7 @@ describe('processReferenceImageCompression — upload failure', () => {
     const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
 
     expect(result.wasCompressed).toBe(false)
-    expect(result.error).toBe('Upload failed')
+    expect(result.error).toBe('bucket quota exceeded')
     expect(result.imageId).toBe(FAKE_IMAGE_ID)
     expect(result.originalSize).toBe(7)
     expect(result.compressedSize).toBe(15)
@@ -209,7 +209,7 @@ describe('processReferenceImageCompression — DB update failure', () => {
     const result = await processReferenceImageCompression(FAKE_IMAGE_ID, originalPath)
 
     expect(result.wasCompressed).toBe(true)
-    expect(result.error).toBe('DB update failed')
+    expect(result.error).toBe('FK violation')
   })
 
   it('still includes newStoragePath in the result even when DB update fails', async () => {
