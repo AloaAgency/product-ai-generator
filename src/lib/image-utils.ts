@@ -133,6 +133,10 @@ export const buildThumbnailPath = (storagePath: string, extension: string): stri
 export const buildPreviewPath = (storagePath: string, extension: string): string =>
   buildDerivedPath(storagePath, 'previews', extension)
 
+// Hard ceiling applied before any Sharp pipeline runs. Prevents memory
+// exhaustion if upstream size limits (e.g. multipart validation) are bypassed.
+const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
+
 /** Resize an image buffer to a WebP of the given width and quality. */
 async function resizeToWebP(
   buffer: Buffer,
@@ -184,10 +188,6 @@ export const createThumbnailAndPreview = (
 /** Thresholds for reference image compression */
 const REF_MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
 const REF_MAX_DIMENSION = 4096             // px
-
-// Hard ceiling applied before any Sharp pipeline runs. Prevents memory
-// exhaustion if upstream size limits (e.g. multipart validation) are bypassed.
-const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
 
 // Raster formats accepted as reference images. SVG and jp2 are excluded:
 // SVG is an XML format Sharp parses via librsvg (larger attack surface),
@@ -276,6 +276,9 @@ export const extractVideoThumbnail = async (
 ): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => {
   if (videoBuffer.length === 0) {
     throw new Error('extractVideoThumbnail: video buffer is empty')
+  }
+  if (videoBuffer.length > MAX_BUFFER_BYTES) {
+    throw new Error('extractVideoThumbnail: buffer exceeds maximum size limit')
   }
 
   await ensureFfmpegPath()
