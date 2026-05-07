@@ -256,6 +256,15 @@ export function ImageLightbox({
     await handleApprovalAction('rejected')
   }, [handleApprovalAction])
 
+  const handleKeyboardReject = useCallback(async () => {
+    if (!currentImage) return
+    const wasRejected = currentImage.approval_status === 'rejected'
+    await handleReject()
+    if (wasRejected) return
+    if (currentIndex < images.length - 1) onNavigate(currentIndex + 1)
+    else onClose()
+  }, [currentImage, handleReject, currentIndex, images.length, onNavigate, onClose])
+
   const handleRequestChanges = useCallback(async () => {
     await handleApprovalAction('request_changes')
   }, [handleApprovalAction])
@@ -373,7 +382,7 @@ export function ImageLightbox({
           void handlePermanentDelete()
           break
         case 'reject':
-          void handleReject()
+          void handleKeyboardReject()
           break
         case 'download':
           void handleDownload()
@@ -390,7 +399,7 @@ export function ImageLightbox({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handlePrev, handleNext, handleFirst, handleLast, handleApprove, handleReject, handleDownload, handleCopyPrompt, handleRequestChanges, handlePermanentDelete, isRejected, onDelete])
+  }, [handlePrev, handleNext, handleFirst, handleLast, handleApprove, handleKeyboardReject, handleDownload, handleCopyPrompt, handleRequestChanges, handlePermanentDelete, isRejected, onDelete])
 
   // Fetch signed URLs when the current image changes and has no displayable URL
   useEffect(() => {
