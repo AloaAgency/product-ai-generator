@@ -189,6 +189,10 @@ export function parsePromptSuggestions(raw: string): { name: string; prompt_text
     const prompts = Array.isArray(parsed) ? parsed : parsed?.prompts
     if (!Array.isArray(prompts)) return []
     return prompts
+      // Cap before mapping — the AI may return more items than requested (e.g. when
+      // it misreads the count). Without this guard the caller could receive and
+      // propagate an unbounded number of DB inserts or response entries.
+      .slice(0, MAX_SUGGESTION_COUNT)
       // Guard against null/non-object array items from a malformed AI response —
       // without this, a null element would throw inside .map() and the outer catch
       // would silently discard every valid suggestion in the response.
