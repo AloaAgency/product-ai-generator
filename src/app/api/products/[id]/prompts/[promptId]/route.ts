@@ -7,6 +7,10 @@ import { SCENE_TITLE_SYSTEM_PROMPT, MAX_USER_PROMPT_LEN } from '@/lib/prompt-bui
 
 const anthropic = new Anthropic()
 
+// Must match the limits enforced by the POST route on the same table
+const MAX_NAME_LENGTH = 500
+const MAX_PROMPT_LENGTH = 10000
+
 async function generateSceneTitle(promptText: string): Promise<string> {
   try {
     const response = await anthropic.messages.create({
@@ -32,6 +36,23 @@ export async function PATCH(
     let body: any = {}
     try { body = await request.json() }
     catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+
+    if (body.name !== undefined) {
+      if (typeof body.name !== 'string' || body.name.trim().length === 0) {
+        return NextResponse.json({ error: 'name must be a non-empty string' }, { status: 400 })
+      }
+      if (body.name.length > MAX_NAME_LENGTH) {
+        return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
+      }
+    }
+    if (body.prompt_text !== undefined) {
+      if (typeof body.prompt_text !== 'string' || body.prompt_text.trim().length === 0) {
+        return NextResponse.json({ error: 'prompt_text must be a non-empty string' }, { status: 400 })
+      }
+      if (body.prompt_text.length > MAX_PROMPT_LENGTH) {
+        return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+      }
+    }
 
     const updates: Record<string, unknown> = {}
     if (body.name !== undefined) updates.name = body.name
