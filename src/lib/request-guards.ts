@@ -20,7 +20,7 @@ export const IMAGE_APPROVAL_STATUSES = new Set([
   'request_changes',
 ])
 export const GALLERY_MEDIA_TYPES = new Set(['image', 'video', 'all'])
-export const GALLERY_SORT_OPTIONS = new Set(['oldest', 'variation'])
+export const GALLERY_SORT_OPTIONS = new Set(['newest', 'oldest', 'variation'])
 
 type PublicErrorOptions = {
   fallback?: string
