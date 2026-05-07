@@ -8,6 +8,8 @@ import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
 
+const anthropic = new Anthropic()
+
 export async function POST(request: NextRequest) {
   let product_id: string | undefined
 
@@ -54,7 +56,6 @@ export async function POST(request: NextRequest) {
 
     const userMessage = buildRefinedPromptUserMessage(product.name, product.description, settings, user_prompt)
 
-    const anthropic = new Anthropic()
     const response = await anthropic.messages.create({
       model: CLAUDE_FAST_MODEL.name,
       max_tokens: 4096,
