@@ -113,8 +113,12 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',
 }
 
+// Pre-computed once at module load so withSecurityHeaders never allocates a
+// temporary entries array on the hot path (called for every request response).
+const SECURITY_HEADER_ENTRIES = Object.entries(SECURITY_HEADERS)
+
 function withSecurityHeaders(response: NextResponse): NextResponse {
-  for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
+  for (const [key, value] of SECURITY_HEADER_ENTRIES) {
     response.headers.set(key, value)
   }
   return response
