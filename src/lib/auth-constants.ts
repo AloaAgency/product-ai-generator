@@ -63,7 +63,5 @@ export async function deriveAuthToken(password: string): Promise<string> {
     ['sign'],
   )
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode('site-auth-v1'))
-  return Array.from(new Uint8Array(signature))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
+  return Array.from(new Uint8Array(signature), b => b.toString(16).padStart(2, '0')).join('')
 }
