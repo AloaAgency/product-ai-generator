@@ -63,16 +63,24 @@ function loginPage(showError: boolean, redirectPath: string) {
   )
 }
 
-// Cached expected auth token, computed once per isolate lifetime.
-// SITE_PASSWORD is configured at deploy time and never changes while the
-// process is running, so the derived HMAC token is constant.
-let _cachedExpectedToken: string | null = null
+// Cached derivation Promise, computed once per isolate lifetime.
+// Storing the Promise (rather than the resolved string) means concurrent
+// requests that arrive before the first derivation completes all share the
+// same in-flight Promise instead of each triggering a redundant HMAC call.
+let _tokenPromise: Promise<string> | null = null
 
-async function getExpectedToken(password: string): Promise<string> {
-  if (_cachedExpectedToken === null) {
-    _cachedExpectedToken = await deriveAuthToken(password)
+function getExpectedToken(password: string): Promise<string> {
+  if (_tokenPromise === null) {
+    _tokenPromise = deriveAuthToken(password)
   }
-  return _cachedExpectedToken
+  return _tokenPromise
+}
+
+// Kick off the derivation at module load so the first real auth check finds an
+// already-resolved (or nearly-resolved) Promise rather than paying the async
+// Web Crypto cost during a live request.
+if (process.env.SITE_PASSWORD) {
+  void getExpectedToken(process.env.SITE_PASSWORD)
 }
 
 /** Returns true when the request carries a valid site-auth cookie. */
