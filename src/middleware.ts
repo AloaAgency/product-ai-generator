@@ -63,16 +63,24 @@ function loginPage(showError: boolean, redirectPath: string) {
   )
 }
 
-// Cached expected auth token, computed once per isolate lifetime.
-// SITE_PASSWORD is configured at deploy time and never changes while the
-// process is running, so the derived HMAC token is constant.
-let _cachedExpectedToken: string | null = null
+// Cached derivation Promise, computed once per isolate lifetime.
+// Storing the Promise (rather than the resolved string) means concurrent
+// requests that arrive before the first derivation completes all share the
+// same in-flight Promise instead of each triggering a redundant HMAC call.
+let _tokenPromise: Promise<string> | null = null
 
-async function getExpectedToken(password: string): Promise<string> {
-  if (_cachedExpectedToken === null) {
-    _cachedExpectedToken = await deriveAuthToken(password)
+function getExpectedToken(password: string): Promise<string> {
+  if (_tokenPromise === null) {
+    _tokenPromise = deriveAuthToken(password)
   }
-  return _cachedExpectedToken
+  return _tokenPromise
+}
+
+// Kick off the derivation at module load so the first real auth check finds an
+// already-resolved (or nearly-resolved) Promise rather than paying the async
+// Web Crypto cost during a live request.
+if (process.env.SITE_PASSWORD) {
+  void getExpectedToken(process.env.SITE_PASSWORD)
 }
 
 /** Returns true when the request carries a valid site-auth cookie. */
@@ -113,8 +121,12 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',
 }
 
+// Pre-computed once at module load so withSecurityHeaders never allocates a
+// temporary entries array on the hot path (called for every request response).
+const SECURITY_HEADER_ENTRIES = Object.entries(SECURITY_HEADERS)
+
 function withSecurityHeaders(response: NextResponse): NextResponse {
-  for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
+  for (const [key, value] of SECURITY_HEADER_ENTRIES) {
     response.headers.set(key, value)
   }
   return response
