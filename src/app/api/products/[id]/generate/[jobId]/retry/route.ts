@@ -12,8 +12,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; jobId: string }> }
 ) {
+  const { id: productId, jobId } = await params
+
   try {
-    const { id: productId, jobId } = await params
     const supabase = createServiceClient()
 
     const { data: job, error: jobError } = await supabase
@@ -69,6 +70,12 @@ export async function POST(
     return NextResponse.json({ job: updated }, { status: 200 })
   } catch (err) {
     console.error('[RetryGeneration] Error:', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/products/generate/retry',
+      errorContext: { jobId },
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
