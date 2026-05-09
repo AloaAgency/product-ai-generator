@@ -45,6 +45,11 @@ export async function GET(
     return NextResponse.json(data || [])
   } catch (err) {
     console.error('[Generate GET]', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/products/generate:GET',
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -402,6 +407,11 @@ export async function DELETE(
     return NextResponse.json({ cancelled, cleared_failed: clearedFailed, cleared_log: clearedLog })
   } catch (err) {
     console.error('[Generate DELETE]', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/products/generate:DELETE',
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
