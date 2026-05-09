@@ -45,6 +45,11 @@ export async function GET(
     return NextResponse.json(data || [])
   } catch (err) {
     console.error('[Generate GET]', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/products/generate:GET',
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -132,7 +137,7 @@ export async function POST(
     }
 
     if (source_image_id && (sourceImgResult.error || !sourceImgResult.data)) {
-      return NextResponse.json({ error: 'Source image not found' }, { status: 400 })
+      return NextResponse.json({ error: 'Source image not found' }, { status: 404 })
     }
 
     const product = productResult.data
@@ -144,7 +149,7 @@ export async function POST(
       if (error || !data) {
         return NextResponse.json(
           { error: reference_set_id ? 'Reference set not found' : 'No active reference set found for this product' },
-          { status: 400 }
+          { status: reference_set_id ? 404 : 400 }
         )
       }
       refSet = data as ReferenceSet
@@ -198,7 +203,7 @@ export async function POST(
     let textureImages: ReferenceImage[] = []
     if (texture_set_id) {
       if (textureSetResult.error || !textureSetResult.data) {
-        return NextResponse.json({ error: 'Texture set not found' }, { status: 400 })
+        return NextResponse.json({ error: 'Texture set not found' }, { status: 404 })
       }
       textureSet = textureSetResult.data as ReferenceSet
       if (textureSet.type && textureSet.type !== 'texture') {
@@ -402,6 +407,11 @@ export async function DELETE(
     return NextResponse.json({ cancelled, cleared_failed: clearedFailed, cleared_log: clearedLog })
   } catch (err) {
     console.error('[Generate DELETE]', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/products/generate:DELETE',
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

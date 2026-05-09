@@ -13,6 +13,7 @@ import {
 import type { Product, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { resolveGoogleApiKey } from '@/lib/google-api-keys'
+import { logError } from '@/lib/error-logger'
 
 async function generateAndStoreImage(
   supabase: ReturnType<typeof createServiceClient>,
@@ -263,6 +264,12 @@ export async function POST(
     return NextResponse.json(updated)
   } catch (err) {
     console.error('[Scene Generate] Error:', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/storyboard/scenes/generate',
+      errorContext: { sceneId },
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
