@@ -98,6 +98,11 @@ export async function GET(
     return NextResponse.json(data || [])
   } catch (err) {
     console.error('[Generate GET]', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/products/generate:GET',
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -191,7 +196,7 @@ export async function POST(
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
     if (source_image_id && (sourceImgResult.error || !sourceImgResult.data)) {
-      return NextResponse.json({ error: 'Source image not found' }, { status: 400 })
+      return NextResponse.json({ error: 'Source image not found' }, { status: 404 })
     }
     if (refSetsResult.error) {
       return NextResponse.json({ error: 'Failed to load reference sets' }, { status: 500 })
@@ -441,6 +446,11 @@ export async function DELETE(
     return NextResponse.json({ cancelled, cleared_failed: clearedFailed, cleared_log: clearedLog })
   } catch (err) {
     console.error('[Generate DELETE]', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/products/generate:DELETE',
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

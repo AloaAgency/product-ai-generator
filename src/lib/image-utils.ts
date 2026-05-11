@@ -137,6 +137,12 @@ export const buildPreviewPath = (storagePath: string, extension: string): string
 // exhaustion if upstream size limits (e.g. multipart validation) are bypassed.
 const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
 
+// Decoded-dimension guard for user-supplied images. A file that is small on
+// disk but claims huge pixel dimensions (a "pixel bomb") would pass the buffer
+// size check yet still exhaust memory during decode. We cap each axis at 32 k
+// pixels (≈8× the max output dimension) before any Sharp pipeline executes.
+const MAX_SAFE_INPUT_DIMENSION = 32_768
+
 /** Resize an image buffer to a WebP of the given width and quality. */
 async function resizeToWebP(
   buffer: Buffer,
@@ -233,6 +239,11 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   }
   const w = meta.width ?? 0
   const h = meta.height ?? 0
+  if (w > MAX_SAFE_INPUT_DIMENSION || h > MAX_SAFE_INPUT_DIMENSION) {
+    throw new Error(
+      `compressReferenceImage: image dimensions ${w}x${h} exceed maximum allowed (${MAX_SAFE_INPUT_DIMENSION}px per side)`
+    )
+  }
 
   const needsResize = w > REF_MAX_DIMENSION || h > REF_MAX_DIMENSION
   const needsCompress = originalSize > REF_MAX_FILE_SIZE

@@ -413,6 +413,20 @@ describe('compressReferenceImage', () => {
     const garbage = Buffer.from('this is definitely not an image format at all')
     await expect(compressReferenceImage(garbage)).rejects.toThrow()
   })
+
+  it('throws when image dimensions exceed the per-side limit (pixel bomb guard)', async () => {
+    // Sharp's create helper lets us synthesize an image with huge declared
+    // dimensions without actually allocating the full bitmap in the test.
+    // 33 000 px exceeds the 32 768 px per-side ceiling.
+    const huge = await sharp({
+      create: { width: 33_000, height: 100, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    })
+      .png()
+      .toBuffer()
+    await expect(compressReferenceImage(huge)).rejects.toThrow(
+      /dimensions.*exceed maximum/i
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------
