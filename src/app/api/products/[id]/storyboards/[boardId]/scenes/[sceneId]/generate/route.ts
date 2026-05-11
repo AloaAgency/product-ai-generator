@@ -45,7 +45,9 @@ async function generateAndStoreImage(
     refImagesBase64.push(extraReferenceBase64)
   }
 
-  const finalPrompt = buildFullPrompt(prompt, settings, refImagesBase64.length)
+  const finalPrompt = buildFullPrompt(prompt, settings, [
+    { role: 'subject', count: refImagesBase64.length },
+  ])
 
   const result = await generateGeminiImage({
     prompt: finalPrompt,

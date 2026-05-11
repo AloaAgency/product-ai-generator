@@ -20,22 +20,42 @@ import { PromptEnhancements } from './PromptEnhancements'
 import { ReferenceImagePicker } from './ReferenceImagePicker'
 import { assemblePrompt, DEFAULT_ENHANCEMENTS, type PromptEnhancementValues } from './promptAssembler'
 
+const MAX_TOTAL_REFERENCE_IMAGES = 14
+const MAX_SUBJECT_LABEL_LEN = 80
+
+type RefSlotRole = 'subject' | 'texture'
+
+type RefSlot = {
+  key: string
+  reference_set_id: string
+  role: RefSlotRole
+  image_count_input: string
+  subject_label: string
+}
+
+export type InitialReferenceSetSelection = {
+  reference_set_id: string
+  role: RefSlotRole
+  image_count: number | null
+  subject_label: string | null
+}
+
 interface ImageGenerateTabProps {
   productId: string
   initialPrompt?: string
-  initialRefSetId?: string
-  initialTextureSetId?: string
-  initialProductImageCount?: string
-  initialTextureImageCount?: string
+  initialReferenceSets?: InitialReferenceSetSelection[]
+}
+
+let slotKeyCounter = 0
+const nextSlotKey = () => {
+  slotKeyCounter += 1
+  return `slot-${slotKeyCounter}`
 }
 
 export function ImageGenerateTab({
   productId,
   initialPrompt,
-  initialRefSetId,
-  initialTextureSetId,
-  initialProductImageCount,
-  initialTextureImageCount,
+  initialReferenceSets,
 }: ImageGenerateTabProps) {
   const {
     promptTemplates,
@@ -63,10 +83,8 @@ export function ImageGenerateTab({
   const [suggestions, setSuggestions] = useState<
     { name: string; prompt_text: string }[]
   >([])
-  const [selectedRefSetId, setSelectedRefSetId] = useState<string>('')
-  const [selectedTextureSetId, setSelectedTextureSetId] = useState<string>('')
-  const [productImageCountInput, setProductImageCountInput] = useState('10')
-  const [textureImageCountInput, setTextureImageCountInput] = useState('4')
+  const [refSlots, setRefSlots] = useState<RefSlot[]>([])
+  const [didInitRefSlots, setDidInitRefSlots] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
@@ -144,39 +162,50 @@ export function ImageGenerateTab({
     setDidInitDefaults(true)
   }, [currentProduct, productId, didInitDefaults])
 
-  // Filter sets by type
-  const productSets = referenceSets.filter((rs) => rs.type === 'product' || !rs.type)
-  const textureSets = referenceSets.filter((rs) => rs.type === 'texture')
+  const productSets = useMemo(
+    () => referenceSets.filter((rs) => rs.type === 'product' || !rs.type),
+    [referenceSets]
+  )
+  const textureSets = useMemo(
+    () => referenceSets.filter((rs) => rs.type === 'texture'),
+    [referenceSets]
+  )
 
-  // Default to active reference set when sets load, or use URL param
-  const [didInitRefSet, setDidInitRefSet] = useState(false)
+  // Seed slots once the reference set catalog has loaded. Prefer initialReferenceSets from the
+  // regenerate URL flow; otherwise default to a single subject slot pointed at the active set.
   useEffect(() => {
-    if (productSets.length > 0 && !didInitRefSet) {
-      if (initialRefSetId && productSets.some((rs) => rs.id === initialRefSetId)) {
-        setSelectedRefSetId(initialRefSetId)
-      } else if (!selectedRefSetId) {
-        const active = productSets.find((rs) => rs.is_active)
-        setSelectedRefSetId(active?.id ?? productSets[0].id)
-      }
-      setDidInitRefSet(true)
-    }
-  }, [productSets, selectedRefSetId, initialRefSetId, didInitRefSet])
-
-  // Pre-fill texture set and image counts from URL params
-  const [didInitTextureSet, setDidInitTextureSet] = useState(false)
-  useEffect(() => {
-    if (didInitTextureSet) return
+    if (didInitRefSlots) return
     if (referenceSets.length === 0) return
-    if (initialTextureSetId) {
-      const exists = textureSets.some((rs) => rs.id === initialTextureSetId)
-      if (exists) {
-        setSelectedTextureSetId(initialTextureSetId)
-        if (initialProductImageCount) setProductImageCountInput(initialProductImageCount)
-        if (initialTextureImageCount) setTextureImageCountInput(initialTextureImageCount)
+    const productIds = new Set(productSets.map((rs) => rs.id))
+    const textureIds = new Set(textureSets.map((rs) => rs.id))
+
+    const hydrated: RefSlot[] = []
+    if (initialReferenceSets && initialReferenceSets.length > 0) {
+      for (const sel of initialReferenceSets) {
+        const allowed = sel.role === 'subject' ? productIds : textureIds
+        if (!allowed.has(sel.reference_set_id)) continue
+        hydrated.push({
+          key: nextSlotKey(),
+          reference_set_id: sel.reference_set_id,
+          role: sel.role,
+          image_count_input: sel.image_count != null ? String(sel.image_count) : '',
+          subject_label: sel.subject_label ?? '',
+        })
       }
     }
-    setDidInitTextureSet(true)
-  }, [referenceSets, textureSets, initialTextureSetId, initialProductImageCount, initialTextureImageCount, didInitTextureSet])
+    if (hydrated.length === 0 && productSets.length > 0) {
+      const active = productSets.find((rs) => rs.is_active) ?? productSets[0]
+      hydrated.push({
+        key: nextSlotKey(),
+        reference_set_id: active.id,
+        role: 'subject',
+        image_count_input: '',
+        subject_label: '',
+      })
+    }
+    setRefSlots(hydrated)
+    setDidInitRefSlots(true)
+  }, [referenceSets, productSets, textureSets, initialReferenceSets, didInitRefSlots])
 
   // Poll job status
   useEffect(() => {
@@ -218,7 +247,8 @@ export function ImageGenerateTab({
     if (!prompt.trim() || aiLoading) return
     const variationCountValue = parseVariationCount(variationCountInput)
     if (!variationCountValue) return
-    if (selectedTextureSetId && (!productImageCountValue || !textureImageCountValue)) return
+    const payloadRefSets = buildRefSetsPayload(refSlots)
+    if (!payloadRefSets) return
 
     // Assemble prompt with enhancements
     let finalPrompt = assemblePrompt(prompt, enhancements)
@@ -233,10 +263,7 @@ export function ImageGenerateTab({
         variation_count: variationCountValue,
         resolution,
         aspect_ratio: aspectRatio,
-        reference_set_id: selectedRefSetId || undefined,
-        texture_set_id: selectedTextureSetId || undefined,
-        product_image_count: selectedTextureSetId ? productImageCountValue ?? undefined : undefined,
-        texture_image_count: selectedTextureSetId ? textureImageCountValue ?? undefined : undefined,
+        reference_sets: payloadRefSets,
         lens: photoLens || undefined,
         camera_height: photoCameraHeight || undefined,
         lighting: photoLighting || undefined,
@@ -303,16 +330,54 @@ export function ImageGenerateTab({
     return Math.min(100, parsed)
   }
   const variationCountValue = parseVariationCount(variationCountInput)
-  const parseImageCount = (value: string) => {
+  const parseSlotImageCount = (value: string): number | null => {
     if (!value.trim()) return null
     const parsed = parseInt(value, 10)
-    if (!Number.isFinite(parsed)) return null
-    if (parsed < 1) return null
-    return Math.min(14, parsed)
+    if (!Number.isFinite(parsed) || parsed < 1) return null
+    return Math.min(MAX_TOTAL_REFERENCE_IMAGES, parsed)
   }
-  const productImageCountValue = parseImageCount(productImageCountInput)
-  const textureImageCountValue = parseImageCount(textureImageCountInput)
-  const totalImageCount = (productImageCountValue ?? 0) + (textureImageCountValue ?? 0)
+  const slotImageCounts = refSlots.map((s) => parseSlotImageCount(s.image_count_input))
+  const totalImageCount = slotImageCounts.reduce<number>((sum, n) => sum + (n ?? 0), 0)
+  const subjectSlotCount = refSlots.filter((s) => s.role === 'subject').length
+
+  const buildRefSetsPayload = (slots: RefSlot[]) => {
+    const payload = slots.map((slot) => {
+      if (!slot.reference_set_id) return null
+      const count = parseSlotImageCount(slot.image_count_input)
+      if (count == null) return null
+      const label = slot.role === 'subject' ? slot.subject_label.trim().slice(0, MAX_SUBJECT_LABEL_LEN) : ''
+      return {
+        reference_set_id: slot.reference_set_id,
+        role: slot.role,
+        image_count: count,
+        subject_label: label ? label : null,
+      }
+    })
+    if (payload.some((p) => p === null)) return null
+    return payload as NonNullable<(typeof payload)[number]>[]
+  }
+
+  const updateSlot = (key: string, patch: Partial<Omit<RefSlot, 'key'>>) => {
+    setRefSlots((prev) => prev.map((s) => (s.key === key ? { ...s, ...patch } : s)))
+  }
+  const removeSlot = (key: string) => {
+    setRefSlots((prev) => prev.filter((s) => s.key !== key))
+  }
+  const addSlot = (role: RefSlotRole) => {
+    const pool = role === 'subject' ? productSets : textureSets
+    if (pool.length === 0) return
+    const first = pool[0]
+    setRefSlots((prev) => [
+      ...prev,
+      {
+        key: nextSlotKey(),
+        reference_set_id: first.id,
+        role,
+        image_count_input: '',
+        subject_label: '',
+      },
+    ])
+  }
 
   const failedCount = currentJob?.failed_count ?? 0
   const hasFailures = failedCount > 0
@@ -324,119 +389,134 @@ export function ImageGenerateTab({
 
   const disabledReasons: string[] = []
   if (!prompt.trim()) disabledReasons.push('Enter a prompt')
-  if (!selectedRefSetId) disabledReasons.push('Select a product reference set')
-  if (!variationCountValue) disabledReasons.push('Enter a variation count (1–100)')
-  if (selectedTextureSetId) {
-    if ((productImageCountValue ?? 0) < 1) disabledReasons.push('Set product image count to 1 or more')
-    if ((textureImageCountValue ?? 0) < 1) disabledReasons.push('Set texture image count to 1 or more')
-    if (totalImageCount > 14) disabledReasons.push(`Reduce total image count (currently ${totalImageCount}, max 14)`)
+  if (refSlots.length === 0) disabledReasons.push('Add at least one reference set')
+  if (refSlots.length > 0 && subjectSlotCount < 1) disabledReasons.push('Include at least one subject reference set')
+  if (refSlots.some((s) => !s.reference_set_id)) disabledReasons.push('Choose a set for every reference slot')
+  if (refSlots.length > 0 && slotImageCounts.some((n) => n == null)) {
+    disabledReasons.push('Set image count to 1 or more for every reference slot')
   }
+  if (totalImageCount > MAX_TOTAL_REFERENCE_IMAGES) {
+    disabledReasons.push(`Reduce total image count (currently ${totalImageCount}, max ${MAX_TOTAL_REFERENCE_IMAGES})`)
+  }
+  if (!variationCountValue) disabledReasons.push('Enter a variation count (1–100)')
   const isGenerateDisabled = aiLoading || generating || disabledReasons.length > 0
 
   return (
     <div className="space-y-8">
-      {/* Reference Set Selectors */}
-      <section className="space-y-4">
-        {/* Product Reference Set */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-zinc-400">
-            Product Reference Set <span className="text-zinc-500">(Required)</span>
-          </label>
-          {productSets.length === 0 ? (
-            <div className="flex items-center gap-2 rounded-lg border border-yellow-600 bg-yellow-950/40 px-4 py-3 text-yellow-300 text-sm">
-              <AlertTriangle className="h-4 w-4 shrink-0" />
-              <span>No product reference sets found. Create one on the References page first.</span>
-            </div>
-          ) : (
-            <div className="relative">
-              <select
-                value={selectedRefSetId}
-                onChange={(e) => setSelectedRefSetId(e.target.value)}
-                className="w-full appearance-none rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2.5 pr-10 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
-              >
-                {productSets.map((rs) => (
-                  <option key={rs.id} value={rs.id}>
-                    {rs.name}{rs.is_active ? ' (Active)' : ''}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-            </div>
-          )}
+      {/* Reference Sets */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-zinc-300">Reference Sets</h2>
+          <span className={`text-xs ${totalImageCount > MAX_TOTAL_REFERENCE_IMAGES ? 'text-red-400' : 'text-zinc-500'}`}>
+            Total: {totalImageCount} / {MAX_TOTAL_REFERENCE_IMAGES} max
+          </span>
         </div>
 
-        {/* Texture Reference Set (Optional) */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-zinc-400">Texture Reference Set (Optional)</label>
-          <div className="relative">
-            <select
-              value={selectedTextureSetId}
-              onChange={(e) => setSelectedTextureSetId(e.target.value)}
-              className="w-full appearance-none rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2.5 pr-10 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
-            >
-              <option value="">None</option>
-              {textureSets.map((rs) => (
-                <option key={rs.id} value={rs.id}>
-                  {rs.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+        {productSets.length === 0 && (
+          <div className="flex items-center gap-2 rounded-lg border border-yellow-600 bg-yellow-950/40 px-4 py-3 text-yellow-300 text-sm">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>No product reference sets found. Create one on the References page first.</span>
           </div>
-          {textureSets.length === 0 && (
-            <p className="text-xs text-zinc-500">
-              No texture sets available. Create one on the References page to use texture references.
-            </p>
-          )}
+        )}
+
+        {refSlots.length === 0 && productSets.length > 0 && (
+          <p className="text-xs text-zinc-500">No reference sets selected yet — add a subject below.</p>
+        )}
+
+        <div className="space-y-2">
+          {refSlots.map((slot) => {
+            const pool = slot.role === 'subject' ? productSets : textureSets
+            return (
+              <div
+                key={slot.key}
+                className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-3 space-y-3"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                      slot.role === 'subject'
+                        ? 'bg-blue-900/50 text-blue-300'
+                        : 'bg-purple-900/50 text-purple-300'
+                    }`}
+                  >
+                    {slot.role}
+                  </span>
+                  <div className="relative flex-1 min-w-[180px]">
+                    <select
+                      value={slot.reference_set_id}
+                      onChange={(e) => updateSlot(slot.key, { reference_set_id: e.target.value })}
+                      className="w-full appearance-none rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 pr-9 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
+                    >
+                      {pool.length === 0 && <option value="">No {slot.role} sets available</option>}
+                      {pool.map((rs) => (
+                        <option key={rs.id} value={rs.id}>
+                          {rs.name}{rs.is_active ? ' (Active)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                  </div>
+                  <input
+                    type="number"
+                    min={1}
+                    max={MAX_TOTAL_REFERENCE_IMAGES}
+                    placeholder="# imgs"
+                    value={slot.image_count_input}
+                    onChange={(e) => updateSlot(slot.key, { image_count_input: e.target.value })}
+                    onBlur={() => {
+                      const parsed = parseSlotImageCount(slot.image_count_input)
+                      if (parsed == null && slot.image_count_input.trim()) {
+                        updateSlot(slot.key, { image_count_input: '1' })
+                      }
+                    }}
+                    className="w-20 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-2 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
+                  />
+                  <button
+                    onClick={() => removeSlot(slot.key)}
+                    aria-label="Remove reference set"
+                    className="rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-400 hover:text-red-400 hover:border-red-900 transition-colors"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                {slot.role === 'subject' && (
+                  <div className="space-y-1">
+                    <input
+                      type="text"
+                      placeholder="Subject label (optional) — e.g. red truck"
+                      maxLength={MAX_SUBJECT_LABEL_LEN}
+                      value={slot.subject_label}
+                      onChange={(e) => updateSlot(slot.key, { subject_label: e.target.value })}
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
 
-        {/* Image Allocation Controls */}
-        {selectedTextureSetId && (
-          <div className="rounded-lg border border-zinc-800 bg-zinc-800/30 p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-zinc-300">Image Allocation</span>
-              <span className={`text-xs ${totalImageCount > 14 ? 'text-red-400' : 'text-zinc-500'}`}>
-                Total: {totalImageCount} / 14 max
-              </span>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-zinc-400">Product Images</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={14}
-                  value={productImageCountInput}
-                  onChange={(e) => setProductImageCountInput(e.target.value)}
-                  onBlur={() => {
-                    const parsed = parseImageCount(productImageCountInput)
-                    setProductImageCountInput(String(parsed ?? 1))
-                  }}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-zinc-400">Texture Images</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={14}
-                  value={textureImageCountInput}
-                  onChange={(e) => setTextureImageCountInput(e.target.value)}
-                  onBlur={() => {
-                    const parsed = parseImageCount(textureImageCountInput)
-                    setTextureImageCountInput(String(parsed ?? 1))
-                  }}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
-                />
-              </div>
-            </div>
-            {totalImageCount > 14 && (
-              <div className="flex items-center gap-2 rounded-md border border-red-900/60 bg-red-950/50 px-3 py-2 text-xs text-red-300">
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                <span>Total image count exceeds the maximum of 14. Please reduce the counts.</span>
-              </div>
-            )}
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => addSlot('subject')}
+            disabled={productSets.length === 0}
+            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            + Add subject
+          </button>
+          <button
+            onClick={() => addSlot('texture')}
+            disabled={textureSets.length === 0}
+            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            + Add texture
+          </button>
+        </div>
+
+        {totalImageCount > MAX_TOTAL_REFERENCE_IMAGES && (
+          <div className="flex items-center gap-2 rounded-md border border-red-900/60 bg-red-950/50 px-3 py-2 text-xs text-red-300">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>Total image count exceeds the maximum of {MAX_TOTAL_REFERENCE_IMAGES}. Reduce the counts.</span>
           </div>
         )}
       </section>

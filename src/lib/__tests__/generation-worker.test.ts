@@ -62,10 +62,6 @@ function createImageJobRecord(jobId: string, overrides: Record<string, unknown> 
     id: jobId,
     product_id: 'product-1',
     prompt_template_id: null,
-    reference_set_id: 'refs-1',
-    texture_set_id: null,
-    product_image_count: null,
-    texture_image_count: null,
     final_prompt: 'Prompt',
     variation_count: 1,
     resolution: '2K',
@@ -87,10 +83,6 @@ function createVideoJobRecord(jobId: string, overrides: Record<string, unknown> 
     id: jobId,
     product_id: 'product-1',
     prompt_template_id: null,
-    reference_set_id: null,
-    texture_set_id: null,
-    product_image_count: null,
-    texture_image_count: null,
     final_prompt: 'Prompt',
     variation_count: 1,
     resolution: '1080p',
@@ -103,6 +95,16 @@ function createVideoJobRecord(jobId: string, overrides: Record<string, unknown> 
     job_type: 'video',
     scene_id: 'scene-1',
     source_image_id: null,
+    ...overrides,
+  }
+}
+
+function jobRefSetsRow(referenceSetId = 'refs-1', overrides: Record<string, unknown> = {}) {
+  return {
+    reference_set_id: referenceSetId,
+    role: 'subject',
+    display_order: 0,
+    image_count: null,
     ...overrides,
   }
 }
@@ -287,13 +289,18 @@ describe('processGenerationJob', () => {
     expect(serviceClientState.current?.updates).toHaveLength(1)
   })
 
-  it('marks a claimed image job as failed when required job data is missing', async () => {
+  it('marks a claimed image job as failed when no reference sets are attached', async () => {
     const jobId = '11111111-1111-4111-8111-111111111111'
     serviceClientState.current = createMockSupabase([
       {
         table: 'prodai_generation_jobs',
         type: 'update-maybeSingle',
-        data: createImageJobRecord(jobId, { reference_set_id: null }),
+        data: createImageJobRecord(jobId),
+      },
+      {
+        table: 'prodai_generation_job_reference_sets',
+        type: 'select-order',
+        data: [],
       },
       {
         table: 'prodai_generation_jobs',
@@ -309,11 +316,11 @@ describe('processGenerationJob', () => {
 
     const { processGenerationJob } = await import('../generation-worker')
 
-    await expect(processGenerationJob(jobId)).rejects.toThrow('Image generation job missing reference_set_id')
+    await expect(processGenerationJob(jobId)).rejects.toThrow('Image generation job has no reference sets attached')
     expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
       status: 'failed',
       failed_count: 1,
-      error_message: 'Image generation job missing reference_set_id',
+      error_message: 'Image generation job has no reference sets attached',
     })
   })
 
@@ -325,6 +332,11 @@ describe('processGenerationJob', () => {
           table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId),
+        },
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
         },
         {
           table: 'prodai_products',
@@ -417,6 +429,11 @@ describe('processGenerationJob', () => {
           table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId),
+        },
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
         },
         {
           table: 'prodai_products',
@@ -538,6 +555,11 @@ describe('processGenerationJob', () => {
           data: createImageJobRecord(jobId),
         },
         {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
           table: 'prodai_products',
           type: 'select-single',
           data: { project_id: null, global_style_settings: null },
@@ -612,6 +634,11 @@ describe('processGenerationJob', () => {
           data: createImageJobRecord(jobId, { error_message: 'Previous tick failed' }),
         },
         {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
           table: 'prodai_products',
           type: 'select-single',
           data: { project_id: null, global_style_settings: null },
@@ -683,11 +710,16 @@ describe('processGenerationJob', () => {
           table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId, {
-            texture_set_id: 'texture-1',
-            product_image_count: 1,
-            texture_image_count: 1,
             source_image_id: 'source-1',
           }),
+        },
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [
+            jobRefSetsRow('refs-1', { image_count: 1 }),
+            jobRefSetsRow('texture-1', { role: 'texture', display_order: 1, image_count: 1 }),
+          ],
         },
         {
           table: 'prodai_products',
@@ -703,12 +735,6 @@ describe('processGenerationJob', () => {
           data: [
             { id: 'ref-1', reference_set_id: 'refs-1', storage_path: 'products/ref-1.png', mime_type: 'image/png', display_order: 1 },
             { id: 'ref-2', reference_set_id: 'refs-1', storage_path: 'products/ref-2.png', mime_type: 'image/png', display_order: 2 },
-          ],
-        },
-        {
-          table: 'prodai_reference_images',
-          type: 'select-order',
-          data: [
             { id: 'tex-1', reference_set_id: 'texture-1', storage_path: 'textures/tex-1.png', mime_type: 'image/png', display_order: 1 },
           ],
         },
@@ -784,6 +810,11 @@ describe('processGenerationJob', () => {
           table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId),
+        },
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
         },
         {
           table: 'prodai_products',
@@ -872,6 +903,11 @@ describe('processGenerationJob', () => {
           data: createImageJobRecord(jobId, { variation_count: 2 }),
         },
         {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
           table: 'prodai_products',
           type: 'select-single',
           data: { project_id: null, global_style_settings: null },
@@ -951,6 +987,11 @@ describe('processGenerationJob', () => {
           data: createImageJobRecord(jobId, { variation_count: 2 }),
         },
         {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
           table: 'prodai_products',
           type: 'select-single',
           data: { project_id: null, global_style_settings: null },
@@ -1020,6 +1061,11 @@ describe('processGenerationJob', () => {
           table: 'prodai_generation_jobs',
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId, { variation_count: 3 }),
+        },
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
         },
         {
           table: 'prodai_products',
@@ -1095,6 +1141,11 @@ describe('processGenerationJob', () => {
             variation_count: 2,
             error_message: 'Previous tick failed',
           }),
+        },
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
         },
         {
           table: 'prodai_products',

@@ -83,10 +83,6 @@ export interface GenerationJob {
   id: string
   product_id: string
   prompt_template_id: string | null
-  reference_set_id: string | null
-  texture_set_id: string | null
-  product_image_count: number | null
-  texture_image_count: number | null
   final_prompt: string
   variation_count: number
   resolution: string
@@ -102,6 +98,19 @@ export interface GenerationJob {
   created_at: string
   started_at: string | null
   completed_at: string | null
+}
+
+export type GenerationJobReferenceSetRole = 'subject' | 'texture'
+
+export interface GenerationJobReferenceSet {
+  id: string
+  job_id: string
+  reference_set_id: string
+  role: GenerationJobReferenceSetRole
+  display_order: number
+  image_count: number | null
+  subject_label: string | null
+  created_at: string
 }
 
 export interface GeneratedImage {

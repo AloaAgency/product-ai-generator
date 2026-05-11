@@ -84,14 +84,68 @@ export function buildRefinedPromptUserMessage(
   )
 }
 
+/** Per-set descriptor passed to buildFullPrompt — one entry per reference set attached to the job. */
+export type ReferenceGroup = {
+  role: 'subject' | 'texture'
+  count: number
+  label?: string | null
+}
+
+/** Max subject_label length — kept short so an adversarial label can't blow the prompt budget. */
+export const MAX_SUBJECT_LABEL_LEN = 80
+
+function sanitizeLabel(label: string | null | undefined): string {
+  if (!label) return ''
+  return label.slice(0, MAX_SUBJECT_LABEL_LEN).replace(/"/g, '\u2033').replace(/[\r\n]/g, ' ').trim()
+}
+
+function subjectName(label: string, subjectIndex: number, totalSubjects: number): string {
+  if (label) return label
+  if (totalSubjects <= 1) return 'the product'
+  // A..Z then fall back to numeric — 14-image cap means we won't realistically hit 27 subjects.
+  return subjectIndex <= 26
+    ? `subject ${String.fromCharCode(64 + subjectIndex)}`
+    : `subject ${subjectIndex}`
+}
+
+function buildReferenceRule(groups: ReferenceGroup[], customRule: string | undefined): string | null {
+  if (customRule) return customRule.slice(0, MAX_STYLE_VALUE_LEN)
+
+  const active = groups.filter(g => g.count > 0)
+  if (active.length === 0) return null
+
+  const totalSubjects = active.filter(g => g.role === 'subject').length
+  const lines: string[] = []
+  let cursor = 1
+  let subjectIndex = 0
+  for (const g of active) {
+    const start = cursor
+    const end = cursor + g.count - 1
+    const range = start === end ? `Image ${start}` : `Images ${start}–${end}`
+    if (g.role === 'texture') {
+      lines.push(`${range} ${g.count === 1 ? 'is a' : 'are'} texture/material reference${g.count === 1 ? '' : 's'}; use them for realistic surface rendering.`)
+    } else {
+      subjectIndex += 1
+      const name = subjectName(sanitizeLabel(g.label), subjectIndex, totalSubjects)
+      lines.push(`${range} ${g.count === 1 ? 'is' : 'are'} ${name}; match this subject's appearance exactly.`)
+    }
+    cursor = end + 1
+  }
+  if (totalSubjects > 1) {
+    lines.push('Compose all subjects together into a single coherent scene as described in the prompt.')
+  }
+  return lines.join(' ')
+}
+
 /**
- * Assemble a full generation prompt from user prompt + global settings + reference count
+ * Assemble a full generation prompt from user prompt + global settings + per-set reference groups.
+ * Pass groups in the same order the worker concatenates images so the per-range descriptions
+ * line up with the actual image payload.
  */
 export function buildFullPrompt(
   userPrompt: string,
   settings: GlobalStyleSettings,
-  referenceImageCount: number,
-  textureImageCount: number = 0
+  groups: ReferenceGroup[]
 ): string {
   const parts: string[] = []
 
@@ -111,16 +165,10 @@ export function buildFullPrompt(
     parts.push(`MANDATORY STYLE REQUIREMENTS (you must follow these):\n${styleLines.map(l => `• ${l}`).join('\n')}`)
   }
 
-  // Reference rule - handle both product and texture images
-  let refRule: string
-  if (settings.reference_rule) {
-    refRule = settings.reference_rule.slice(0, MAX_STYLE_VALUE_LEN)
-  } else if (textureImageCount > 0) {
-    refRule = `The attached images include ${referenceImageCount} product reference images followed by ${textureImageCount} texture reference images. The product images define the product appearance and must be matched exactly. The texture images show material/finish samples to use for realistic surface rendering.`
-  } else {
-    refRule = `The attached ${referenceImageCount} images define the product. The image generator must match them exactly.`
+  const refRule = buildReferenceRule(groups, settings.reference_rule)
+  if (refRule) {
+    parts.push(`REFERENCE RULE: ${refRule}`)
   }
-  parts.push(`REFERENCE RULE: ${refRule}`)
 
   // User prompt — truncated to prevent oversized API payloads
   parts.push(`IMAGE TO GENERATE:\n${userPrompt.trim().slice(0, MAX_USER_PROMPT_LEN)}`)

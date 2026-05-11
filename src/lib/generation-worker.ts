@@ -40,10 +40,6 @@ type GenerationJobRecord = {
   id: string
   product_id: string
   prompt_template_id: string | null
-  reference_set_id: string | null
-  texture_set_id: string | null
-  product_image_count: number | null
-  texture_image_count: number | null
   final_prompt: string
   variation_count: number
   resolution: string
@@ -56,6 +52,13 @@ type GenerationJobRecord = {
   job_type?: 'image' | 'video' | null
   scene_id?: string | null
   source_image_id?: string | null
+}
+
+type JobReferenceSetRow = {
+  reference_set_id: string
+  role: 'subject' | 'texture'
+  display_order: number
+  image_count: number | null
 }
 
 type WorkerReferenceImage = Pick<ReferenceImage, 'id' | 'reference_set_id' | 'storage_path' | 'mime_type' | 'display_order'>
@@ -129,10 +132,6 @@ const GENERATION_JOB_SELECT = [
   'id',
   'product_id',
   'prompt_template_id',
-  'reference_set_id',
-  'texture_set_id',
-  'product_image_count',
-  'texture_image_count',
   'final_prompt',
   'variation_count',
   'resolution',
@@ -394,19 +393,35 @@ async function fetchProductRecord(supabase: WorkerSupabase, productId: string): 
   return data as ProductRecord
 }
 
-async function fetchReferenceImages(
+async function fetchJobReferenceSetRows(
   supabase: WorkerSupabase,
-  referenceSetId: string,
-  context: string
-): Promise<WorkerReferenceImage[]> {
+  jobId: string
+): Promise<JobReferenceSetRow[]> {
   const { data, error } = await supabase
-    .from(T.reference_images)
-    .select(REFERENCE_IMAGE_SELECT)
-    .eq('reference_set_id', referenceSetId)
+    .from(T.generation_job_reference_sets)
+    .select('reference_set_id, role, display_order, image_count')
+    .eq('job_id', jobId)
     .order('display_order', { ascending: true })
 
   if (error) {
-    throw new Error(`${context}: ${error.message}`)
+    throw new Error(`Failed to load reference set attachments: ${error.message}`)
+  }
+  return (data || []) as unknown as JobReferenceSetRow[]
+}
+
+async function fetchReferenceImagesForSets(
+  supabase: WorkerSupabase,
+  referenceSetIds: string[]
+): Promise<WorkerReferenceImage[]> {
+  if (referenceSetIds.length === 0) return []
+  const { data, error } = await supabase
+    .from(T.reference_images)
+    .select(REFERENCE_IMAGE_SELECT)
+    .in('reference_set_id', referenceSetIds)
+    .order('display_order', { ascending: true })
+
+  if (error) {
+    throw new Error(`Failed to load reference images: ${error.message}`)
   }
 
   return (data || []) as unknown as WorkerReferenceImage[]
@@ -560,27 +575,36 @@ async function loadImageJobResources(
   supabase: WorkerSupabase,
   job: GenerationJobRecord
 ): Promise<LoadedImageJobResources> {
-  if (!job.reference_set_id) {
-    throw new Error('Image generation job missing reference_set_id')
+  const jobRefSets = await fetchJobReferenceSetRows(supabase, job.id)
+  if (jobRefSets.length === 0 && !job.source_image_id) {
+    throw new Error('Image generation job has no reference sets attached')
   }
 
-  const [product, productReferenceImages, textureReferenceImages, sourceImage] = await Promise.all([
+  const uniqueSetIds = [...new Set(jobRefSets.map(r => r.reference_set_id))]
+
+  const [product, refImages, sourceImage] = await Promise.all([
     fetchProductRecord(supabase, job.product_id),
-    fetchReferenceImages(supabase, job.reference_set_id, 'Failed to load reference images'),
-    job.texture_set_id
-      ? fetchReferenceImages(supabase, job.texture_set_id, 'Failed to load texture reference images')
-      : Promise.resolve([]),
+    fetchReferenceImagesForSets(supabase, uniqueSetIds),
     fetchSourceImage(supabase, job.source_image_id),
   ])
 
-  const limitedReferenceImages = [
-    ...limitReferenceImages(productReferenceImages, job.product_image_count),
-    ...limitReferenceImages(textureReferenceImages, job.texture_image_count),
-  ]
+  const imagesBySet = new Map<string, WorkerReferenceImage[]>()
+  for (const img of refImages) {
+    if (!img.reference_set_id) continue
+    const arr = imagesBySet.get(img.reference_set_id) ?? []
+    arr.push(img)
+    imagesBySet.set(img.reference_set_id, arr)
+  }
+
+  const orderedReferenceImages: WorkerReferenceImage[] = []
+  for (const row of jobRefSets) {
+    const setImages = imagesBySet.get(row.reference_set_id) ?? []
+    orderedReferenceImages.push(...limitReferenceImages(setImages, row.image_count))
+  }
 
   const [geminiApiKey, referenceImages] = await Promise.all([
     resolveGeminiApiKeyForJob(product),
-    buildReferenceImagePayloads(supabase, sourceImage, limitedReferenceImages),
+    buildReferenceImagePayloads(supabase, sourceImage, orderedReferenceImages),
   ])
 
   return {

@@ -338,10 +338,12 @@ interface AppState {
     variation_count?: number
     resolution?: string
     aspect_ratio?: string
-    reference_set_id?: string
-    texture_set_id?: string
-    product_image_count?: number
-    texture_image_count?: number
+    reference_sets: Array<{
+      reference_set_id: string
+      role: 'subject' | 'texture'
+      image_count: number | null
+      subject_label: string | null
+    }>
     source_image_id?: string
     lens?: string
     camera_height?: string
@@ -982,12 +984,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   startGeneration: async (productId, data) => {
     const scopedProductId = requireUuid(productId, 'product id')
     const devParallel = get().devParallelGeneration
+    const sanitizedRefSets = (data.reference_sets || []).map((rs) => ({
+      reference_set_id: requireUuid(rs.reference_set_id, 'reference set id'),
+      role: rs.role,
+      image_count: rs.image_count != null ? clampInteger(rs.image_count, 1, 14, 1) : null,
+      subject_label: rs.subject_label && rs.subject_label.trim() ? rs.subject_label.trim().slice(0, 80) : null,
+    }))
     const body = {
       ...data,
       prompt_text: sanitizePromptText(data.prompt_text, 'prompt_text'),
       prompt_template_id: optionalUuid(data.prompt_template_id, 'prompt template id') ?? null,
-      reference_set_id: optionalUuid(data.reference_set_id, 'reference set id') ?? null,
-      texture_set_id: optionalUuid(data.texture_set_id, 'texture set id') ?? null,
+      reference_sets: sanitizedRefSets,
       source_image_id: optionalUuid(data.source_image_id, 'source image id') ?? null,
       variation_count: clampInteger(data.variation_count ?? 15, 1, 100, 15),
       ...(process.env.NODE_ENV === 'development' && !devParallel
