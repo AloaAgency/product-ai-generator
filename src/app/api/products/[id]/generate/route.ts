@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { buildFullPrompt, MAX_STYLE_VALUE_LEN } from '@/lib/prompt-builder'
+import { buildFullPrompt, MAX_STYLE_VALUE_LEN, MAX_SUBJECT_LABEL_LEN, type ReferenceGroup } from '@/lib/prompt-builder'
 import type { Product, Project, ReferenceSet, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
@@ -14,6 +14,59 @@ export const maxDuration = 300
 const MAX_PROMPT_LENGTH = 10000
 const DEFAULT_JOBS_LIMIT = 50
 const MAX_JOBS_LIMIT = 200
+const MAX_TOTAL_REFERENCE_IMAGES = 14
+
+type ReferenceSetSelection = {
+  reference_set_id: string
+  role: 'subject' | 'texture'
+  image_count: number | null
+  subject_label: string | null
+}
+
+function parseReferenceSetsInput(input: unknown): { sets: ReferenceSetSelection[] } | { error: string } {
+  if (!Array.isArray(input) || input.length === 0) {
+    return { error: 'reference_sets must be a non-empty array' }
+  }
+  const sets: ReferenceSetSelection[] = []
+  for (let i = 0; i < input.length; i += 1) {
+    const item = input[i]
+    if (!item || typeof item !== 'object') {
+      return { error: `reference_sets[${i}] must be an object` }
+    }
+    const r = item as Record<string, unknown>
+    const refId = typeof r.reference_set_id === 'string' && r.reference_set_id.trim()
+      ? r.reference_set_id
+      : null
+    if (!refId) return { error: `reference_sets[${i}].reference_set_id is required` }
+    if (r.role !== 'subject' && r.role !== 'texture') {
+      return { error: `reference_sets[${i}].role must be "subject" or "texture"` }
+    }
+    let imageCount: number | null = null
+    if (r.image_count != null) {
+      const n = Number(r.image_count)
+      if (!Number.isInteger(n) || n < 0) {
+        return { error: `reference_sets[${i}].image_count must be a non-negative integer` }
+      }
+      imageCount = n
+    }
+    let subjectLabel: string | null = null
+    if (r.subject_label != null) {
+      if (typeof r.subject_label !== 'string') {
+        return { error: `reference_sets[${i}].subject_label must be a string` }
+      }
+      const trimmed = r.subject_label.trim().slice(0, MAX_SUBJECT_LABEL_LEN)
+      if (trimmed) subjectLabel = trimmed
+    }
+    if (r.role === 'texture' && subjectLabel) {
+      return { error: `reference_sets[${i}].subject_label only applies to subject sets` }
+    }
+    sets.push({ reference_set_id: refId, role: r.role, image_count: imageCount, subject_label: subjectLabel })
+  }
+  if (!sets.some(s => s.role === 'subject')) {
+    return { error: 'reference_sets must include at least one subject set' }
+  }
+  return { sets }
+}
 
 export async function GET(
   request: NextRequest,
@@ -66,10 +119,7 @@ export async function POST(
       variation_count = 15,
       resolution = '4K',
       aspect_ratio = '16:9',
-      reference_set_id = null,
-      texture_set_id = null,
-      product_image_count = null,
-      texture_image_count = null,
+      reference_sets: referenceSetsInput,
       parallelism_override,
       batch_override,
       time_budget_ms_override,
@@ -102,26 +152,36 @@ export async function POST(
 
     const sanitizedVariationCount = parsedVariationCount
 
+    const isFixImage = Boolean(source_image_id)
+    const refSetsProvided = Array.isArray(referenceSetsInput) && referenceSetsInput.length > 0
+    let parsedRefSets: ReferenceSetSelection[] = []
+    if (refSetsProvided || !isFixImage) {
+      const parsedRefSetsResult = parseReferenceSetsInput(referenceSetsInput)
+      if ('error' in parsedRefSetsResult) {
+        return NextResponse.json({ error: parsedRefSetsResult.error }, { status: 400 })
+      }
+      parsedRefSets = parsedRefSetsResult.sets
+    }
+    const uniqueSetIds = [...new Set(parsedRefSets.map(s => s.reference_set_id))]
+
     const supabase = createServiceClient()
 
-    // Fetch product and validate source image in parallel (independent queries)
-    const refSetQuery = reference_set_id
-      ? supabase
-          .from(T.reference_sets)
-          .select('*')
-          .eq('id', reference_set_id)
-          .eq('product_id', productId)
-          .single()
-      : supabase
-          .from(T.reference_sets)
-          .select('*')
-          .eq('product_id', productId)
-          .eq('is_active', true)
-          .single()
-
-    const [productResult, refSetResult, sourceImgResult] = await Promise.all([
+    const [productResult, refSetsResult, refImagesResult, sourceImgResult] = await Promise.all([
       supabase.from(T.products).select('*').eq('id', productId).single(),
-      refSetQuery,
+      uniqueSetIds.length > 0
+        ? supabase
+            .from(T.reference_sets)
+            .select('*')
+            .in('id', uniqueSetIds)
+            .eq('product_id', productId)
+        : Promise.resolve({ data: [], error: null }),
+      uniqueSetIds.length > 0
+        ? supabase
+            .from(T.reference_images)
+            .select('*')
+            .in('reference_set_id', uniqueSetIds)
+            .order('display_order', { ascending: true })
+        : Promise.resolve({ data: [], error: null }),
       source_image_id
         ? supabase.from(T.generated_images).select('id').eq('id', source_image_id).single()
         : Promise.resolve({ data: null, error: null }),
@@ -130,106 +190,71 @@ export async function POST(
     if (productResult.error || !productResult.data) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
-
     if (source_image_id && (sourceImgResult.error || !sourceImgResult.data)) {
       return NextResponse.json({ error: 'Source image not found' }, { status: 400 })
     }
+    if (refSetsResult.error) {
+      return NextResponse.json({ error: 'Failed to load reference sets' }, { status: 500 })
+    }
 
-    const product = productResult.data
+    const refSetsById = new Map<string, ReferenceSet>(
+      (refSetsResult.data || []).map(rs => [rs.id, rs as ReferenceSet])
+    )
+    if (refSetsById.size !== uniqueSetIds.length) {
+      return NextResponse.json({ error: 'One or more reference sets not found for this product' }, { status: 400 })
+    }
 
-    // Find reference set: use provided ID or fall back to active set
-    let refSet: ReferenceSet | null = null
-    {
-      const { data, error } = refSetResult
-      if (error || !data) {
+    for (let i = 0; i < parsedRefSets.length; i += 1) {
+      const ps = parsedRefSets[i]
+      const rs = refSetsById.get(ps.reference_set_id)!
+      const expectedType = ps.role === 'subject' ? 'product' : 'texture'
+      if (rs.type && rs.type !== expectedType) {
         return NextResponse.json(
-          { error: reference_set_id ? 'Reference set not found' : 'No active reference set found for this product' },
+          { error: `reference_sets[${i}] role "${ps.role}" doesn't match set type "${rs.type}"` },
           { status: 400 }
         )
       }
-      refSet = data as ReferenceSet
     }
 
-    if (refSet.type && refSet.type !== 'product') {
+    const imagesBySetId = new Map<string, ReferenceImage[]>()
+    for (const img of (refImagesResult.data || []) as ReferenceImage[]) {
+      if (!img.reference_set_id) continue
+      const arr = imagesBySetId.get(img.reference_set_id) ?? []
+      arr.push(img)
+      imagesBySetId.set(img.reference_set_id, arr)
+    }
+
+    const finalCounts: number[] = []
+    let totalImages = 0
+    for (let i = 0; i < parsedRefSets.length; i += 1) {
+      const ps = parsedRefSets[i]
+      const available = imagesBySetId.get(ps.reference_set_id)?.length ?? 0
+      const requested = ps.image_count ?? available
+      const final = Math.max(0, Math.min(requested, available))
+      if (final === 0) {
+        return NextResponse.json(
+          { error: `reference_sets[${i}] has no available images` },
+          { status: 400 }
+        )
+      }
+      finalCounts.push(final)
+      totalImages += final
+    }
+    if (totalImages > MAX_TOTAL_REFERENCE_IMAGES) {
       return NextResponse.json(
-        { error: 'reference_set_id must be a product reference set' },
+        { error: `Total image count (${totalImages}) exceeds maximum of ${MAX_TOTAL_REFERENCE_IMAGES}` },
         { status: 400 }
       )
     }
 
-    // Fetch reference images, texture set, project styles, and texture images in parallel.
-    // texture_set_id is from the request body so texture images can be pre-fetched alongside
-    // the texture set validation query without waiting for it to complete first.
-    const typedProduct = product as Product
-    const [refImagesResult, textureSetResult, projectResult, texImagesResult] = await Promise.all([
-      supabase
-        .from(T.reference_images)
-        .select('*')
-        .eq('reference_set_id', refSet.id)
-        .order('display_order', { ascending: true }),
-      texture_set_id
-        ? supabase
-            .from(T.reference_sets)
-            .select('*')
-            .eq('id', texture_set_id)
-            .eq('product_id', productId)
-            .single()
-        : Promise.resolve({ data: null, error: null }),
-      typedProduct.project_id
-        ? supabase
-            .from(T.projects)
-            .select('global_style_settings')
-            .eq('id', typedProduct.project_id)
-            .single()
-        : Promise.resolve({ data: null }),
-      texture_set_id
-        ? supabase
-            .from(T.reference_images)
-            .select('*')
-            .eq('reference_set_id', texture_set_id)
-            .order('display_order', { ascending: true })
-        : Promise.resolve({ data: null, error: null }),
-    ])
-
-    const referenceImages: ReferenceImage[] = refImagesResult.data || []
-
-    // Validate and resolve texture set
-    let textureSet: ReferenceSet | null = null
-    let textureImages: ReferenceImage[] = []
-    if (texture_set_id) {
-      if (textureSetResult.error || !textureSetResult.data) {
-        return NextResponse.json({ error: 'Texture set not found' }, { status: 400 })
-      }
-      textureSet = textureSetResult.data as ReferenceSet
-      if (textureSet.type && textureSet.type !== 'texture') {
-        return NextResponse.json(
-          { error: 'texture_set_id must be a texture reference set' },
-          { status: 400 }
-        )
-      }
-      textureImages = texImagesResult.data || []
-    }
-
-    // Calculate actual image counts to use
-    const maxTotalImages = 14
-    const availableProductImages = referenceImages.length
-    const availableTextureImages = textureImages.length
-
-    let finalProductCount = product_image_count ?? availableProductImages
-    let finalTextureCount = texture_set_id ? (texture_image_count ?? availableTextureImages) : 0
-
-    // Cap to available images
-    finalProductCount = Math.min(finalProductCount, availableProductImages)
-    finalTextureCount = Math.min(finalTextureCount, availableTextureImages)
-
-    // Validate total doesn't exceed limit
-    if (finalProductCount + finalTextureCount > maxTotalImages) {
-      return NextResponse.json(
-        { error: `Total image count (${finalProductCount + finalTextureCount}) exceeds maximum of ${maxTotalImages}` },
-        { status: 400 }
-      )
-    }
-
+    const typedProduct = productResult.data as Product
+    const projectResult = typedProduct.project_id
+      ? await supabase
+          .from(T.projects)
+          .select('global_style_settings')
+          .eq('id', typedProduct.project_id)
+          .single()
+      : { data: null }
     const projectStyles = (projectResult.data as Project | null)?.global_style_settings ?? {}
     const mergedSettings = mergeStyles(projectStyles, typedProduct.global_style_settings)
 
@@ -243,28 +268,23 @@ export async function POST(
     if (capStyle(overrideColorGrading)) mergedSettings.color_grading = capStyle(overrideColorGrading)
     if (capStyle(overrideStyle)) mergedSettings.style = capStyle(overrideStyle)
 
-    // Build final prompt
     let userPrompt = prompt_text
     if (source_image_id) {
       userPrompt = `Using the provided source image as a base, recreate it with the following modifications: ${prompt_text}. Keep the rest of the image as close to the original as possible.`
     }
-    const finalPrompt = buildFullPrompt(
-      userPrompt,
-      mergedSettings,
-      finalProductCount,
-      finalTextureCount
-    )
 
-    // Insert job record
+    const groups: ReferenceGroup[] = parsedRefSets.map((ps, i) => ({
+      role: ps.role,
+      count: finalCounts[i],
+      label: ps.subject_label,
+    }))
+    const finalPrompt = buildFullPrompt(userPrompt, mergedSettings, groups)
+
     const { data: job, error: jobError } = await supabase
       .from(T.generation_jobs)
       .insert({
         product_id: productId,
         prompt_template_id,
-        reference_set_id: refSet.id,
-        texture_set_id: textureSet?.id ?? null,
-        product_image_count: finalProductCount,
-        texture_image_count: finalTextureCount > 0 ? finalTextureCount : null,
         final_prompt: finalPrompt,
         variation_count: sanitizedVariationCount,
         resolution,
@@ -281,6 +301,25 @@ export async function POST(
 
     if (jobError || !job) {
       return NextResponse.json({ error: 'Failed to create generation job' }, { status: 500 })
+    }
+
+    if (parsedRefSets.length > 0) {
+      const joinRows = parsedRefSets.map((ps, i) => ({
+        job_id: job.id,
+        reference_set_id: ps.reference_set_id,
+        role: ps.role,
+        display_order: i,
+        image_count: finalCounts[i],
+        subject_label: ps.subject_label,
+      }))
+      const { error: joinError } = await supabase
+        .from(T.generation_job_reference_sets)
+        .insert(joinRows)
+
+      if (joinError) {
+        await supabase.from(T.generation_jobs).delete().eq('id', job.id)
+        return NextResponse.json({ error: 'Failed to attach reference sets to job' }, { status: 500 })
+      }
     }
 
     const shouldRunInline =

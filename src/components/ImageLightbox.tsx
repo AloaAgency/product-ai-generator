@@ -37,6 +37,14 @@ import { getSafeDownloadErrorMessage, getSafeErrorMessage } from './errorDisplay
 
 export type ApprovalStatus = 'approved' | 'rejected' | 'pending' | 'request_changes' | null
 
+export type LightboxReferenceSet = {
+  reference_set_id: string
+  role: 'subject' | 'texture'
+  display_order: number
+  image_count: number | null
+  subject_label: string | null
+}
+
 export interface LightboxImage {
   id: string
   signed_url?: string | null
@@ -52,11 +60,8 @@ export interface LightboxImage {
   approval_status?: ApprovalStatus
   prompt?: string | null
   productId?: string | null
-  // Job settings for regeneration
-  reference_set_id?: string | null
-  texture_set_id?: string | null
-  product_image_count?: number | null
-  texture_image_count?: number | null
+  // Reference sets attached to the job that produced this image, used to seed the regenerate form.
+  reference_sets?: LightboxReferenceSet[] | null
 }
 
 interface ImageLightboxProps {

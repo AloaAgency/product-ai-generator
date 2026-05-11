@@ -16,18 +16,24 @@ const buildImage = (overrides: Partial<LightboxImage> = {}): LightboxImage => ({
 
 describe('imageLightbox.helpers', () => {
   it('builds regenerate URLs with encoded ids and only the populated generation settings', () => {
+    const referenceSets = [
+      {
+        reference_set_id: 'ref-1',
+        role: 'subject' as const,
+        display_order: 0,
+        image_count: 4,
+        subject_label: null,
+      },
+    ]
     expect(buildRegenerateUrl({
       projectId: 'proj/1',
       image: buildImage({
         productId: 'prod/1',
         prompt: 'bright mug & saucer',
-        reference_set_id: 'ref-1',
-        texture_set_id: null,
-        product_image_count: 4,
-        texture_image_count: 0,
+        reference_sets: referenceSets,
       }),
     })).toBe(
-      '/projects/proj%2F1/products/prod%2F1/generate?prompt=bright+mug+%26+saucer&reference_set_id=ref-1&product_image_count=4&texture_image_count=0'
+      `/projects/proj%2F1/products/prod%2F1/generate?prompt=bright+mug+%26+saucer&reference_sets=${encodeURIComponent(JSON.stringify(referenceSets))}`
     )
   })
 

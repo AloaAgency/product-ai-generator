@@ -125,7 +125,6 @@ export async function createSceneVideoJob(
     .insert({
       product_id: productId,
       prompt_template_id: null,
-      reference_set_id: null,
       final_prompt: finalPrompt,
       variation_count: 1,
       resolution,

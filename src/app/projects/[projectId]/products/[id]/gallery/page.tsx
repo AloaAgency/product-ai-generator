@@ -293,11 +293,7 @@ export default function GalleryPage({
         notes: img.notes,
         prompt: img.prompt ?? null,
         productId: id,
-        // Job settings for regeneration
-        reference_set_id: (imgAny.reference_set_id as string) ?? null,
-        texture_set_id: (imgAny.texture_set_id as string) ?? null,
-        product_image_count: (imgAny.product_image_count as number) ?? null,
-        texture_image_count: (imgAny.texture_image_count as number) ?? null,
+        reference_sets: (imgAny.reference_sets as LightboxImage['reference_sets']) ?? null,
       }
     })
   }, [imageOnly, signedUrlsById, id])

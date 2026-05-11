@@ -120,10 +120,7 @@ export const buildRegenerateUrl = ({
   image,
 }: {
   projectId?: string | null
-  image: Pick<
-    LightboxImage,
-    'productId' | 'prompt' | 'reference_set_id' | 'texture_set_id' | 'product_image_count' | 'texture_image_count'
-  >
+  image: Pick<LightboxImage, 'productId' | 'prompt' | 'reference_sets'>
 }) => {
   const safeProjectId = sanitizeRouteSegment(projectId)
   const safeProductId = sanitizeRouteSegment(image.productId)
@@ -131,10 +128,9 @@ export const buildRegenerateUrl = ({
 
   const params = new URLSearchParams()
   if (image.prompt) params.set('prompt', image.prompt)
-  if (image.reference_set_id) params.set('reference_set_id', image.reference_set_id)
-  if (image.texture_set_id) params.set('texture_set_id', image.texture_set_id)
-  if (image.product_image_count != null) params.set('product_image_count', String(image.product_image_count))
-  if (image.texture_image_count != null) params.set('texture_image_count', String(image.texture_image_count))
+  if (image.reference_sets && image.reference_sets.length > 0) {
+    params.set('reference_sets', JSON.stringify(image.reference_sets))
+  }
 
   return `/projects/${safeProjectId}/products/${safeProductId}/generate?${params.toString()}`
 }

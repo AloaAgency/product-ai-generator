@@ -112,7 +112,7 @@ describe('buildFullPrompt', () => {
     const prompt = buildFullPrompt(
       'A bottle on a white table',
       { lens: '85mm', lighting: 'softbox', style: 'editorial' },
-      3
+      [{ role: 'subject', count: 3 }]
     )
 
     expect(prompt).toContain('MANDATORY STYLE REQUIREMENTS')
@@ -122,13 +122,13 @@ describe('buildFullPrompt', () => {
   })
 
   it('omits the MANDATORY STYLE REQUIREMENTS block when settings are empty', () => {
-    const prompt = buildFullPrompt('A bottle on a white table', {}, 3)
+    const prompt = buildFullPrompt('A bottle on a white table', {}, [{ role: 'subject', count: 3 }])
 
     expect(prompt).not.toContain('MANDATORY STYLE REQUIREMENTS')
   })
 
   it('includes the IMAGE TO GENERATE section with the user prompt', () => {
-    const prompt = buildFullPrompt('A dark background shot', {}, 2)
+    const prompt = buildFullPrompt('A dark background shot', {}, [{ role: 'subject', count: 2 }])
 
     expect(prompt).toContain('IMAGE TO GENERATE:')
     expect(prompt).toContain('A dark background shot')
@@ -136,70 +136,97 @@ describe('buildFullPrompt', () => {
 
   it('truncates user prompts longer than MAX_USER_PROMPT_LEN characters', () => {
     const longPrompt = 'x'.repeat(MAX_USER_PROMPT_LEN + 500)
-    const result = buildFullPrompt(longPrompt, {}, 1)
+    const result = buildFullPrompt(longPrompt, {}, [{ role: 'subject', count: 1 }])
 
-    // The truncated prompt appears inside the IMAGE TO GENERATE section
     const section = result.split('IMAGE TO GENERATE:\n')[1]?.split('\n\n')[0] ?? ''
     expect(section.length).toBe(MAX_USER_PROMPT_LEN)
   })
 
   it('uses a custom reference_rule when provided', () => {
     const customRule = 'Use only the first image as the product reference.'
-    const prompt = buildFullPrompt('Hero shot', { reference_rule: customRule }, 5)
+    const prompt = buildFullPrompt('Hero shot', { reference_rule: customRule }, [{ role: 'subject', count: 5 }])
 
     expect(prompt).toContain(`REFERENCE RULE: ${customRule}`)
-    expect(prompt).not.toContain('define the product')
+    expect(prompt).not.toContain('match this subject')
   })
 
-  it('generates the correct reference rule for product-only images', () => {
-    const prompt = buildFullPrompt('Hero shot', {}, 4)
+  it('generates the correct reference rule for a single subject set', () => {
+    const prompt = buildFullPrompt('Hero shot', {}, [{ role: 'subject', count: 4 }])
 
     expect(prompt).toContain('REFERENCE RULE:')
-    expect(prompt).toContain('4 images define the product')
-    expect(prompt).toContain('match them exactly')
+    expect(prompt).toContain('Images 1\u20134 are the product')
+    expect(prompt).toContain("match this subject's appearance exactly")
   })
 
-  it('generates a combined reference rule when texture images are provided', () => {
-    const prompt = buildFullPrompt('Hero shot', {}, 3, 2)
+  it('generates a combined reference rule when subject and texture sets are provided', () => {
+    const prompt = buildFullPrompt('Hero shot', {}, [
+      { role: 'subject', count: 3 },
+      { role: 'texture', count: 2 },
+    ])
 
-    expect(prompt).toContain('3 product reference images')
-    expect(prompt).toContain('2 texture reference images')
-    expect(prompt).toContain('material/finish samples')
+    expect(prompt).toContain('Images 1\u20133 are the product')
+    expect(prompt).toContain('Images 4\u20135 are texture/material references')
+  })
+
+  it('generates per-subject ranges with labels for multi-subject groups', () => {
+    const prompt = buildFullPrompt('Two trucks in a scene', {}, [
+      { role: 'subject', count: 2, label: 'red truck' },
+      { role: 'subject', count: 2, label: 'blue truck' },
+    ])
+
+    expect(prompt).toContain('Images 1\u20132 are red truck')
+    expect(prompt).toContain('Images 3\u20134 are blue truck')
+    expect(prompt).toContain('Compose all subjects together into a single coherent scene')
+  })
+
+  it('falls back to subject A/B naming when labels are missing for multi-subject groups', () => {
+    const prompt = buildFullPrompt('Two products', {}, [
+      { role: 'subject', count: 1 },
+      { role: 'subject', count: 1 },
+    ])
+
+    expect(prompt).toContain('Image 1 is subject A')
+    expect(prompt).toContain('Image 2 is subject B')
   })
 
   it('includes the resolution and aspect ratio suffix', () => {
-    const prompt = buildFullPrompt('Product shot', { default_resolution: '2K', default_aspect_ratio: '1:1' }, 1)
+    const prompt = buildFullPrompt('Product shot', { default_resolution: '2K', default_aspect_ratio: '1:1' }, [{ role: 'subject', count: 1 }])
 
     expect(prompt).toContain('1:1 aspect ratio, 2K resolution')
   })
 
   it('defaults to 4K resolution and 16:9 aspect ratio when not specified', () => {
-    const prompt = buildFullPrompt('Product shot', {}, 1)
+    const prompt = buildFullPrompt('Product shot', {}, [{ role: 'subject', count: 1 }])
 
     expect(prompt).toContain('16:9 aspect ratio, 4K resolution')
   })
 
   it('appends custom_suffix when provided and non-empty', () => {
-    const prompt = buildFullPrompt('Product shot', { custom_suffix: 'No watermarks.' }, 1)
+    const prompt = buildFullPrompt('Product shot', { custom_suffix: 'No watermarks.' }, [{ role: 'subject', count: 1 }])
 
     expect(prompt).toContain('No watermarks.')
   })
 
   it('does not append custom_suffix when it is whitespace-only', () => {
-    const prompt = buildFullPrompt('Product shot', { custom_suffix: '   ' }, 1)
+    const prompt = buildFullPrompt('Product shot', { custom_suffix: '   ' }, [{ role: 'subject', count: 1 }])
     const lines = prompt.split('\n\n')
-    // The last section should be the resolution line, not a whitespace-only block
     expect(lines.at(-1)).toMatch(/aspect ratio/)
   })
 
   it('trims leading and trailing whitespace from the user prompt', () => {
-    const prompt = buildFullPrompt('  trimmed prompt  ', {}, 1)
+    const prompt = buildFullPrompt('  trimmed prompt  ', {}, [{ role: 'subject', count: 1 }])
     expect(prompt).toContain('IMAGE TO GENERATE:\ntrimmed prompt')
   })
 
+  it('omits the REFERENCE RULE block when no reference groups are provided (fix-image flow)', () => {
+    const prompt = buildFullPrompt('Recreate this image', {}, [])
+
+    expect(prompt).not.toContain('REFERENCE RULE')
+    expect(prompt).toContain('IMAGE TO GENERATE:')
+  })
+
   it('parts are separated by double newlines', () => {
-    const prompt = buildFullPrompt('shot', { lens: '50mm' }, 1)
-    // All section separators must be exactly \n\n (not \n or \n\n\n)
+    const prompt = buildFullPrompt('shot', { lens: '50mm' }, [{ role: 'subject', count: 1 }])
     const parts = prompt.split('\n\n')
     expect(parts.length).toBeGreaterThanOrEqual(3)
   })

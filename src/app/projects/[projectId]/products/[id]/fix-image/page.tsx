@@ -149,7 +149,14 @@ export default function FixImagePage({
         variation_count: variationCountValue,
         resolution,
         aspect_ratio: aspectRatio,
-        reference_set_id: selectedRefSetId || undefined,
+        reference_sets: selectedRefSetId
+          ? [{
+              reference_set_id: selectedRefSetId,
+              role: 'subject',
+              image_count: null,
+              subject_label: null,
+            }]
+          : [],
         source_image_id: sourceImageId,
       })
       setActiveJobId(job.id)

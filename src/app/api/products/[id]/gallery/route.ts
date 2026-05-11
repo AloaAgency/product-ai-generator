@@ -139,24 +139,52 @@ export async function GET(
       new Set((images || []).map((image) => image.job_id).filter((value): value is string => Boolean(value)))
     )
 
-    const { data: jobs, error: jobsError } = jobIds.length > 0
-      ? await supabase
-          .from(T.generation_jobs)
-          .select('id, prompt_template_id, final_prompt, reference_set_id, texture_set_id, product_image_count, texture_image_count')
-          .eq('product_id', productId)
-          .in('id', jobIds)
-      : { data: [], error: null }
+    const [jobsResult, jobRefSetsResult] = await Promise.all([
+      jobIds.length > 0
+        ? supabase
+            .from(T.generation_jobs)
+            .select('id, prompt_template_id, final_prompt')
+            .eq('product_id', productId)
+            .in('id', jobIds)
+        : Promise.resolve({ data: [], error: null }),
+      jobIds.length > 0
+        ? supabase
+            .from(T.generation_job_reference_sets)
+            .select('job_id, reference_set_id, role, display_order, image_count, subject_label')
+            .in('job_id', jobIds)
+            .order('display_order', { ascending: true })
+        : Promise.resolve({ data: [], error: null }),
+    ])
 
-    if (jobsError) {
+    if (jobsResult.error) {
       return NextResponse.json({ error: 'Failed to fetch job metadata' }, { status: 500 })
     }
+    if (jobRefSetsResult.error) {
+      return NextResponse.json({ error: 'Failed to fetch job reference sets' }, { status: 500 })
+    }
 
-    const jobTemplateMap = new Map((jobs || []).map((job) => [job.id, job.prompt_template_id]))
-    const jobPromptMap = new Map((jobs || []).map((job) => [job.id, job.final_prompt as string | null]))
-    const jobRefSetMap = new Map((jobs || []).map((job) => [job.id, job.reference_set_id as string | null]))
-    const jobTextureSetMap = new Map((jobs || []).map((job) => [job.id, job.texture_set_id as string | null]))
-    const jobProductImageCountMap = new Map((jobs || []).map((job) => [job.id, job.product_image_count as number | null]))
-    const jobTextureImageCountMap = new Map((jobs || []).map((job) => [job.id, job.texture_image_count as number | null]))
+    type JobRefSetEntry = {
+      reference_set_id: string
+      role: 'subject' | 'texture'
+      display_order: number
+      image_count: number | null
+      subject_label: string | null
+    }
+    const jobs = jobsResult.data || []
+    const jobTemplateMap = new Map(jobs.map((job) => [job.id, job.prompt_template_id]))
+    const jobPromptMap = new Map(jobs.map((job) => [job.id, job.final_prompt as string | null]))
+    const jobRefSetsMap = new Map<string, JobRefSetEntry[]>()
+    for (const row of (jobRefSetsResult.data || []) as Array<JobRefSetEntry & { job_id: string }>) {
+      const arr = jobRefSetsMap.get(row.job_id) ?? []
+      arr.push({
+        reference_set_id: row.reference_set_id,
+        role: row.role,
+        display_order: row.display_order,
+        image_count: row.image_count,
+        subject_label: row.subject_label,
+      })
+      jobRefSetsMap.set(row.job_id, arr)
+    }
 
     const imageItems = (images || []).filter((img) => img.media_type !== 'video')
     const thumbPaths = imageItems
@@ -222,10 +250,7 @@ export async function GET(
         : (img.thumb_storage_path ? (signedImageBucket.get(img.thumb_storage_path) ?? null) : null),
       prompt_template_id: img.job_id ? (jobTemplateMap.get(img.job_id) ?? null) : null,
       prompt: img.job_id ? (jobPromptMap.get(img.job_id) ?? null) : null,
-      reference_set_id: img.job_id ? (jobRefSetMap.get(img.job_id) ?? null) : null,
-      texture_set_id: img.job_id ? (jobTextureSetMap.get(img.job_id) ?? null) : null,
-      product_image_count: img.job_id ? (jobProductImageCountMap.get(img.job_id) ?? null) : null,
-      texture_image_count: img.job_id ? (jobTextureImageCountMap.get(img.job_id) ?? null) : null,
+      reference_sets: img.job_id ? (jobRefSetsMap.get(img.job_id) ?? []) : [],
     }))
 
     return NextResponse.json({
