@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import { deriveAuthToken } from '@/lib/auth-constants'
+import { SECURITY_HEADERS } from '@/lib/security-headers'
 
 // A stable password used across all middleware tests so the cached HMAC is
 // consistent within each test (reset by vi.resetModules() between tests).
@@ -20,6 +21,12 @@ type MiddlewareFn = (req: NextRequest) => Promise<Response>
 async function importMiddleware(): Promise<MiddlewareFn> {
   const mod = await import('@/middleware')
   return mod.middleware
+}
+
+function expectSecurityHeaders(res: Response) {
+  for (const { key, value } of SECURITY_HEADERS) {
+    expect(res.headers.get(key)).toBe(value)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -44,6 +51,7 @@ describe('middleware — public paths bypass auth', () => {
     const res = await middleware(req)
     // NextResponse.next() sets x-middleware-next: 1 — confirms the request was passed through
     expect(res.headers.get('x-middleware-next')).toBe('1')
+    expectSecurityHeaders(res)
   })
 
   it('allows unauthenticated requests to /api/worker/generate — worker uses its own auth', async () => {
@@ -91,6 +99,7 @@ describe('middleware — unauthenticated requests', () => {
     const req = new NextRequest('http://localhost/api/products')
     const res = await middleware(req)
     expect(res.status).toBe(401)
+    expectSecurityHeaders(res)
     const body = await res.json()
     expect(body).toEqual({ error: 'Unauthorized' })
   })
@@ -100,6 +109,7 @@ describe('middleware — unauthenticated requests', () => {
     const res = await middleware(req)
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('text/html')
+    expectSecurityHeaders(res)
     const html = await res.text()
     expect(html).toContain('<form')
     expect(html).toContain('/api/login')
