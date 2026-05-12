@@ -4,7 +4,7 @@
  * Covers: fail-closed behaviour, correct/wrong password flows, open-redirect
  * prevention, and handling of malformed form inputs.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import { AUTH_COOKIE_NAME, deriveAuthToken } from '@/lib/auth-constants'
 import { POST } from '@/app/api/login/route'
@@ -77,6 +77,25 @@ describe('POST /api/login — correct password', () => {
     const res = await POST(req)
     const setCookie = res.headers.get('set-cookie') ?? ''
     expect(setCookie.toLowerCase()).toContain('httponly')
+  })
+
+  it('sets the auth cookie with SameSite=Lax', async () => {
+    const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/' })
+    const res = await POST(req)
+    const setCookie = res.headers.get('set-cookie') ?? ''
+    expect(setCookie.toLowerCase()).toContain('samesite=lax')
+  })
+
+  it('sets the auth cookie with Secure flag in production', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/' })
+      const res = await POST(req)
+      const setCookie = res.headers.get('set-cookie') ?? ''
+      expect(setCookie.toLowerCase()).toContain('secure')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('redirects to the provided redirect path on success', async () => {

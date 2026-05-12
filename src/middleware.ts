@@ -174,15 +174,15 @@ export async function middleware(request: NextRequest) {
     // would surface as an opaque 500 with no useful headers.
     console.error('[Middleware] Unexpected error', err)
     if (pathname.startsWith('/api/')) {
-      return new NextResponse(
+      return withSecurityHeaders(new NextResponse(
         JSON.stringify({ error: 'Service unavailable' }),
         { status: 503, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }
-      )
+      ))
     }
-    return new NextResponse('Service unavailable', {
+    return withSecurityHeaders(new NextResponse('Service unavailable', {
       status: 503,
       headers: { 'content-type': 'text/plain', 'cache-control': 'no-store' },
-    })
+    }))
   }
 }
 
