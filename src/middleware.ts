@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { AUTH_COOKIE_NAME, deriveAuthToken, timingResistantEqual } from '@/lib/auth-constants'
+import { applySecurityHeaders } from '@/lib/security-headers'
 
 // Static parts of the login page HTML, split so the form (which varies per request)
 // can be inserted between them without re-declaring the surrounding boilerplate.
@@ -110,25 +111,8 @@ function isPublicPath(pathname: string): boolean {
   return pathname === '/api/login' || pathname.startsWith('/api/worker/')
 }
 
-// Security headers applied to every response generated directly by middleware.
-// Responses that pass through to Next.js pages/API routes receive these via
-// next.config.ts headers(); direct middleware responses bypass that pipeline.
-const SECURITY_HEADERS: Record<string, string> = {
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-  'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',
-}
-
-// Pre-computed once at module load so withSecurityHeaders never allocates a
-// temporary entries array on the hot path (called for every request response).
-const SECURITY_HEADER_ENTRIES = Object.entries(SECURITY_HEADERS)
-
 function withSecurityHeaders(response: NextResponse): NextResponse {
-  for (const [key, value] of SECURITY_HEADER_ENTRIES) {
-    response.headers.set(key, value)
-  }
+  applySecurityHeaders(response.headers)
   return response
 }
 
@@ -174,15 +158,19 @@ export async function middleware(request: NextRequest) {
     // would surface as an opaque 500 with no useful headers.
     console.error('[Middleware] Unexpected error', err)
     if (pathname.startsWith('/api/')) {
-      return withSecurityHeaders(new NextResponse(
-        JSON.stringify({ error: 'Service unavailable' }),
-        { status: 503, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }
-      ))
+      return withSecurityHeaders(
+        new NextResponse(
+          JSON.stringify({ error: 'Service unavailable' }),
+          { status: 503, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }
+        )
+      )
     }
-    return withSecurityHeaders(new NextResponse('Service unavailable', {
-      status: 503,
-      headers: { 'content-type': 'text/plain', 'cache-control': 'no-store' },
-    }))
+    return withSecurityHeaders(
+      new NextResponse('Service unavailable', {
+        status: 503,
+        headers: { 'content-type': 'text/plain', 'cache-control': 'no-store' },
+      })
+    )
   }
 }
 

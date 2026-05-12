@@ -774,18 +774,26 @@ function SceneCard({
   const [localEndPrompt, setLocalEndPrompt] = useState(scene.end_frame_prompt || '')
   const [localMotionPrompt, setLocalMotionPrompt] = useState(scene.motion_prompt || '')
   const [localModel, setLocalModel] = useState(scene.generation_model || 'veo3')
-  const [showGenMenu, setShowGenMenu] = useState(false)
+  const sceneSyncKey = JSON.stringify([
+    scene.title || '',
+    scene.prompt_text || '',
+    scene.end_frame_prompt || '',
+    scene.motion_prompt || '',
+    scene.generation_model || 'veo3',
+  ])
+  const [syncedSceneKey, setSyncedSceneKey] = useState(sceneSyncKey)
   const [showVideos, setShowVideos] = useState(false)
   const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null)
 
   // Sync local state when scene updates from server
-  useEffect(() => {
+  if (sceneSyncKey !== syncedSceneKey) {
+    setSyncedSceneKey(sceneSyncKey)
     setLocalTitle(scene.title || '')
     setLocalPrompt(scene.prompt_text || '')
     setLocalEndPrompt(scene.end_frame_prompt || '')
     setLocalMotionPrompt(scene.motion_prompt || '')
     setLocalModel(scene.generation_model || 'veo3')
-  }, [scene.title, scene.prompt_text, scene.end_frame_prompt, scene.motion_prompt, scene.generation_model])
+  }
 
   const saveField = (field: string, value: string | boolean) => {
     onUpdate({ [field]: value } as Partial<StoryboardScene>)
