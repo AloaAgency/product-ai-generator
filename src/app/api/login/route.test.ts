@@ -79,6 +79,17 @@ describe('POST /api/login — correct password', () => {
     expect(setCookie.toLowerCase()).toContain('httponly')
   })
 
+  it('sets the auth cookie with Secure, SameSite=Lax, and the intentional app-wide path', async () => {
+    const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/' })
+    const res = await POST(req)
+    const setCookie = res.headers.get('set-cookie') ?? ''
+    const normalized = setCookie.toLowerCase()
+
+    expect(normalized).toContain('secure')
+    expect(normalized).toContain('samesite=lax')
+    expect(setCookie).toContain('Path=/')
+  })
+
   it('redirects to the provided redirect path on success', async () => {
     const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/products/123' })
     const res = await POST(req)
