@@ -51,10 +51,10 @@ export async function POST(request: NextRequest) {
     const response = NextResponse.redirect(new URL(safeRedirect, request.url), 303)
     response.cookies.set(AUTH_COOKIE_NAME, await deriveAuthToken(PASSWORD), {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: true,
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: '/',
+      path: '/', // Site-password auth gates the whole app, so the cookie must cover every route.
     })
     return response
   }

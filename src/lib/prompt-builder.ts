@@ -245,7 +245,7 @@ export function parsePromptSuggestions(raw: string): { name: string; prompt_text
       // without this, a null element would throw inside .map() and the outer catch
       // would silently discard every valid suggestion in the response.
       .filter((p: unknown): p is Record<string, unknown> => p !== null && typeof p === 'object')
-      .map((p: any) => ({
+      .map((p) => ({
         // Cap fields so an oversized or adversarial AI response cannot push unbounded
         // strings into DB inserts or API responses downstream.
         // String() coercion prevents a TypeError when the AI returns a non-string value
