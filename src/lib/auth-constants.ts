@@ -12,7 +12,7 @@ export const AUTH_COOKIE_NAME = 'site-auth'
  * is independent of where a mismatch occurs.
  *
  * Not a cryptographic primitive — for that, use Node's `timingSafeEqual`
- * (see login/route.ts). However, this implementation works in both Node.js
+ * (see server-secrets.ts). However, this implementation works in both Node.js
  * and the Edge Runtime (no `crypto` import required) and eliminates the most
  * obvious timing side-channel.
  */
@@ -29,7 +29,12 @@ export function timingResistantEqual(provided: string, expected: string): boolea
 
 /**
  * Returns true when the request carries the correct ADMIN_SECRET header.
- * Used by internal admin endpoints that are already behind site-password auth.
+ *
+ * Edge Runtime-compatible version using XOR-based timing-resistant comparison.
+ * Node.js API routes must use `isAdminAuthorizedNode` from server-secrets.ts
+ * instead, which uses `crypto.timingSafeEqual` for a stronger guarantee.
+ * This function is intentionally kept Edge Runtime-safe for future middleware use.
+ *
  * Fails closed: if ADMIN_SECRET is not configured, all requests are denied.
  */
 export function isAdminAuthorized(request: NextRequest): boolean {
