@@ -143,18 +143,17 @@ const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
 // pixels (≈8× the max output dimension) before any Sharp pipeline executes.
 const MAX_SAFE_INPUT_DIMENSION = 32_768
 
+function assertBufferSize(buffer: Buffer, context: string): void {
+  if (buffer.length === 0) throw new Error(`${context}: buffer is empty`)
+  if (buffer.length > MAX_BUFFER_BYTES) throw new Error(`${context}: buffer exceeds maximum size limit`)
+}
+
+/** Shared return shape for all Sharp encode operations. */
+export type ImageResult = { buffer: Buffer; mimeType: string; extension: string }
+
 /** Resize an image buffer to a WebP of the given width and quality. */
-async function resizeToWebP(
-  buffer: Buffer,
-  width: number,
-  quality: number
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
-  if (buffer.length === 0) {
-    throw new Error('resizeToWebP: buffer is empty')
-  }
-  if (buffer.length > MAX_BUFFER_BYTES) {
-    throw new Error('resizeToWebP: buffer exceeds maximum size limit')
-  }
+async function resizeToWebP(buffer: Buffer, width: number, quality: number): Promise<ImageResult> {
+  assertBufferSize(buffer, 'resizeToWebP')
   const outBuffer = await sharp(buffer)
     .rotate()
     .resize({ width, withoutEnlargement: true })
@@ -166,30 +165,22 @@ async function resizeToWebP(
 /**
  * Generate a resized thumbnail buffer (480px WebP)
  */
-export const createThumbnail = (
-  buffer: Buffer,
-  width = 480
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => resizeToWebP(buffer, width, 72)
+export const createThumbnail = (buffer: Buffer, width = 480): Promise<ImageResult> =>
+  resizeToWebP(buffer, width, 72)
 
 /**
  * Generate a resized preview buffer (1600px WebP)
  */
-export const createPreview = (
-  buffer: Buffer,
-  width = 1600
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => resizeToWebP(buffer, width, 82)
+export const createPreview = (buffer: Buffer, width = 1600): Promise<ImageResult> =>
+  resizeToWebP(buffer, width, 82)
 
 /**
  * Generate thumbnail and preview in parallel from the same source buffer.
  * Equivalent to calling createThumbnail + createPreview concurrently —
  * cuts Sharp processing time roughly in half vs sequential calls.
  */
-export const createThumbnailAndPreview = (
-  buffer: Buffer
-): Promise<[
-  { buffer: Buffer; mimeType: string; extension: string },
-  { buffer: Buffer; mimeType: string; extension: string }
-]> => Promise.all([createThumbnail(buffer), createPreview(buffer)])
+export const createThumbnailAndPreview = (buffer: Buffer): Promise<[ImageResult, ImageResult]> =>
+  Promise.all([createThumbnail(buffer), createPreview(buffer)])
 
 /** Thresholds for reference image compression */
 const REF_MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
@@ -226,12 +217,7 @@ export type CompressResult = {
  * Returns the original buffer unchanged when already within limits.
  */
 export const compressReferenceImage = async (buffer: Buffer): Promise<CompressResult> => {
-  if (buffer.length === 0) {
-    throw new Error('compressReferenceImage: buffer is empty')
-  }
-  if (buffer.length > MAX_BUFFER_BYTES) {
-    throw new Error('compressReferenceImage: buffer exceeds maximum size limit')
-  }
+  assertBufferSize(buffer, 'compressReferenceImage')
   const originalSize = buffer.length
   const meta = await sharp(buffer).metadata()
   if (!meta.format || !ALLOWED_REF_FORMATS.has(meta.format)) {
@@ -259,13 +245,12 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
     }
   }
 
-  // Build the Sharp pipeline step-by-step so each transformation is explicit.
   // Always rotate first to honour EXIF orientation before any resize operation.
-  const base = sharp(buffer).rotate()
-  const resized = needsResize
-    ? base.resize({ width: REF_MAX_DIMENSION, height: REF_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
-    : base
-  const compressed = await resized.webp({ quality: 90 }).toBuffer()
+  const pipeline = sharp(buffer).rotate()
+  if (needsResize) {
+    pipeline.resize({ width: REF_MAX_DIMENSION, height: REF_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
+  }
+  const compressed = await pipeline.webp({ quality: 90 }).toBuffer()
 
   return {
     buffer: compressed,
@@ -277,6 +262,23 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   }
 }
 
+function runFfmpegExtract(inputPath: string, outputPath: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const ff = ffmpeg(inputPath)
+      .seekInput(0.1)
+      .frames(1)
+      .outputOptions('-update', '1')
+      .output(outputPath)
+    const timer = setTimeout(() => {
+      ff.kill('SIGKILL')
+      reject(new Error('extractVideoThumbnail: timed out after 30s'))
+    }, 30_000)
+    ff.on('end', () => { clearTimeout(timer); resolve() })
+      .on('error', (err: Error) => { clearTimeout(timer); reject(err) })
+      .run()
+  })
+}
+
 /**
  * Extract the first frame from a video buffer and create a 480px WebP thumbnail.
  * Uses ffmpeg-static to extract the frame, then sharp to resize and convert.
@@ -284,13 +286,8 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
 export const extractVideoThumbnail = async (
   videoBuffer: Buffer,
   width = 480
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => {
-  if (videoBuffer.length === 0) {
-    throw new Error('extractVideoThumbnail: video buffer is empty')
-  }
-  if (videoBuffer.length > MAX_BUFFER_BYTES) {
-    throw new Error('extractVideoThumbnail: buffer exceeds maximum size limit')
-  }
+): Promise<ImageResult> => {
+  assertBufferSize(videoBuffer, 'extractVideoThumbnail')
 
   await ensureFfmpegPath()
 
@@ -300,21 +297,7 @@ export const extractVideoThumbnail = async (
 
   try {
     await writeFile(tmpVideo, videoBuffer)
-
-    await new Promise<void>((resolve, reject) => {
-      const ff = ffmpeg(tmpVideo)
-        .seekInput(0.1)
-        .frames(1)
-        .outputOptions('-update', '1')
-        .output(tmpFrame)
-      const timer = setTimeout(() => {
-        ff.kill('SIGKILL')
-        reject(new Error('extractVideoThumbnail: timed out after 30s'))
-      }, 30_000)
-      ff.on('end', () => { clearTimeout(timer); resolve() })
-        .on('error', (err: Error) => { clearTimeout(timer); reject(err) })
-        .run()
-    })
+    await runFfmpegExtract(tmpVideo, tmpFrame)
 
     const frameBuffer = await readFile(tmpFrame)
     const thumb = await sharp(frameBuffer)
