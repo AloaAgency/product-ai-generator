@@ -508,7 +508,7 @@ describe('createPreview', () => {
 describe('extractVideoThumbnail', () => {
   it('throws when given an empty buffer', async () => {
     await expect(extractVideoThumbnail(Buffer.alloc(0))).rejects.toThrow(
-      'extractVideoThumbnail: video buffer is empty'
+      'extractVideoThumbnail: buffer is empty'
     )
   })
 })
