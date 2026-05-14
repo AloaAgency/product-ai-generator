@@ -263,6 +263,23 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   }
 }
 
+function runFfmpegExtract(inputPath: string, outputPath: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const ff = ffmpeg(inputPath)
+      .seekInput(0.1)
+      .frames(1)
+      .outputOptions('-update', '1')
+      .output(outputPath)
+    const timer = setTimeout(() => {
+      ff.kill('SIGKILL')
+      reject(new Error('extractVideoThumbnail: timed out after 30s'))
+    }, 30_000)
+    ff.on('end', () => { clearTimeout(timer); resolve() })
+      .on('error', (err: Error) => { clearTimeout(timer); reject(err) })
+      .run()
+  })
+}
+
 /**
  * Extract the first frame from a video buffer and create a 480px WebP thumbnail.
  * Uses ffmpeg-static to extract the frame, then sharp to resize and convert.
@@ -281,21 +298,7 @@ export const extractVideoThumbnail = async (
 
   try {
     await writeFile(tmpVideo, videoBuffer)
-
-    await new Promise<void>((resolve, reject) => {
-      const ff = ffmpeg(tmpVideo)
-        .seekInput(0.1)
-        .frames(1)
-        .outputOptions('-update', '1')
-        .output(tmpFrame)
-      const timer = setTimeout(() => {
-        ff.kill('SIGKILL')
-        reject(new Error('extractVideoThumbnail: timed out after 30s'))
-      }, 30_000)
-      ff.on('end', () => { clearTimeout(timer); resolve() })
-        .on('error', (err: Error) => { clearTimeout(timer); reject(err) })
-        .run()
-    })
+    await runFfmpegExtract(tmpVideo, tmpFrame)
 
     const frameBuffer = await readFile(tmpFrame)
     const thumb = await sharp(frameBuffer)
