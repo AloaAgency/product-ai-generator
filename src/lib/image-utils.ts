@@ -245,13 +245,12 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
     }
   }
 
-  // Build the Sharp pipeline step-by-step so each transformation is explicit.
   // Always rotate first to honour EXIF orientation before any resize operation.
-  const base = sharp(buffer).rotate()
-  const resized = needsResize
-    ? base.resize({ width: REF_MAX_DIMENSION, height: REF_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
-    : base
-  const compressed = await resized.webp({ quality: 90 }).toBuffer()
+  const pipeline = sharp(buffer).rotate()
+  if (needsResize) {
+    pipeline.resize({ width: REF_MAX_DIMENSION, height: REF_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
+  }
+  const compressed = await pipeline.webp({ quality: 90 }).toBuffer()
 
   return {
     buffer: compressed,
