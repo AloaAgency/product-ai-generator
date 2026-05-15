@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import Anthropic from '@anthropic-ai/sdk'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
-import { SCENE_TITLE_SYSTEM_PROMPT, MAX_USER_PROMPT_LEN } from '@/lib/prompt-builder'
+import { SCENE_TITLE_SYSTEM_PROMPT, MAX_USER_PROMPT_LEN, safeTextFromContent } from '@/lib/prompt-builder'
 
 const anthropic = new Anthropic()
 
@@ -19,8 +19,9 @@ async function generateSceneTitle(promptText: string): Promise<string> {
       system: SCENE_TITLE_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: promptText.slice(0, MAX_USER_PROMPT_LEN) }],
     })
-    return response.content[0].type === 'text' ? response.content[0].text.trim() : ''
-  } catch {
+    return safeTextFromContent(response.content).trim()
+  } catch (err) {
+    console.warn('[generateSceneTitle] AI call failed, title will be empty:', err instanceof Error ? err.message : String(err))
     return ''
   }
 }
@@ -75,7 +76,8 @@ export async function PATCH(
 
     if (error) { console.error('[Prompt PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    console.error('[Prompt PATCH] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -96,7 +98,8 @@ export async function DELETE(
 
     if (error) { console.error('[Prompt DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
-  } catch {
+  } catch (err) {
+    console.error('[Prompt DELETE] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
