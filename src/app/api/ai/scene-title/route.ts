@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
-import { MAX_USER_PROMPT_LEN, SCENE_TITLE_SYSTEM_PROMPT } from '@/lib/prompt-builder'
+import { MAX_USER_PROMPT_LEN, SCENE_TITLE_SYSTEM_PROMPT, safeTextFromContent } from '@/lib/prompt-builder'
 
 const anthropic = new Anthropic()
 
@@ -27,9 +27,7 @@ export async function POST(request: NextRequest) {
       messages: [{ role: 'user', content: prompt_text }],
     })
 
-    const scene_title = response.content[0].type === 'text'
-      ? response.content[0].text.trim()
-      : ''
+    const scene_title = safeTextFromContent(response.content).trim()
 
     return NextResponse.json({ scene_title })
   } catch (err) {

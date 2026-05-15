@@ -5,6 +5,7 @@ import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import {
   buildPromptSuggestionSystemPrompt,
   parsePromptSuggestions,
+  safeTextFromContent,
   MAX_SUGGESTION_COUNT,
 } from '@/lib/prompt-builder'
 import type { GlobalStyleSettings } from '@/lib/types'
@@ -89,8 +90,7 @@ export async function POST(request: NextRequest) {
       ],
     })
 
-    const text =
-      response.content[0].type === 'text' ? response.content[0].text : ''
+    const text = safeTextFromContent(response.content)
 
     const prompts = parsePromptSuggestions(text)
 

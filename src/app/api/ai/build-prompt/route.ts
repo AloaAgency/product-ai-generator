@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
-import { buildRefinedPromptUserMessage } from '@/lib/prompt-builder'
+import { buildRefinedPromptUserMessage, safeTextFromContent } from '@/lib/prompt-builder'
 import type { GlobalStyleSettings } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
@@ -64,8 +64,7 @@ export async function POST(request: NextRequest) {
       messages: [{ role: 'user', content: userMessage }],
     })
 
-    const text =
-      response.content[0].type === 'text' ? response.content[0].text : ''
+    const text = safeTextFromContent(response.content)
 
     return NextResponse.json({ refined_prompt: text.trim() })
   } catch (err) {
