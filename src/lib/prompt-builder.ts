@@ -219,23 +219,47 @@ Output ONLY valid JSON, no markdown fences:
 {"prompts":[{"name":"Short title","prompt_text":"Detailed 50-150 word image generation prompt"}]}`
 }
 
-/** Pre-compiled regex for stripping markdown code fences — hoisted to avoid per-call recompilation */
-const CODE_FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/i
+/** Pre-compiled regex for extracting JSON from markdown code fences (global for matchAll) */
+const CODE_FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/gi
 
 /**
- * Parse Claude's prompt suggestion response
+ * Safely extract the text from the first content block of an Anthropic API response.
+ * Guards against empty content arrays, which can occur when the API returns an
+ * unexpected stop reason (e.g. max_tokens reached at zero output).
+ */
+export function safeTextFromContent(content: ReadonlyArray<{ type: string; text?: string }>): string {
+  const first = content[0]
+  return first?.type === 'text' ? (first.text ?? '') : ''
+}
+
+/**
+ * Parse Claude's prompt suggestion response.
+ * Tries each code fence block before falling back to raw text, so a response that
+ * includes explanatory text in one fence and the JSON in another is handled correctly.
  */
 export function parsePromptSuggestions(raw: string): { name: string; prompt_text: string }[] {
   if (!raw) return []
 
-  // Extract JSON from possible code fences
-  const match = raw.match(CODE_FENCE_RE)
-  const jsonStr = match?.[1]?.trim() || raw.trim()
+  // Collect JSON candidates: all code fence contents first, then full raw text.
+  // matchAll internally clones the regex, so CODE_FENCE_RE.lastIndex is not mutated.
+  const candidates: string[] = [
+    ...Array.from(raw.matchAll(CODE_FENCE_RE), m => m[1]?.trim() ?? '').filter(Boolean),
+    raw.trim(),
+  ]
 
-  try {
-    const parsed = JSON.parse(jsonStr)
-    const prompts = Array.isArray(parsed) ? parsed : parsed?.prompts
-    if (!Array.isArray(prompts)) return []
+  for (const jsonStr of candidates) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(jsonStr)
+    } catch {
+      continue
+    }
+
+    const prompts = Array.isArray(parsed)
+      ? parsed
+      : (parsed as Record<string, unknown>)?.prompts
+    if (!Array.isArray(prompts)) continue
+
     return prompts
       // Cap before mapping — the AI may return more items than requested (e.g. when
       // it misreads the count). Without this guard the caller could receive and
@@ -255,13 +279,13 @@ export function parsePromptSuggestions(raw: string): { name: string; prompt_text
         prompt_text: String(p.prompt_text || p.promptText || p.prompt || '').trim().slice(0, MAX_USER_PROMPT_LEN),
       }))
       .filter((p: { name: string; prompt_text: string }) => p.prompt_text.length > 0)
-  } catch (err) {
-    console.warn(
-      '[parsePromptSuggestions] Failed to parse JSON response:',
-      err instanceof Error ? err.message : String(err),
-      '— raw snippet:',
-      jsonStr.slice(0, 200)
-    )
-    return []
   }
+
+  console.warn(
+    '[parsePromptSuggestions] No valid JSON found in response:',
+    `${candidates.length} candidate(s) tried, raw length ${raw.length}`,
+    '— raw snippet:',
+    raw.slice(0, 200)
+  )
+  return []
 }
