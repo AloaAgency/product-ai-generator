@@ -8,6 +8,23 @@ import { secretsEqual } from '@/lib/server-secrets'
 const MAX_PASSWORD_BYTES = 1024   // ~1 KiB — far above any real password
 const MAX_REDIRECT_LENGTH = 2048  // characters, not bytes
 
+// Cached derivation Promise — mirrors the pattern in middleware.ts.
+// SITE_PASSWORD is immutable per isolate, so the derived cookie value never
+// changes. Computing it once at module load means successful logins get a
+// cache hit instead of paying the async Web Crypto cost on every request.
+let _cachedTokenPromise: Promise<string> | null = null
+
+function getCachedToken(password: string): Promise<string> {
+  if (_cachedTokenPromise === null) {
+    _cachedTokenPromise = deriveAuthToken(password)
+  }
+  return _cachedTokenPromise
+}
+
+if (process.env.SITE_PASSWORD) {
+  void getCachedToken(process.env.SITE_PASSWORD)
+}
+
 export async function POST(request: NextRequest) {
   // Fail closed: if SITE_PASSWORD is not configured, deny all logins rather
   // than falling back to a well-known hardcoded credential.
@@ -49,7 +66,7 @@ export async function POST(request: NextRequest) {
 
   if (secretsEqual(password, PASSWORD)) {
     const response = NextResponse.redirect(new URL(safeRedirect, request.url), 303)
-    response.cookies.set(AUTH_COOKIE_NAME, await deriveAuthToken(PASSWORD), {
+    response.cookies.set(AUTH_COOKIE_NAME, await getCachedToken(PASSWORD), {
       httpOnly: true,
       secure: true,
       sameSite: 'lax',
