@@ -64,6 +64,10 @@ function loginPage(showError: boolean, redirectPath: string) {
   )
 }
 
+// Cache SITE_PASSWORD at module load — the value is immutable per isolate in
+// production, so reading process.env once avoids a hash-map lookup on every request.
+const SITE_PASSWORD = process.env.SITE_PASSWORD ?? null
+
 // Cached derivation Promise, computed once per isolate lifetime.
 // Storing the Promise (rather than the resolved string) means concurrent
 // requests that arrive before the first derivation completes all share the
@@ -80,21 +84,20 @@ function getExpectedToken(password: string): Promise<string> {
 // Kick off the derivation at module load so the first real auth check finds an
 // already-resolved (or nearly-resolved) Promise rather than paying the async
 // Web Crypto cost during a live request.
-if (process.env.SITE_PASSWORD) {
-  void getExpectedToken(process.env.SITE_PASSWORD)
+if (SITE_PASSWORD) {
+  void getExpectedToken(SITE_PASSWORD)
 }
 
 /** Returns true when the request carries a valid site-auth cookie. */
 async function isAuthenticated(request: NextRequest): Promise<boolean> {
   try {
-    const password = process.env.SITE_PASSWORD
-    if (!password) return false
+    if (!SITE_PASSWORD) return false
     const auth = request.cookies.get(AUTH_COOKIE_NAME)
     // Cookie value is an HMAC derived from SITE_PASSWORD — a predictable static
     // string like "authenticated" would allow anyone who reads the source to
     // forge a valid cookie.
     if (!auth?.value) return false
-    return timingResistantEqual(auth.value, await getExpectedToken(password))
+    return timingResistantEqual(auth.value, await getExpectedToken(SITE_PASSWORD))
   } catch {
     // Fail closed: if Web Crypto is unavailable or throws, deny access rather
     // than propagating an unhandled rejection through the middleware.
@@ -177,5 +180,6 @@ export async function middleware(request: NextRequest) {
 export const config = {
   // Exclude static assets, images, and known public files from middleware
   // to avoid cookie-check overhead on requests that never need auth.
-  matcher: ['/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?|ttf|otf|css|js|map)$).*)'],
+  // txt covers robots.txt; xml covers sitemaps; webmanifest covers PWA manifests.
+  matcher: ['/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?|ttf|otf|css|js|map|txt|xml|webmanifest)$).*)'],
 }
