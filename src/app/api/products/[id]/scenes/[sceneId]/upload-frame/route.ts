@@ -44,11 +44,14 @@ export async function POST(request: NextRequest, { params }: Params) {
       return NextResponse.json({ error: 'File exceeds the 50 MB size limit' }, { status: 400 })
     }
 
-    // Verify the scene exists before issuing a signed URL or creating records
+    // Verify the scene exists AND belongs to this product before issuing a signed
+    // URL or creating records — prevents an authenticated caller from attaching
+    // frame images to a scene that belongs to a different product.
     const { data: sceneExists, error: sceneCheckError } = await supabase
       .from(T.storyboard_scenes)
       .select('id')
       .eq('id', sceneId)
+      .eq('product_id', productId)
       .single()
 
     if (sceneCheckError || !sceneExists) {
