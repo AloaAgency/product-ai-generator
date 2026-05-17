@@ -58,6 +58,23 @@ export async function POST(
         )
       }
 
+      // Validate every upload before touching the DB.
+      const expectedPrefix = `products/${productId}/refs/${setId}/`
+      for (const upload of uploads) {
+        if (typeof upload.storage_path !== 'string' || !upload.storage_path.startsWith(expectedPrefix)) {
+          return NextResponse.json(
+            { error: 'Invalid storage_path: path does not match the expected location for this reference set' },
+            { status: 400 }
+          )
+        }
+        if (typeof upload.mime_type === 'string' && !ALLOWED_REFERENCE_IMAGE_TYPES.has(upload.mime_type)) {
+          return NextResponse.json(
+            { error: `File type "${upload.mime_type}" is not allowed` },
+            { status: 400 }
+          )
+        }
+      }
+
       let nextOrder = (existing?.[0]?.display_order ?? -1) + 1
       const results = []
 
