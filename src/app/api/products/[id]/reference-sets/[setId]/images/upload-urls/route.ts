@@ -2,12 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import {
+  MAX_REFERENCE_IMAGES,
+  ALLOWED_REFERENCE_IMAGE_TYPES,
+  MAX_REFERENCE_IMAGE_SIZE_BYTES,
+} from '@/lib/request-guards'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
 export const dynamic = 'force-dynamic'
-
-const MAX_REFERENCE_IMAGES = 14
 
 type UploadRequestItem = {
   name: string
@@ -43,8 +46,22 @@ export async function POST(
       if (typeof file.type !== 'string') {
         return NextResponse.json({ error: 'Each file entry must have a type' }, { status: 400 })
       }
+      // Validate MIME type against the same allowlist used by the form-upload path —
+      // the client-supplied type is stored in the DB and must not be arbitrary.
+      if (!ALLOWED_REFERENCE_IMAGE_TYPES.has(file.type)) {
+        return NextResponse.json(
+          { error: `File type "${file.type}" is not allowed. Allowed types: JPEG, PNG, WebP, GIF, AVIF` },
+          { status: 400 }
+        )
+      }
       if (typeof file.size !== 'number') {
         return NextResponse.json({ error: 'Each file entry must have a numeric size' }, { status: 400 })
+      }
+      if (file.size > MAX_REFERENCE_IMAGE_SIZE_BYTES) {
+        return NextResponse.json(
+          { error: `File "${file.name}" exceeds the 50 MB size limit` },
+          { status: 400 }
+        )
       }
     }
 
