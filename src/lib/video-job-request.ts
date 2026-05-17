@@ -109,10 +109,13 @@ export async function createSceneVideoJob(
   sceneId: string,
   requestedModel?: string | null
 ): Promise<CreateSceneVideoJobResult> {
+  // Scope by product_id so a caller cannot trigger video generation for a scene
+  // that belongs to a different product by supplying a foreign sceneId.
   const { data: scene, error: sceneError } = await supabase
     .from(T.storyboard_scenes)
     .select('*')
     .eq('id', sceneId)
+    .eq('product_id', productId)
     .single()
 
   if (sceneError || !scene) return { job: null, error: 'Scene not found' }
