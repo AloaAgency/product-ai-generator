@@ -9,7 +9,10 @@ export async function PATCH(
   try {
     const { id: productId, setId } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
 
     // If setting is_active=true, deactivate other sets first
     if (body.is_active === true) {
@@ -34,7 +37,7 @@ export async function PATCH(
         .eq('product_id', productId)
         .eq('type', 'product')
 
-      if (deactivateError) return NextResponse.json({ error: deactivateError.message }, { status: 500 })
+      if (deactivateError) { console.error('[ReferenceSet PATCH deactivate]', deactivateError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     }
 
     const updates: Record<string, unknown> = {}
@@ -50,7 +53,7 @@ export async function PATCH(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[ReferenceSet PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -71,7 +74,7 @@ export async function DELETE(
       .eq('id', setId)
       .eq('product_id', productId)
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[ReferenceSet DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

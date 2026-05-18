@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { processGenerationJob } from '@/lib/generation-worker'
 import { logError } from '@/lib/error-logger'
 import { T } from '@/lib/db-tables'
+import { secretsEqual } from '@/lib/server-secrets'
 import {
   isValidGenerationJobId,
   MAX_GENERATION_BATCH_SIZE,
@@ -19,12 +20,16 @@ export const dynamic = 'force-dynamic'
 
 function isAuthorized(request: NextRequest) {
   const secret = process.env.CRON_SECRET
-  if (!secret) return false
-  const headerSecret = request.headers.get('x-cron-secret')
-  const auth = request.headers.get('authorization') || ''
+  if (!secret) {
+    console.error('[Worker] CRON_SECRET is not set — all requests denied')
+    return false
+  }
+  const headerSecret = request.headers.get('x-cron-secret') ?? ''
+  const auth = request.headers.get('authorization') ?? ''
   const bearerSecret = auth.startsWith('Bearer ') ? auth.slice(7) : ''
 
-  return headerSecret === secret || bearerSecret === secret
+  return (headerSecret.length > 0 && secretsEqual(headerSecret, secret)) ||
+    (bearerSecret.length > 0 && secretsEqual(bearerSecret, secret))
 }
 
 export async function GET(request: NextRequest) {
@@ -120,7 +125,8 @@ export async function GET(request: NextRequest) {
       .limit(Math.max(1, jobBatchSize))
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      console.error('[Worker] job fetch error', error)
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
     if (!jobs || jobs.length === 0) {

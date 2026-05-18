@@ -3,19 +3,25 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import Anthropic from '@anthropic-ai/sdk'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
+import { SCENE_TITLE_SYSTEM_PROMPT, MAX_USER_PROMPT_LEN, safeTextFromContent } from '@/lib/prompt-builder'
 
 const anthropic = new Anthropic()
+
+const MAX_NAME_LENGTH = 500
+const MAX_PROMPT_LENGTH = 10000
 
 async function generateSceneTitle(promptText: string): Promise<string> {
   try {
     const response = await anthropic.messages.create({
       model: CLAUDE_FAST_MODEL.name,
       max_tokens: 50,
-      system: 'Generate a short (3-6 word) descriptive title for this product photography scene. Output ONLY the title.',
-      messages: [{ role: 'user', content: promptText }],
+      system: SCENE_TITLE_SYSTEM_PROMPT,
+      // Truncate to MAX_USER_PROMPT_LEN — consistent with /api/ai/scene-title
+      messages: [{ role: 'user', content: promptText.slice(0, MAX_USER_PROMPT_LEN) }],
     })
-    return response.content[0].type === 'text' ? response.content[0].text.trim() : ''
-  } catch {
+    return safeTextFromContent(response.content).trim()
+  } catch (err) {
+    console.warn('[generateSceneTitle] AI call failed, title will be empty:', err instanceof Error ? err.message : String(err))
     return ''
   }
 }
@@ -34,9 +40,10 @@ export async function GET(
       .eq('product_id', id)
       .order('created_at', { ascending: false })
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[Prompts GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    console.error('[Prompts GET] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -48,11 +55,20 @@ export async function POST(
   try {
     const { id: product_id } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
     const { name, prompt_text, tags, prompt_type } = body
 
     if (!name || !prompt_text) {
       return NextResponse.json({ error: 'name and prompt_text are required' }, { status: 400 })
+    }
+    if (typeof name === 'string' && name.length > MAX_NAME_LENGTH) {
+      return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (typeof prompt_text === 'string' && prompt_text.length > MAX_PROMPT_LENGTH) {
+      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
     }
 
     const { data, error } = await supabase
@@ -67,7 +83,7 @@ export async function POST(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[Prompts POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     // Generate scene title asynchronously then update
     const sceneTitle = await generateSceneTitle(prompt_text)
@@ -82,7 +98,8 @@ export async function POST(
     }
 
     return NextResponse.json(data, { status: 201 })
-  } catch {
+  } catch (err) {
+    console.error('[Prompts POST] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

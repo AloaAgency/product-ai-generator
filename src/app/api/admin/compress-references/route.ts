@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processReferenceImageCompression } from '@/lib/reference-image-compression'
+import { isAdminAuthorizedNode } from '@/lib/server-secrets'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -10,15 +11,8 @@ export const dynamic = 'force-dynamic'
 const SIZE_THRESHOLD = 5 * 1024 * 1024 // 5 MB
 const DEFAULT_LIMIT = 50
 
-function isAdminAuthorized(request: NextRequest): boolean {
-  const adminSecret = process.env.ADMIN_SECRET
-  if (!adminSecret) return false
-  const provided = request.headers.get('x-admin-secret')
-  return provided === adminSecret
-}
-
 export async function POST(request: NextRequest) {
-  if (!isAdminAuthorized(request)) {
+  if (!isAdminAuthorizedNode(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -36,7 +30,8 @@ export async function POST(request: NextRequest) {
       .limit(limit)
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      console.error('[Admin CompressReferences]', error)
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
     if (!images || images.length === 0) {

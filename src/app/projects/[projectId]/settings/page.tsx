@@ -62,7 +62,10 @@ export default function ProjectSettingsPage({
 }) {
   const { projectId } = use(params)
   const router = useRouter()
-  const { currentProject, fetchProject, updateProject, deleteProject } = useAppStore()
+  const currentProject = useAppStore((state) => state.currentProject)
+  const fetchProject = useAppStore((state) => state.fetchProject)
+  const updateProject = useAppStore((state) => state.updateProject)
+  const deleteProject = useAppStore((state) => state.deleteProject)
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')

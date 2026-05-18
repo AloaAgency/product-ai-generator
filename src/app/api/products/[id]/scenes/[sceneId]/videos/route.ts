@@ -20,7 +20,8 @@ export async function GET(
       .order('created_at', { ascending: false })
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      console.error('[SceneVideos GET]', error)
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
     const paths = (videos || []).map((v) => v.storage_path).filter(Boolean) as string[]
@@ -44,9 +45,6 @@ export async function GET(
     return NextResponse.json({ videos: result })
   } catch (err) {
     console.error('[SceneVideos] Error:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

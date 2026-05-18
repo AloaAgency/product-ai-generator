@@ -12,7 +12,6 @@ import {
   Upload,
   ToggleLeft,
   ToggleRight,
-  Check,
 } from 'lucide-react'
 import {
   VEO_RESOLUTIONS,
@@ -48,6 +47,12 @@ const api = async (url: string, options?: RequestInit) => {
   }
   return res.json()
 }
+
+const fieldClassName = 'w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none'
+const selectClassName = 'w-full min-h-11 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-3 text-sm text-zinc-200 outline-none'
+const thumbButtonClassName = 'flex h-24 w-24 items-center justify-center overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 transition-colors hover:border-blue-500 sm:h-20 sm:w-20'
+const secondaryActionClassName = 'inline-flex min-h-11 items-center justify-center rounded-lg px-3 text-xs text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-200'
+const iconButtonClassName = 'inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-current transition-opacity hover:opacity-100'
 
 export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
   const { fetchGenerationJobs } = useAppStore()
@@ -118,7 +123,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
     setPickerTab('gallery')
     setLoadingGallery(true)
     try {
-      const data = await api(`/api/products/${productId}/gallery?media_type=image&approval_status=approved`)
+      const data = await api(`/api/products/${productId}/gallery?media_type=image&approval_status=approved&limit=200`)
       setGalleryImages(data.images ?? data)
     } catch {
       setGalleryImages([])
@@ -270,7 +275,11 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
             : 'border-blue-900/50 bg-blue-950/30 text-blue-300'
         }`}>
           <span className="flex-1">{notice.message}</span>
-          <button onClick={() => setNotice(null)} className="shrink-0 text-current opacity-60 hover:opacity-100">
+          <button
+            onClick={() => setNotice(null)}
+            className={`${iconButtonClassName} shrink-0 opacity-60`}
+            aria-label="Dismiss notice"
+          >
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -285,22 +294,22 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
               placeholder="Scene title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+              className={`${fieldClassName} focus:border-blue-500`}
               autoFocus
             />
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 space-y-2">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">Key frames</span>
                 {!supportsEndFrame(model) && (
                   <span className="text-[10px] text-zinc-500">LTX uses the start frame only</span>
                 )}
               </div>
-              <div className="flex gap-3">
+              <div className="flex flex-wrap gap-3">
                 <div className="flex flex-col items-center gap-1">
                   <span className="text-[10px] uppercase tracking-wide text-zinc-500">Start</span>
                   <button
                     onClick={() => openFramePicker('start')}
-                    className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                    className={thumbButtonClassName}
                     title="Select start frame"
                   >
                     {renderThumb(startFrameId, 'Start')}
@@ -308,7 +317,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                   {startFrameId && (
                     <button
                       onClick={() => setStartFrameId(null)}
-                      className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                      className={secondaryActionClassName}
                     >
                       Clear
                     </button>
@@ -319,7 +328,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                     <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
                     <button
                       onClick={() => openFramePicker('end')}
-                      className="h-20 w-20 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center hover:border-blue-500 transition-colors cursor-pointer"
+                      className={thumbButtonClassName}
                       title="Select end frame"
                     >
                       {renderThumb(endFrameId, 'End')}
@@ -327,7 +336,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                     {endFrameId && (
                       <button
                         onClick={() => setEndFrameId(null)}
-                        className="text-[10px] text-zinc-500 hover:text-zinc-300"
+                        className={secondaryActionClassName}
                       >
                         Clear
                       </button>
@@ -336,7 +345,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                 ) : (
                   <div className="flex flex-col items-center gap-1 opacity-50">
                     <span className="text-[10px] uppercase tracking-wide text-zinc-500">End</span>
-                    <div className="h-20 w-20 rounded-lg border border-dashed border-zinc-700 bg-zinc-800 flex items-center justify-center">
+                    <div className="flex h-24 w-24 items-center justify-center rounded-lg border border-dashed border-zinc-700 bg-zinc-800 sm:h-20 sm:w-20">
                       <ImageIcon className="h-6 w-6 text-zinc-600" />
                     </div>
                     <span className="text-[10px] text-zinc-600">Veo only</span>
@@ -351,7 +360,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
               placeholder="Frame prompt (still image description)..."
               value={framePrompt}
               onChange={(e) => setFramePrompt(e.target.value)}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
+              className={`${fieldClassName} resize-none focus:border-blue-500`}
             />
             {supportsEndFrame(model) && (
               <textarea
@@ -359,7 +368,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                 placeholder="End frame prompt (optional)..."
                 value={endFramePrompt}
                 onChange={(e) => setEndFramePrompt(e.target.value)}
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none resize-none"
+                className={`${fieldClassName} resize-none focus:border-blue-500`}
               />
             )}
             <textarea
@@ -367,7 +376,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
               placeholder="Motion prompt (video/motion description)..."
               value={motionPrompt}
               onChange={(e) => setMotionPrompt(e.target.value)}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none resize-none"
+              className={`${fieldClassName} resize-none focus:border-purple-500`}
             />
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
@@ -375,7 +384,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                 <select
                   value={model}
                   onChange={(e) => handleModelChange(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                  className={selectClassName}
                 >
                   <option value="veo3">Veo 3</option>
                   <option value="ltx">LTX-2</option>
@@ -386,7 +395,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                 <select
                   value={resolution}
                   onChange={(e) => setResolution(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                  className={selectClassName}
                 >
                   {(isLtxModel(model) ? LTX_RESOLUTIONS : VEO_RESOLUTIONS).map((res) => (
                     <option key={res} value={res}>{res}</option>
@@ -399,7 +408,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                   <select
                     value={aspectRatio}
                     onChange={(e) => setAspectRatio(e.target.value)}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                    className={selectClassName}
                   >
                     {VEO_ASPECT_RATIOS.map((ratio) => (
                       <option key={ratio} value={ratio}>{ratio}</option>
@@ -414,20 +423,21 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                     type="number"
                     min={1}
                     step={1}
+                    inputMode="numeric"
                     value={durationInput}
                     onChange={(e) => setDurationInput(e.target.value)}
                     onBlur={() => {
                       const parsed = parsePositiveNumber(durationInput)
                       setDurationInput(String(parsed ?? 1))
                     }}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                    className={selectClassName}
                   />
                 ) : veoRequires8s(resolution, !!startFrameId, !!endFrameId) ? (
                   <>
                     <select
                       value={8}
                       disabled
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none opacity-60 cursor-not-allowed"
+                      className={`${selectClassName} cursor-not-allowed opacity-60`}
                     >
                       <option value={8}>8</option>
                     </select>
@@ -437,7 +447,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                   <select
                     value={normalizeDurationValue(model, durationInput, resolution, !!startFrameId, !!endFrameId) ?? DEFAULT_VEO.duration}
                     onChange={(e) => setDurationInput(e.target.value)}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                    className={selectClassName}
                   >
                     {VEO_DURATIONS.map((duration) => (
                       <option key={duration} value={duration}>{duration}</option>
@@ -452,21 +462,22 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                     type="number"
                     min={1}
                     step={1}
+                    inputMode="numeric"
                     value={fpsInput}
                     onChange={(e) => setFpsInput(e.target.value)}
                     onBlur={() => {
                       const parsed = parsePositiveNumber(fpsInput)
                       setFpsInput(String(parsed ?? 1))
                     }}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none"
+                    className={selectClassName}
                   />
                 </div>
               )}
-              <div className="flex flex-col items-start">
+              <div className="flex flex-col items-start sm:justify-end">
                 <button
                   onClick={() => setGenerateAudio(!generateAudio)}
                   disabled={!supportsAudioToggle(model)}
-                  className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm text-zinc-400 transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                   title={!supportsAudioToggle(model) ? 'Audio toggle is supported for LTX only' : undefined}
                 >
                   {generateAudio ? <ToggleRight className="h-4 w-4 text-blue-400" /> : <ToggleLeft className="h-4 w-4" />}
@@ -500,38 +511,42 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
 
       {/* Frame picker modal */}
       {framePicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={() => setFramePicker(null)}>
-          <div className="relative w-full max-w-2xl mx-4 rounded-xl border border-zinc-700 bg-zinc-900 p-5" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/80 p-3 sm:items-center sm:p-4" onClick={() => setFramePicker(null)}>
+          <div
+            className="relative flex max-h-[calc(100vh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 p-4 sm:max-h-[85vh] sm:p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-zinc-200">
                 Select {framePicker.slot === 'start' ? 'Start' : 'End'} Frame
               </h2>
               <button
                 onClick={() => setFramePicker(null)}
-                className="rounded p-1 text-zinc-400 hover:text-zinc-100"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                aria-label="Close frame picker"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
             {/* Tabs */}
-            <div className="flex gap-2 mb-4 border-b border-zinc-700 pb-2">
+            <div className="mb-4 grid grid-cols-2 gap-2 border-b border-zinc-700 pb-2">
               <button
                 onClick={() => setPickerTab('gallery')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${pickerTab === 'gallery' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`min-h-11 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${pickerTab === 'gallery' ? 'border-b-2 border-blue-400 text-blue-400' : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'}`}
               >
                 Gallery
               </button>
               <button
                 onClick={() => setPickerTab('upload')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${pickerTab === 'upload' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`min-h-11 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${pickerTab === 'upload' ? 'border-b-2 border-blue-400 text-blue-400' : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'}`}
               >
                 Upload
               </button>
             </div>
 
             {pickerTab === 'gallery' ? (
-              <div className="max-h-80 overflow-y-auto">
+              <div className="max-h-[60vh] flex-1 overflow-y-auto pr-1">
                 {loadingGallery ? (
                   <div className="flex justify-center py-8">
                     <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
@@ -539,12 +554,12 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                 ) : galleryImages.length === 0 ? (
                   <p className="text-center text-sm text-zinc-500 py-8">No approved images in gallery.</p>
                 ) : (
-                  <div className="grid grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                     {galleryImages.map((img) => (
                       <button
                         key={img.id}
                         onClick={() => selectGalleryImage(img.id)}
-                        className="h-24 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 hover:border-blue-500 transition-colors"
+                        className="min-h-24 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 transition-colors hover:border-blue-500"
                       >
                         {(img.thumb_public_url || img.public_url) ? (
                           // eslint-disable-next-line @next/next/no-img-element
@@ -564,7 +579,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                 )}
               </div>
             ) : (
-              <div className="py-8 flex flex-col items-center gap-3">
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 py-8">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -580,7 +595,7 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
                 ) : (
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-zinc-700 px-12 py-8 text-zinc-400 hover:border-blue-500 hover:text-blue-400 transition-colors"
+                    className="flex min-h-44 w-full max-w-sm flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-zinc-700 px-6 py-8 text-center text-zinc-400 transition-colors hover:border-blue-500 hover:text-blue-400"
                   >
                     <Upload className="h-8 w-8" />
                     <span className="text-sm font-medium">Click to upload an image</span>

@@ -27,7 +27,8 @@ export async function DELETE(
       .remove([image.storage_path])
 
     if (storageError) {
-      return NextResponse.json({ error: storageError.message }, { status: 500 })
+      console.error('[ReferenceImageDelete] Storage deletion failed:', storageError)
+      return NextResponse.json({ error: 'Failed to delete image from storage' }, { status: 500 })
     }
 
     // Delete from DB
@@ -36,7 +37,10 @@ export async function DELETE(
       .delete()
       .eq('id', imgId)
 
-    if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
+    if (dbError) {
+      console.error('[ReferenceImageDelete] DB deletion failed:', dbError)
+      return NextResponse.json({ error: 'Failed to delete image record' }, { status: 500 })
+    }
     return NextResponse.json({ success: true })
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

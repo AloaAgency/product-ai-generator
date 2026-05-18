@@ -1,28 +1,85 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { AUTH_COOKIE_NAME, deriveAuthToken } from '@/lib/auth-constants'
+import { secretsEqual } from '@/lib/server-secrets'
 
-const PASSWORD = process.env.SITE_PASSWORD || 'aloaagency@1234'
-const COOKIE_NAME = 'site-auth'
+// Hard cap on input sizes accepted by the login endpoint.
+// A legitimate password will never approach these limits; rejecting early
+// prevents DoS via expensive HMAC computation on oversized payloads.
+const MAX_PASSWORD_BYTES = 1024   // ~1 KiB — far above any real password
+const MAX_REDIRECT_LENGTH = 2048  // characters, not bytes
+
+// Cached derivation Promise — mirrors the pattern in middleware.ts.
+// SITE_PASSWORD is immutable per isolate, so the derived cookie value never
+// changes. Computing it once at module load means successful logins get a
+// cache hit instead of paying the async Web Crypto cost on every request.
+let _cachedTokenPromise: Promise<string> | null = null
+
+function getCachedToken(password: string): Promise<string> {
+  if (_cachedTokenPromise === null) {
+    _cachedTokenPromise = deriveAuthToken(password)
+  }
+  return _cachedTokenPromise
+}
+
+if (process.env.SITE_PASSWORD) {
+  void getCachedToken(process.env.SITE_PASSWORD)
+}
 
 export async function POST(request: NextRequest) {
-  const formData = await request.formData()
-  const password = formData.get('password') as string
-  const redirectPath = (formData.get('redirect') as string) || '/'
+  // Fail closed: if SITE_PASSWORD is not configured, deny all logins rather
+  // than falling back to a well-known hardcoded credential.
+  const PASSWORD = process.env.SITE_PASSWORD
+  if (!PASSWORD) {
+    console.error('[Login] SITE_PASSWORD is not set — all logins denied')
+    return new NextResponse(null, { status: 503 })
+  }
 
-  // Validate redirect path: must be a relative path starting with /
-  // to prevent open-redirect attacks
-  const safeRedirect = redirectPath.startsWith('/') ? redirectPath : '/'
+  // Malformed Content-Type or body (e.g. application/json sent to a form
+  // endpoint) causes formData() to throw. Catch it and return 400 rather than
+  // letting Next.js surface an opaque 500 for a client-side mistake.
+  let formData: FormData
+  try {
+    formData = await request.formData()
+  } catch {
+    return new NextResponse(null, { status: 400 })
+  }
+  // formData.get() returns string | File | null — guard against File objects
+  // (e.g. multipart abuse) before passing to safeCompare.
+  const rawPassword = formData.get('password')
+  const password = typeof rawPassword === 'string' ? rawPassword : ''
+  const rawRedirect = formData.get('redirect')
+  const redirectPath = typeof rawRedirect === 'string' ? rawRedirect : '/'
 
-  if (password === PASSWORD) {
-    const response = NextResponse.redirect(new URL(safeRedirect, request.url))
-    response.cookies.set(COOKIE_NAME, 'authenticated', {
+  // Reject oversized passwords before doing any crypto work.
+  if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
+    return new NextResponse(null, { status: 400 })
+  }
+
+  // Validate redirect path: must be a simple relative path starting with /
+  // and NOT a protocol-relative URL (//host) to prevent open-redirect attacks.
+  // Also cap length to avoid storing/reflecting arbitrarily long strings.
+  const trimmedRedirect = redirectPath.slice(0, MAX_REDIRECT_LENGTH)
+  const safeRedirect =
+    trimmedRedirect.startsWith('/') && !trimmedRedirect.startsWith('//')
+      ? trimmedRedirect
+      : '/'
+
+  if (secretsEqual(password, PASSWORD)) {
+    const response = NextResponse.redirect(new URL(safeRedirect, request.url), 303)
+    response.cookies.set(AUTH_COOKIE_NAME, await getCachedToken(PASSWORD), {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: true,
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: '/',
+      path: '/', // Site-password auth gates the whole app, so the cookie must cover every route.
     })
     return response
   }
+
+  // Slow brute-force attempts with a fixed artificial delay before responding.
+  // This doesn't require shared state and doesn't reveal whether the password
+  // was close — it just makes rapid successive attempts meaningfully slower.
+  await new Promise<void>((resolve) => setTimeout(resolve, 150))
 
   // Wrong password — redirect back to the same page to show login with error
   const errorUrl = new URL(safeRedirect, request.url)

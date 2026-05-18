@@ -1,8 +1,9 @@
 'use client'
 
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useId } from 'react'
 import { X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { getDownloadImageUrl } from './imageLightbox.helpers'
 
 export interface ReferenceLightboxImage {
   id: string
@@ -23,6 +24,7 @@ export default function ReferenceLightbox({
   onClose,
   onNavigate,
 }: ReferenceLightboxProps) {
+  const dialogTitleId = useId()
   const currentImage = images[currentIndex]
   const hasPrev = currentIndex > 0
   const hasNext = currentIndex < images.length - 1
@@ -53,25 +55,29 @@ export default function ReferenceLightbox({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, handlePrev, handleNext])
+  }, [handlePrev, handleNext])
 
   if (!currentImage) return null
+  const imageUrl = getDownloadImageUrl({
+    id: currentImage.id,
+    public_url: currentImage.public_url,
+  })
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
-      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="Reference image lightbox"
+      aria-labelledby={dialogTitleId}
     >
+      <div className="fixed inset-0 bg-black/90" onClick={onClose} />
       <div
-        className="relative flex h-full max-h-[90vh] w-full max-w-5xl flex-col"
+        className="relative z-10 flex h-full max-h-[90vh] w-full max-w-5xl flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between rounded-t-xl bg-zinc-900/80 px-4 py-3">
           <div className="flex items-center gap-4">
-            <span className="text-sm font-medium text-zinc-100">
+            <span id={dialogTitleId} className="text-sm font-medium text-zinc-100">
               {currentImage.file_name ?? `Image ${currentIndex + 1}`}
             </span>
             <span className="text-xs text-zinc-400">
@@ -113,9 +119,9 @@ export default function ReferenceLightbox({
             </button>
           )}
 
-          {currentImage.public_url ? (
+          {imageUrl ? (
             <img
-              src={currentImage.public_url}
+              src={imageUrl}
               alt={currentImage.file_name ?? ''}
               className="max-h-full max-w-full object-contain"
             />

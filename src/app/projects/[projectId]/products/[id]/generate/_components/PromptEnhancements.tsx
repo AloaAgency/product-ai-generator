@@ -97,13 +97,13 @@ export function PromptEnhancements({ values, onChange }: PromptEnhancementsProps
             placeholder="#FF5500"
             value={values.color}
             onChange={(e) => update({ color: e.target.value })}
-            className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+            className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
           />
           <input
             type="color"
             value={values.color || '#000000'}
             onChange={(e) => update({ color: e.target.value })}
-            className="h-9 w-9 shrink-0 cursor-pointer rounded-lg border border-zinc-700 bg-zinc-900 p-0.5"
+            className="h-11 w-11 shrink-0 cursor-pointer rounded-lg border border-zinc-700 bg-zinc-900 p-0.5"
           />
         </div>
       </div>
@@ -113,7 +113,7 @@ export function PromptEnhancements({ values, onChange }: PromptEnhancementsProps
         <button
           type="button"
           onClick={() => setLocationOpen(!locationOpen)}
-          className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-zinc-400 hover:text-zinc-200 transition-colors"
+          className="flex w-full items-center gap-2 px-3 py-3 text-xs font-medium text-zinc-400 hover:text-zinc-200 transition-colors min-h-[44px]"
         >
           {locationOpen ? (
             <ChevronDown className="h-3.5 w-3.5" />

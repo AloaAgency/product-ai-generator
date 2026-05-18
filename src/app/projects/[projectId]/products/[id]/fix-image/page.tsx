@@ -149,7 +149,14 @@ export default function FixImagePage({
         variation_count: variationCountValue,
         resolution,
         aspect_ratio: aspectRatio,
-        reference_set_id: selectedRefSetId || undefined,
+        reference_sets: selectedRefSetId
+          ? [{
+              reference_set_id: selectedRefSetId,
+              role: 'subject',
+              image_count: null,
+              subject_label: null,
+            }]
+          : [],
         source_image_id: sourceImageId,
       })
       setActiveJobId(job.id)
@@ -507,7 +514,7 @@ function SourceImagePicker({
     setTab('gallery')
     setLoadingGallery(true)
     // Fetch ALL images (no approval filter) for source selection
-    fetch(`/api/products/${productId}/gallery?media_type=image`)
+    fetch(`/api/products/${productId}/gallery?media_type=image&limit=200`)
       .then((r) => r.json())
       .then((data) => setGalleryImages(data.images ?? data))
       .catch(() => setGalleryImages([]))

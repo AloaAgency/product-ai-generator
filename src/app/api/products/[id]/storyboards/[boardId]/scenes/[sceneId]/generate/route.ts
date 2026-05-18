@@ -3,8 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { buildFullPrompt } from '@/lib/prompt-builder'
 import { generateGeminiImage } from '@/lib/gemini'
 import {
-  createThumbnail,
-  createPreview,
+  createThumbnailAndPreview,
   buildImageStoragePath,
   buildThumbnailPath,
   buildPreviewPath,
@@ -14,6 +13,7 @@ import {
 import type { Product, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { resolveGoogleApiKey } from '@/lib/google-api-keys'
+import { logError } from '@/lib/error-logger'
 
 async function generateAndStoreImage(
   supabase: ReturnType<typeof createServiceClient>,
@@ -26,25 +26,28 @@ async function generateAndStoreImage(
   sceneName?: string | null,
   geminiApiKey?: string,
 ) {
-  // Download reference images
-  const refImagesBase64: { mimeType: string; base64: string }[] = []
-  for (const refImg of referenceImages) {
-    const { data: fileData } = await supabase.storage
-      .from('reference-images')
-      .download(refImg.storage_path)
-    if (fileData) {
-      const arrayBuffer = await fileData.arrayBuffer()
-      const base64 = Buffer.from(arrayBuffer).toString('base64')
-      refImagesBase64.push({ mimeType: refImg.mime_type, base64 })
-    }
-  }
+  // Download reference images in parallel
+  const refImagesBase64: { mimeType: string; base64: string }[] = (
+    await Promise.all(
+      referenceImages.map(async (refImg) => {
+        const { data: fileData } = await supabase.storage
+          .from('reference-images')
+          .download(refImg.storage_path)
+        if (!fileData) return null
+        const base64 = Buffer.from(await fileData.arrayBuffer()).toString('base64')
+        return { mimeType: refImg.mime_type, base64 }
+      })
+    )
+  ).filter((x): x is { mimeType: string; base64: string } => x !== null)
 
   // Add extra reference (e.g. start frame for end frame generation)
   if (extraReferenceBase64) {
     refImagesBase64.push(extraReferenceBase64)
   }
 
-  const finalPrompt = buildFullPrompt(prompt, settings, refImagesBase64.length)
+  const finalPrompt = buildFullPrompt(prompt, settings, [
+    { role: 'subject', count: refImagesBase64.length },
+  ])
 
   const result = await generateGeminiImage({
     prompt: finalPrompt,
@@ -56,8 +59,7 @@ async function generateAndStoreImage(
 
   const imageBuffer = Buffer.from(result.base64Data, 'base64')
   const ext = resolveExtension(result.mimeType)
-  const thumb = await createThumbnail(imageBuffer)
-  const preview = await createPreview(imageBuffer)
+  const [thumb, preview] = await createThumbnailAndPreview(imageBuffer)
 
   // Use a dummy job id for scene-generated images
   const jobId = 'scene-gen'
@@ -66,13 +68,16 @@ async function generateAndStoreImage(
   const thumbPath = buildThumbnailPath(storagePath, thumb.extension)
   const previewPath = buildPreviewPath(storagePath, preview.extension)
 
-  await supabase.storage.from('generated-images').upload(storagePath, imageBuffer, { contentType: result.mimeType })
-  await supabase.storage.from('generated-images').upload(thumbPath, thumb.buffer, { contentType: thumb.mimeType })
-  await supabase.storage.from('generated-images').upload(previewPath, preview.buffer, { contentType: preview.mimeType })
+  await Promise.all([
+    supabase.storage.from('generated-images').upload(storagePath, imageBuffer, { contentType: result.mimeType }),
+    supabase.storage.from('generated-images').upload(thumbPath, thumb.buffer, { contentType: thumb.mimeType }),
+    supabase.storage.from('generated-images').upload(previewPath, preview.buffer, { contentType: preview.mimeType }),
+  ])
 
   const { data: imgRecord, error: imgError } = await supabase
     .from(T.generated_images)
     .insert({
+      product_id: productId,
       job_id: null,
       variation_number: 1,
       storage_path: storagePath,
@@ -100,7 +105,10 @@ export async function POST(
   const { id: productId, sceneId } = await params
 
   try {
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
     const frame: string = body.frame // 'start' | 'end' | 'both'
     const referenceSetId: string | undefined = body.reference_set_id
 
@@ -110,37 +118,36 @@ export async function POST(
 
     const supabase = createServiceClient()
 
-    // Fetch scene
-    const { data: scene, error: sceneError } = await supabase
-      .from(T.storyboard_scenes)
-      .select('*')
-      .eq('id', sceneId)
-      .single()
+    // Fetch scene and product (with project styles via JOIN) in parallel — independent queries.
+    // Including project styles in the product JOIN avoids a second sequential round-trip
+    // when the product has no per-product API key (the common case).
+    const [
+      { data: scene, error: sceneError },
+      { data: product },
+    ] = await Promise.all([
+      supabase.from(T.storyboard_scenes).select('*').eq('id', sceneId).single(),
+      supabase
+        .from(T.products)
+        .select(`*, ${T.projects}!fk_products_project(global_style_settings)`)
+        .eq('id', productId)
+        .single(),
+    ])
 
     if (sceneError || !scene) {
       return NextResponse.json({ error: 'Scene not found' }, { status: 404 })
     }
-
-    // Fetch product
-    const { data: product } = await supabase
-      .from(T.products)
-      .select('*')
-      .eq('id', productId)
-      .single()
 
     if (!product) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
 
     // Resolve API key from product-level settings first, then project-level defaults.
-    let geminiApiKey = resolveGoogleApiKey((product as Product).global_style_settings)
-    if (!geminiApiKey && product.project_id) {
-      const { data: project } = await supabase
-        .from(T.projects)
-        .select('global_style_settings')
-        .eq('id', product.project_id)
-        .single()
-      geminiApiKey = resolveGoogleApiKey(project?.global_style_settings as Product['global_style_settings'] | null)
+    const productWithProject = product as Product & {
+      prodai_projects: { global_style_settings: Product['global_style_settings'] } | null
+    }
+    let geminiApiKey = resolveGoogleApiKey(productWithProject.global_style_settings)
+    if (!geminiApiKey) {
+      geminiApiKey = resolveGoogleApiKey(productWithProject.prodai_projects?.global_style_settings ?? null)
     }
 
     // Find reference set
@@ -166,7 +173,7 @@ export async function POST(
       .order('display_order', { ascending: true })
 
     const referenceImages: ReferenceImage[] = refImages || []
-    const settings = (product as Product).global_style_settings
+    const settings = productWithProject.global_style_settings
 
     const result: { start_frame_image_id?: string; end_frame_image_id?: string } = {}
 
@@ -187,10 +194,13 @@ export async function POST(
         geminiApiKey
       )
       result.start_frame_image_id = imageId
-      await supabase
+      const { error: startFrameUpdateError } = await supabase
         .from(T.storyboard_scenes)
         .update({ start_frame_image_id: imageId, updated_at: new Date().toISOString() })
         .eq('id', sceneId)
+      if (startFrameUpdateError) {
+        console.error('[Scene Generate] Failed to link start frame to scene:', startFrameUpdateError)
+      }
     }
 
     // Generate end frame
@@ -237,10 +247,13 @@ export async function POST(
         geminiApiKey
       )
       result.end_frame_image_id = imageId
-      await supabase
+      const { error: endFrameUpdateError } = await supabase
         .from(T.storyboard_scenes)
         .update({ end_frame_image_id: imageId, updated_at: new Date().toISOString() })
         .eq('id', sceneId)
+      if (endFrameUpdateError) {
+        console.error('[Scene Generate] Failed to link end frame to scene:', endFrameUpdateError)
+      }
     }
 
     // Return updated scene
@@ -253,9 +266,12 @@ export async function POST(
     return NextResponse.json(updated)
   } catch (err) {
     console.error('[Scene Generate] Error:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/storyboard/scenes/generate',
+      errorContext: { sceneId },
+    })
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

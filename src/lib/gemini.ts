@@ -21,6 +21,42 @@ export interface GeminiImageResult {
   raw: unknown
 }
 
+type GeminiRequestPart =
+  | { inlineData: { mimeType: string; data: string } }
+  | { text: string }
+
+type GeminiInlineData = {
+  data?: unknown
+  mimeType?: unknown
+  mime_type?: unknown
+}
+
+type GeminiResponsePart = {
+  text?: unknown
+  inlineData?: GeminiInlineData
+  inline_data?: GeminiInlineData
+}
+
+type GeminiCandidate = {
+  content?: {
+    parts?: GeminiResponsePart[]
+  }
+  finishReason?: string
+}
+
+type GeminiApiResponse = {
+  candidates?: GeminiCandidate[]
+  data?: {
+    candidates?: GeminiCandidate[]
+  }
+  error?: {
+    message?: string
+    code?: string | number
+    status?: string | number
+  }
+  message?: string
+}
+
 const DEFAULT_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview'
 const DEFAULT_RESOLUTION = (process.env.GEMINI_IMAGE_RESOLUTION_DEFAULT as GeminiImageResolution) || '4K'
 
@@ -29,7 +65,7 @@ const resolveEndpoint = (model: string) =>
 
 const normalizeResolution = (value?: GeminiImageResolution) => (value === '2K' ? '2K' : DEFAULT_RESOLUTION)
 
-const extractInlineImage = (response: any): { mimeType: string; data: string } | null => {
+const extractInlineImage = (response: GeminiApiResponse): { mimeType: string; data: string } | null => {
   const candidates = response?.candidates || response?.data?.candidates
   if (!Array.isArray(candidates)) return null
 
@@ -39,9 +75,10 @@ const extractInlineImage = (response: any): { mimeType: string; data: string } |
 
     for (const part of parts) {
       const inline = part?.inlineData || part?.inline_data
-      if (inline?.data && (inline?.mimeType || inline?.mime_type)) {
+      const mimeType = inline?.mimeType || inline?.mime_type
+      if (typeof inline?.data === 'string' && typeof mimeType === 'string') {
         return {
-          mimeType: inline.mimeType || inline.mime_type,
+          mimeType,
           data: inline.data,
         }
       }
@@ -66,7 +103,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   const requestId = request.requestId || randomUUID()
 
   // Build parts array: reference images first, then text prompt
-  const parts: any[] = []
+  const parts: GeminiRequestPart[] = []
 
   // Add reference images if provided
   if (request.referenceImages?.length) {
@@ -116,7 +153,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
       signal: request.signal,
     })
 
-    const raw = await response.json().catch(() => ({}))
+    const raw = await response.json().catch(() => ({})) as GeminiApiResponse
 
     if (!response.ok) {
       const message = raw?.error?.message || raw?.message || response.statusText
@@ -151,8 +188,8 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
     if (!inline) {
       // Log the response structure to help diagnose missing image data
       const textParts = raw?.candidates?.[0]?.content?.parts
-        ?.filter((p: any) => p.text)
-        ?.map((p: any) => p.text)
+        ?.filter((p) => typeof p.text === 'string')
+        ?.map((p) => p.text)
         ?.join(' ') || ''
       const finishReason = raw?.candidates?.[0]?.finishReason || 'unknown'
       console.error(

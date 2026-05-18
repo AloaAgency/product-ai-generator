@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { normalizeDurationValue } from '@/lib/video-constants'
 
 type Params = { params: Promise<{ id: string; sceneId: string }> }
 
@@ -8,24 +9,10 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   try {
     const { sceneId } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
-
-    const normalizeDuration = (model: string, value: unknown, resolution?: string | null, hasStartFrame?: boolean, hasEndFrame?: boolean) => {
-      const parsed = typeof value === 'number' ? value : Number(value)
-      if (!Number.isFinite(parsed) || parsed <= 0) return null
-      if (model.toLowerCase().startsWith('ltx')) return parsed
-      const resLower = (resolution || '').toLowerCase()
-      if (hasStartFrame || hasEndFrame || resLower === '1080p' || resLower === '4k') return 8
-      const allowed = [4, 6, 8]
-      if (allowed.includes(parsed)) return parsed
-      return allowed.reduce((closest, current) => {
-        const currentDiff = Math.abs(current - parsed)
-        const closestDiff = Math.abs(closest - parsed)
-        if (currentDiff < closestDiff) return current
-        if (currentDiff === closestDiff && current > closest) return current
-        return closest
-      }, allowed[0])
-    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
 
     // Fetch existing scene to resolve model, resolution, and frame info for duration normalization
     let existingScene: { generation_model?: string; video_resolution?: string; start_frame_image_id?: string; end_frame_image_id?: string } | null = null
@@ -62,7 +49,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     if (body.video_resolution !== undefined) updates.video_resolution = body.video_resolution
     if (body.video_aspect_ratio !== undefined) updates.video_aspect_ratio = body.video_aspect_ratio
     if (body.video_duration_seconds !== undefined) {
-      updates.video_duration_seconds = normalizeDuration(modelForDuration, body.video_duration_seconds, resolutionForDuration, hasStartFrame, hasEndFrame)
+      updates.video_duration_seconds = normalizeDurationValue(modelForDuration, body.video_duration_seconds, resolutionForDuration, hasStartFrame, hasEndFrame)
     }
     if (body.video_fps !== undefined) updates.video_fps = body.video_fps
     if (body.video_generate_audio !== undefined) updates.video_generate_audio = body.video_generate_audio
@@ -95,7 +82,7 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
       .delete()
       .eq('id', sceneId)
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[Scene DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

@@ -20,7 +20,8 @@ export async function GET(
       .order('created_at', { ascending: false })
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      console.error('[StoryboardSceneVideos GET]', error)
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
     // Sign video URLs
@@ -44,10 +45,7 @@ export async function GET(
 
     return NextResponse.json({ videos: result })
   } catch (err) {
-    console.error('[SceneVideos] Error:', err)
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('[StoryboardSceneVideos] Error:', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

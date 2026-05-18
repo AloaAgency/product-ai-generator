@@ -3,6 +3,11 @@ import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processReferenceImageCompression } from '@/lib/reference-image-compression'
+import {
+  MAX_REFERENCE_IMAGES,
+  ALLOWED_REFERENCE_IMAGE_TYPES,
+  MAX_REFERENCE_IMAGE_SIZE_BYTES,
+} from '@/lib/request-guards'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -20,7 +25,10 @@ export async function POST(
 
     const contentType = request.headers.get('content-type') || ''
     if (contentType.includes('application/json')) {
-      const body = await request.json()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let body: any = {}
+      try { body = await request.json() }
+      catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
       const uploads = (body?.uploads || []) as Array<{
         storage_path: string
         file_name: string
@@ -40,7 +48,6 @@ export async function POST(
         .order('display_order', { ascending: false })
 
       const existingCount = existing?.length ?? 0
-      const MAX_REFERENCE_IMAGES = 14
 
       if (existingCount + uploads.length > MAX_REFERENCE_IMAGES) {
         return NextResponse.json(
@@ -49,6 +56,23 @@ export async function POST(
           },
           { status: 400 }
         )
+      }
+
+      // Validate every upload before touching the DB.
+      const expectedPrefix = `products/${productId}/refs/${setId}/`
+      for (const upload of uploads) {
+        if (typeof upload.storage_path !== 'string' || !upload.storage_path.startsWith(expectedPrefix)) {
+          return NextResponse.json(
+            { error: 'Invalid storage_path: path does not match the expected location for this reference set' },
+            { status: 400 }
+          )
+        }
+        if (typeof upload.mime_type === 'string' && !ALLOWED_REFERENCE_IMAGE_TYPES.has(upload.mime_type)) {
+          return NextResponse.json(
+            { error: `File type "${upload.mime_type}" is not allowed` },
+            { status: 400 }
+          )
+        }
       }
 
       let nextOrder = (existing?.[0]?.display_order ?? -1) + 1
@@ -92,6 +116,15 @@ export async function POST(
       return NextResponse.json({ error: 'No files provided' }, { status: 400 })
     }
 
+    for (const file of files) {
+      if (!ALLOWED_REFERENCE_IMAGE_TYPES.has(file.type)) {
+        return NextResponse.json({ error: `File type "${file.type}" is not allowed. Allowed types: JPEG, PNG, WebP, GIF, AVIF` }, { status: 400 })
+      }
+      if (file.size > MAX_REFERENCE_IMAGE_SIZE_BYTES) {
+        return NextResponse.json({ error: `File "${file.name}" exceeds the 50 MB size limit` }, { status: 400 })
+      }
+    }
+
     // Get current image count and max display_order
     const { data: existing } = await supabase
       .from(T.reference_images)
@@ -100,8 +133,6 @@ export async function POST(
       .order('display_order', { ascending: false })
 
     const existingCount = existing?.length ?? 0
-
-    const MAX_REFERENCE_IMAGES = 14
 
     if (existingCount + files.length > MAX_REFERENCE_IMAGES) {
       return NextResponse.json(
@@ -175,7 +206,7 @@ export async function GET(
       .eq('reference_set_id', setId)
       .order('display_order', { ascending: true })
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[ReferenceImages GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     const paths = (data || [])
       .map((img) => img.storage_path)

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { requireUuid, sanitizePublicErrorMessage } from '@/lib/request-guards'
 
 async function resolveProject(supabase: ReturnType<typeof createServiceClient>, projectId: string) {
   const { data } = await supabase
@@ -12,12 +13,13 @@ async function resolveProject(supabase: ReturnType<typeof createServiceClient>, 
 }
 
 export async function GET(req: NextRequest) {
-  const projectId = req.nextUrl.searchParams.get('project_id')
-  if (!projectId) {
+  const rawProjectId = req.nextUrl.searchParams.get('project_id')
+  if (!rawProjectId) {
     return NextResponse.json({ error: 'project_id required' }, { status: 400 })
   }
 
   try {
+    const projectId = requireUuid(rawProjectId, 'project id')
     const supabase = createServiceClient()
 
     // Verify the project exists before returning its logs
@@ -35,18 +37,20 @@ export async function GET(req: NextRequest) {
 
     if (error) throw error
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    console.error(`[ErrorLogs GET] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
 export async function DELETE(req: NextRequest) {
-  const projectId = req.nextUrl.searchParams.get('project_id')
-  if (!projectId) {
+  const rawProjectId = req.nextUrl.searchParams.get('project_id')
+  if (!rawProjectId) {
     return NextResponse.json({ error: 'project_id required' }, { status: 400 })
   }
 
   try {
+    const projectId = requireUuid(rawProjectId, 'project id')
     const supabase = createServiceClient()
 
     // Verify the project exists before allowing log deletion
@@ -62,7 +66,8 @@ export async function DELETE(req: NextRequest) {
 
     if (error) throw error
     return NextResponse.json({ success: true })
-  } catch {
+  } catch (err) {
+    console.error(`[ErrorLogs DELETE] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

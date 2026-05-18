@@ -16,7 +16,7 @@ export async function GET(
       .eq('product_id', productId)
       .order('created_at', { ascending: true })
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[Storyboards GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data || [])
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -30,7 +30,10 @@ export async function POST(
   try {
     const { id: productId } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = {}
+    try { body = await request.json() }
+    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
     const { name, image_ids } = body
 
     if (!name || !Array.isArray(image_ids) || image_ids.length === 0) {
@@ -51,7 +54,7 @@ export async function POST(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) { console.error('[Storyboards POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

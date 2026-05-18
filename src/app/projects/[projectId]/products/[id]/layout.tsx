@@ -44,7 +44,11 @@ export default function ProductLayout({
 }) {
   const { projectId, id } = use(params)
   const pathname = usePathname()
-  const { currentProduct, currentProject, fetchProduct, fetchProject, updateProduct } = useAppStore()
+  const currentProduct = useAppStore((state) => state.currentProduct)
+  const currentProject = useAppStore((state) => state.currentProject)
+  const fetchProduct = useAppStore((state) => state.fetchProduct)
+  const fetchProject = useAppStore((state) => state.fetchProject)
+  const updateProduct = useAppStore((state) => state.updateProduct)
   const [editingName, setEditingName] = useState(false)
   const [nameValue, setNameValue] = useState('')
   const nameInputRef = useRef<HTMLInputElement>(null)

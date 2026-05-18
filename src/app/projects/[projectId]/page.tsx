@@ -15,16 +15,14 @@ export default function ProjectDetailPage({
 }) {
   const { projectId } = use(params)
   const router = useRouter()
-  const {
-    currentProject,
-    products,
-    loadingProducts,
-    fetchProject,
-    fetchProducts,
-    createProduct,
-    updateProject,
-    deleteProject,
-  } = useAppStore()
+  const currentProject = useAppStore((state) => state.currentProject)
+  const products = useAppStore((state) => state.products)
+  const loadingProducts = useAppStore((state) => state.loadingProducts)
+  const fetchProject = useAppStore((state) => state.fetchProject)
+  const fetchProducts = useAppStore((state) => state.fetchProducts)
+  const createProduct = useAppStore((state) => state.createProduct)
+  const updateProject = useAppStore((state) => state.updateProject)
+  const deleteProject = useAppStore((state) => state.deleteProject)
   const [showModal, setShowModal] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')

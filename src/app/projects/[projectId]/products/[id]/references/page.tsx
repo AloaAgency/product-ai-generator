@@ -48,6 +48,8 @@ export default function ReferencesPage({
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState<'product' | 'texture'>('product')
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false)
+  const dragDepthRef = useRef(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Filter sets by type
@@ -104,19 +106,60 @@ export default function ReferencesPage({
     if (selectedSetId === setId) setSelectedSetId(null)
   }
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!selectedSetId || !e.target.files?.length) return
+  const performUpload = async (files: File[]) => {
+    if (!selectedSetId || files.length === 0) return
+    const imageFiles = files.filter((f) => f.type.startsWith('image/'))
+    if (imageFiles.length === 0) {
+      setUploadError('Only image files can be uploaded')
+      return
+    }
     setUploading(true)
     setUploadError(null)
     try {
-      await uploadReferenceImages(id, selectedSetId, Array.from(e.target.files))
+      await uploadReferenceImages(id, selectedSetId, imageFiles)
       await fetchReferenceImages(id, selectedSetId)
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setUploading(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
     }
+  }
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return
+    await performUpload(Array.from(e.target.files))
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+    if (uploading || atLimit) return
+    if (!Array.from(e.dataTransfer.types || []).includes('Files')) return
+    e.preventDefault()
+    dragDepthRef.current += 1
+    setIsDraggingFiles(true)
+  }
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (uploading || atLimit) return
+    if (!Array.from(e.dataTransfer.types || []).includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setIsDraggingFiles(false)
+  }
+
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    dragDepthRef.current = 0
+    setIsDraggingFiles(false)
+    if (uploading || atLimit) return
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length === 0) return
+    await performUpload(files)
   }
 
   const handleDeleteImage = async (imgId: string) => {
@@ -341,7 +384,22 @@ export default function ReferencesPage({
                 </div>
 
                 {isSelected && (
-                  <div className="border-t border-zinc-800 p-4 space-y-4">
+                  <div
+                    onDragEnter={handleDragEnter}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    className={`relative border-t border-zinc-800 p-4 space-y-4 transition-colors ${
+                      isDraggingFiles ? 'bg-blue-950/30' : ''
+                    }`}
+                  >
+                    {isDraggingFiles && (
+                      <div className="pointer-events-none absolute inset-2 rounded-lg border-2 border-dashed border-blue-500 bg-blue-950/40 flex items-center justify-center z-10">
+                        <span className="text-sm font-medium text-blue-300">
+                          {atLimit ? 'Set is at image limit' : 'Drop images to upload'}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between">
                       <span className={`text-sm ${atLimit ? 'text-yellow-400' : 'text-zinc-400'}`}>
                         {images.length} / {MAX_REFERENCE_IMAGES} image{images.length !== 1 && 's'}
@@ -406,9 +464,12 @@ export default function ReferencesPage({
                         ))}
                       </div>
                     ) : (
-                      <p className="text-center text-sm text-zinc-600 py-6">
-                        No images in this set. Upload some to get started.
-                      </p>
+                      <div className="rounded-lg border-2 border-dashed border-zinc-800 py-10 text-center">
+                        <Upload className="mx-auto h-6 w-6 text-zinc-600" />
+                        <p className="mt-2 text-sm text-zinc-500">
+                          Drag and drop images here, or click <span className="text-zinc-300">Upload Images</span> above
+                        </p>
+                      </div>
                     )}
                   </div>
                 )}

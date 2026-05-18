@@ -7,7 +7,12 @@ import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { Plus, FolderOpen, X, Pencil, Trash2, Check } from 'lucide-react'
 
 export default function Home() {
-  const { projects, loadingProjects, fetchProjects, createProject, updateProject, deleteProject } = useAppStore()
+  const projects = useAppStore((state) => state.projects)
+  const loadingProjects = useAppStore((state) => state.loadingProjects)
+  const fetchProjects = useAppStore((state) => state.fetchProjects)
+  const createProject = useAppStore((state) => state.createProject)
+  const updateProject = useAppStore((state) => state.updateProject)
+  const deleteProject = useAppStore((state) => state.deleteProject)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [showModal, setShowModal] = useState(false)
