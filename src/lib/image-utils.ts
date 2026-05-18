@@ -14,7 +14,10 @@ import { writeFile, readFile, unlink, access } from 'fs/promises'
 // then fall back to system ffmpeg
 async function resolveFfmpegPath(): Promise<string | null> {
   try {
-    // ffmpeg-static path can be mangled by bundlers, so verify it exists
+    // ffmpeg-static path can be mangled by bundlers, so verify it exists.
+    // require() is intentional here — dynamic loading so a missing optional
+    // dependency is caught at runtime rather than at module parse time.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const ffmpegStatic = require('ffmpeg-static') as string
     if (ffmpegStatic) {
       await access(ffmpegStatic)
@@ -30,12 +33,26 @@ async function resolveFfmpegPath(): Promise<string | null> {
 
 // Cache the resolution promise so concurrent callers share the same in-flight
 // work rather than racing to call setFfmpegPath multiple times.
+// The promise is cleared on failure so subsequent calls can retry (e.g. if
+// ffmpeg is installed after the server starts).
 let ffmpegPathPromise: Promise<void> | null = null
 function ensureFfmpegPath(): Promise<void> {
   if (!ffmpegPathPromise) {
-    ffmpegPathPromise = resolveFfmpegPath().then((p) => {
-      if (p) ffmpeg.setFfmpegPath(p)
-    })
+    ffmpegPathPromise = resolveFfmpegPath()
+      .then((p) => {
+        if (!p) {
+          throw new Error(
+            'ffmpeg not found: install the ffmpeg-static package or ensure ffmpeg is on PATH'
+          )
+        }
+        ffmpeg.setFfmpegPath(p)
+      })
+      .catch((err) => {
+        // Reset on any failure so subsequent calls can retry rather than
+        // receiving a permanently cached rejection.
+        ffmpegPathPromise = null
+        throw err
+      })
   }
   return ffmpegPathPromise
 }
@@ -59,6 +76,7 @@ export const slugify = (text: string, maxLength = 50): string => {
 export const resolveExtension = (mimeType: string): string => {
   if (mimeType === 'image/jpeg') return 'jpg'
   if (mimeType === 'image/webp') return 'webp'
+  if (mimeType === 'image/heic' || mimeType === 'image/heif') return 'heic'
   return 'png'
 }
 
@@ -115,12 +133,27 @@ export const buildThumbnailPath = (storagePath: string, extension: string): stri
 export const buildPreviewPath = (storagePath: string, extension: string): string =>
   buildDerivedPath(storagePath, 'previews', extension)
 
+// Hard ceiling applied before any Sharp pipeline runs. Prevents memory
+// exhaustion if upstream size limits (e.g. multipart validation) are bypassed.
+const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
+
+// Decoded-dimension guard for user-supplied images. A file that is small on
+// disk but claims huge pixel dimensions (a "pixel bomb") would pass the buffer
+// size check yet still exhaust memory during decode. We cap each axis at 32 k
+// pixels (≈8× the max output dimension) before any Sharp pipeline executes.
+const MAX_SAFE_INPUT_DIMENSION = 32_768
+
+function assertBufferSize(buffer: Buffer, context: string): void {
+  if (buffer.length === 0) throw new Error(`${context}: buffer is empty`)
+  if (buffer.length > MAX_BUFFER_BYTES) throw new Error(`${context}: buffer exceeds maximum size limit`)
+}
+
+/** Shared return shape for all Sharp encode operations. */
+export type ImageResult = { buffer: Buffer; mimeType: string; extension: string }
+
 /** Resize an image buffer to a WebP of the given width and quality. */
-async function resizeToWebP(
-  buffer: Buffer,
-  width: number,
-  quality: number
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> {
+async function resizeToWebP(buffer: Buffer, width: number, quality: number): Promise<ImageResult> {
+  assertBufferSize(buffer, 'resizeToWebP')
   const outBuffer = await sharp(buffer)
     .rotate()
     .resize({ width, withoutEnlargement: true })
@@ -132,22 +165,43 @@ async function resizeToWebP(
 /**
  * Generate a resized thumbnail buffer (480px WebP)
  */
-export const createThumbnail = (
-  buffer: Buffer,
-  width = 480
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => resizeToWebP(buffer, width, 72)
+export const createThumbnail = (buffer: Buffer, width = 480): Promise<ImageResult> =>
+  resizeToWebP(buffer, width, 72)
 
 /**
  * Generate a resized preview buffer (1600px WebP)
  */
-export const createPreview = (
-  buffer: Buffer,
-  width = 1600
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => resizeToWebP(buffer, width, 82)
+export const createPreview = (buffer: Buffer, width = 1600): Promise<ImageResult> =>
+  resizeToWebP(buffer, width, 82)
+
+/**
+ * Generate thumbnail and preview in parallel from the same source buffer.
+ * Equivalent to calling createThumbnail + createPreview concurrently —
+ * cuts Sharp processing time roughly in half vs sequential calls.
+ */
+export const createThumbnailAndPreview = (buffer: Buffer): Promise<[ImageResult, ImageResult]> =>
+  Promise.all([createThumbnail(buffer), createPreview(buffer)])
 
 /** Thresholds for reference image compression */
 const REF_MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
 const REF_MAX_DIMENSION = 4096             // px
+
+// Raster formats accepted as reference images. SVG and jp2 are excluded:
+// SVG is an XML format Sharp parses via librsvg (larger attack surface),
+// and jp2/raw are not valid user-upload targets for this app.
+const ALLOWED_REF_FORMATS = new Set(['jpeg', 'png', 'webp', 'gif', 'avif', 'tiff', 'heif'])
+
+// Explicit whitelist from Sharp format identifiers to IANA MIME types.
+// Avoids interpolating an external string directly into a MIME type header.
+const FORMAT_MIME_MAP: Readonly<Record<string, string>> = {
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  avif: 'image/avif',
+  tiff: 'image/tiff',
+  heif: 'image/heif',
+}
 
 export type CompressResult = {
   buffer: Buffer
@@ -163,10 +217,19 @@ export type CompressResult = {
  * Returns the original buffer unchanged when already within limits.
  */
 export const compressReferenceImage = async (buffer: Buffer): Promise<CompressResult> => {
+  assertBufferSize(buffer, 'compressReferenceImage')
   const originalSize = buffer.length
   const meta = await sharp(buffer).metadata()
+  if (!meta.format || !ALLOWED_REF_FORMATS.has(meta.format)) {
+    throw new Error(`compressReferenceImage: unsupported format '${meta.format ?? 'unknown'}'`)
+  }
   const w = meta.width ?? 0
   const h = meta.height ?? 0
+  if (w > MAX_SAFE_INPUT_DIMENSION || h > MAX_SAFE_INPUT_DIMENSION) {
+    throw new Error(
+      `compressReferenceImage: image dimensions ${w}x${h} exceed maximum allowed (${MAX_SAFE_INPUT_DIMENSION}px per side)`
+    )
+  }
 
   const needsResize = w > REF_MAX_DIMENSION || h > REF_MAX_DIMENSION
   const needsCompress = originalSize > REF_MAX_FILE_SIZE
@@ -174,7 +237,7 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   if (!needsResize && !needsCompress) {
     return {
       buffer,
-      mimeType: meta.format ? `image/${meta.format}` : 'application/octet-stream',
+      mimeType: (meta.format && FORMAT_MIME_MAP[meta.format]) ?? 'application/octet-stream',
       extension: meta.format ?? 'bin',
       originalSize,
       compressedSize: originalSize,
@@ -182,13 +245,12 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
     }
   }
 
-  // Build the Sharp pipeline step-by-step so each transformation is explicit.
   // Always rotate first to honour EXIF orientation before any resize operation.
-  const base = sharp(buffer).rotate()
-  const resized = needsResize
-    ? base.resize({ width: REF_MAX_DIMENSION, height: REF_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
-    : base
-  const compressed = await resized.webp({ quality: 90 }).toBuffer()
+  const pipeline = sharp(buffer).rotate()
+  if (needsResize) {
+    pipeline.resize({ width: REF_MAX_DIMENSION, height: REF_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
+  }
+  const compressed = await pipeline.webp({ quality: 90 }).toBuffer()
 
   return {
     buffer: compressed,
@@ -200,6 +262,23 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   }
 }
 
+function runFfmpegExtract(inputPath: string, outputPath: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const ff = ffmpeg(inputPath)
+      .seekInput(0.1)
+      .frames(1)
+      .outputOptions('-update', '1')
+      .output(outputPath)
+    const timer = setTimeout(() => {
+      ff.kill('SIGKILL')
+      reject(new Error('extractVideoThumbnail: timed out after 30s'))
+    }, 30_000)
+    ff.on('end', () => { clearTimeout(timer); resolve() })
+      .on('error', (err: Error) => { clearTimeout(timer); reject(err) })
+      .run()
+  })
+}
+
 /**
  * Extract the first frame from a video buffer and create a 480px WebP thumbnail.
  * Uses ffmpeg-static to extract the frame, then sharp to resize and convert.
@@ -207,7 +286,9 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
 export const extractVideoThumbnail = async (
   videoBuffer: Buffer,
   width = 480
-): Promise<{ buffer: Buffer; mimeType: string; extension: string }> => {
+): Promise<ImageResult> => {
+  assertBufferSize(videoBuffer, 'extractVideoThumbnail')
+
   await ensureFfmpegPath()
 
   const id = randomUUID()
@@ -216,20 +297,11 @@ export const extractVideoThumbnail = async (
 
   try {
     await writeFile(tmpVideo, videoBuffer)
-
-    await new Promise<void>((resolve, reject) => {
-      ffmpeg(tmpVideo)
-        .seekInput(0.1)
-        .frames(1)
-        .outputOptions('-update', '1')
-        .output(tmpFrame)
-        .on('end', () => resolve())
-        .on('error', (err: Error) => reject(err))
-        .run()
-    })
+    await runFfmpegExtract(tmpVideo, tmpFrame)
 
     const frameBuffer = await readFile(tmpFrame)
     const thumb = await sharp(frameBuffer)
+      .rotate()
       .resize({ width, withoutEnlargement: true })
       .webp({ quality: 72 })
       .toBuffer()

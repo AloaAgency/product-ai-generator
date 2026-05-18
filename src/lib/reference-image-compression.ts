@@ -1,17 +1,26 @@
 import { createServiceClient } from '@/lib/supabase/server'
-import { compressReferenceImage } from '@/lib/image-utils'
+import { compressReferenceImage, CompressResult } from '@/lib/image-utils'
 import { T } from '@/lib/db-tables'
 
 const BUCKET = 'reference-images'
 
-export type CompressionResult = {
-  imageId: string
-  wasCompressed: boolean
-  originalSize: number
-  compressedSize: number
-  newStoragePath?: string
-  error?: string
-}
+export type CompressionResult =
+  | {
+      imageId: string
+      wasCompressed: false
+      originalSize: number
+      compressedSize: number
+      newStoragePath?: undefined
+      error?: string
+    }
+  | {
+      imageId: string
+      wasCompressed: true
+      originalSize: number
+      compressedSize: number
+      newStoragePath: string
+      error?: string
+    }
 
 /**
  * Download a reference image from Supabase, compress if needed,
@@ -34,12 +43,35 @@ export async function processReferenceImageCompression(
       wasCompressed: false,
       originalSize: 0,
       compressedSize: 0,
-      error: `Download failed: ${downloadError?.message ?? 'no data'}`,
+      error: downloadError?.message ?? 'Download failed',
     }
   }
 
-  const buffer = Buffer.from(await fileData.arrayBuffer())
-  const result = await compressReferenceImage(buffer)
+  let buffer: Buffer
+  try {
+    buffer = Buffer.from(await fileData.arrayBuffer())
+  } catch (err) {
+    return {
+      imageId,
+      wasCompressed: false,
+      originalSize: 0,
+      compressedSize: 0,
+      error: err instanceof Error ? err.message : 'Buffer conversion failed',
+    }
+  }
+
+  let result: CompressResult
+  try {
+    result = await compressReferenceImage(buffer)
+  } catch (err) {
+    return {
+      imageId,
+      wasCompressed: false,
+      originalSize: buffer.length,
+      compressedSize: buffer.length,
+      error: err instanceof Error ? err.message : 'Compression failed',
+    }
+  }
 
   if (!result.wasCompressed) {
     return {
@@ -67,16 +99,12 @@ export async function processReferenceImageCompression(
       wasCompressed: false,
       originalSize: result.originalSize,
       compressedSize: result.compressedSize,
-      error: `Upload failed: ${uploadError.message}`,
+      error: uploadError.message ?? 'Upload failed',
     }
   }
 
-  // Delete old file if the path changed (different extension)
-  if (newStoragePath !== storagePath) {
-    await supabase.storage.from(BUCKET).remove([storagePath])
-  }
-
-  // Update DB record
+  // Update DB record before deleting the old file so a delete failure
+  // never leaves the DB pointing at a path that no longer exists.
   const { error: dbError } = await supabase
     .from(T.reference_images)
     .update({
@@ -93,8 +121,14 @@ export async function processReferenceImageCompression(
       originalSize: result.originalSize,
       compressedSize: result.compressedSize,
       newStoragePath,
-      error: `DB update failed: ${dbError.message}`,
+      error: dbError.message ?? 'DB update failed',
     }
+  }
+
+  // Best-effort cleanup: remove old file if the extension changed.
+  // A failure here only orphans a file in storage — the DB is already correct.
+  if (newStoragePath !== storagePath) {
+    await supabase.storage.from(BUCKET).remove([storagePath])
   }
 
   return {
