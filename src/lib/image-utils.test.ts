@@ -21,6 +21,7 @@ import {
   compressReferenceImage,
   createThumbnail,
   createPreview,
+  createThumbnailAndPreview,
   extractVideoThumbnail,
 } from './image-utils'
 
@@ -126,6 +127,14 @@ describe('resolveExtension', () => {
   it('is case-sensitive — "image/JPEG" does NOT match', () => {
     // Verifies exact contract; callers are expected to normalise case.
     expect(resolveExtension('image/JPEG')).toBe('png')
+  })
+
+  it('returns "heic" for image/heic', () => {
+    expect(resolveExtension('image/heic')).toBe('heic')
+  })
+
+  it('returns "heic" for image/heif', () => {
+    expect(resolveExtension('image/heif')).toBe('heic')
   })
 })
 
@@ -467,6 +476,12 @@ describe('createThumbnail', () => {
     const result = await createThumbnail(src)
     expect(result.buffer.length).toBeGreaterThan(0)
   })
+
+  it('throws when given an empty buffer', async () => {
+    await expect(createThumbnail(Buffer.alloc(0))).rejects.toThrow(
+      'resizeToWebP: buffer is empty'
+    )
+  })
 })
 
 describe('createPreview', () => {
@@ -496,6 +511,68 @@ describe('createPreview', () => {
     const result = await createPreview(src, 800)
     const meta = await sharp(result.buffer).metadata()
     expect(meta.width).toBe(800)
+  })
+
+  it('throws when given an empty buffer', async () => {
+    await expect(createPreview(Buffer.alloc(0))).rejects.toThrow(
+      'resizeToWebP: buffer is empty'
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// createThumbnailAndPreview — parallel generation
+// ---------------------------------------------------------------------------
+
+describe('createThumbnailAndPreview', () => {
+  it('resolves to a [thumbnail, preview] tuple — both WebP', async () => {
+    const src = await makePng({ width: 2000, height: 1500 })
+    const [thumb, preview] = await createThumbnailAndPreview(src)
+    expect(thumb.mimeType).toBe('image/webp')
+    expect(thumb.extension).toBe('webp')
+    expect(preview.mimeType).toBe('image/webp')
+    expect(preview.extension).toBe('webp')
+  })
+
+  it('thumbnail is 480px wide and preview is 1600px wide', async () => {
+    const src = await makePng({ width: 3000, height: 2000 })
+    const [thumb, preview] = await createThumbnailAndPreview(src)
+    const thumbMeta = await sharp(thumb.buffer).metadata()
+    const previewMeta = await sharp(preview.buffer).metadata()
+    expect(thumbMeta.width).toBe(480)
+    expect(previewMeta.width).toBe(1600)
+  })
+
+  it('both outputs are non-empty buffers', async () => {
+    const src = await makePng({ width: 1000, height: 800 })
+    const [thumb, preview] = await createThumbnailAndPreview(src)
+    expect(thumb.buffer.length).toBeGreaterThan(0)
+    expect(preview.buffer.length).toBeGreaterThan(0)
+  })
+
+  it('does not enlarge thumbnail beyond original when image is small', async () => {
+    const src = await makePng({ width: 200, height: 150 })
+    const [thumb] = await createThumbnailAndPreview(src)
+    const meta = await sharp(thumb.buffer).metadata()
+    expect(meta.width).toBeLessThanOrEqual(200)
+  })
+
+  it('throws when given an empty buffer', async () => {
+    await expect(createThumbnailAndPreview(Buffer.alloc(0))).rejects.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// extractVideoThumbnail — guard tests (no ffmpeg required)
+// The empty-buffer guard fires before ensureFfmpegPath(), so these tests
+// run without a real video file or ffmpeg binary.
+// ---------------------------------------------------------------------------
+
+describe('extractVideoThumbnail', () => {
+  it('throws when given an empty buffer', async () => {
+    await expect(extractVideoThumbnail(Buffer.alloc(0))).rejects.toThrow(
+      'extractVideoThumbnail: buffer is empty'
+    )
   })
 })
 

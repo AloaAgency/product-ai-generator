@@ -28,6 +28,8 @@ const mockDownload = vi.fn()
 const mockUpload = vi.fn()
 const mockRemove = vi.fn()
 const mockDbUpdate = vi.fn()
+// Captures the payload passed to .update() so tests can assert on field names.
+let capturedDbUpdatePayload: Record<string, unknown> | undefined
 
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: () => ({
@@ -39,9 +41,12 @@ vi.mock('@/lib/supabase/server', () => ({
       }),
     },
     from: (_table: string) => ({
-      update: (_data: unknown) => ({
-        eq: (_col: string, _val: string) => mockDbUpdate(),
-      }),
+      update: (data: Record<string, unknown>) => {
+        capturedDbUpdatePayload = data
+        return {
+          eq: (_col: string, _val: string) => mockDbUpdate(),
+        }
+      },
     }),
   }),
 }))
@@ -76,6 +81,7 @@ const FAKE_STORAGE_PATH = 'org/product/ref-image.png'
 /** Reset all mocks before each test */
 beforeEach(() => {
   vi.clearAllMocks()
+  capturedDbUpdatePayload = undefined
 })
 
 // ---------------------------------------------------------------------------
@@ -269,6 +275,60 @@ describe('processReferenceImageCompression — happy path', () => {
       expect.any(Buffer),
       expect.objectContaining({ contentType: 'image/webp' })
     )
+  })
+
+  it('updates the DB record with storage_path, mime_type, and file_size fields', async () => {
+    await processReferenceImageCompression(FAKE_IMAGE_ID, originalPath)
+    expect(capturedDbUpdatePayload).toEqual({
+      storage_path: expectedNewPath,
+      mime_type: 'image/webp',
+      file_size: 800_000,
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Compression error path
+// ---------------------------------------------------------------------------
+
+describe('processReferenceImageCompression — compression failure', () => {
+  it('returns wasCompressed=false with the error message when compression throws', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('valid-png'), error: null })
+    mockCompress.mockRejectedValue(new Error('unsupported format'))
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('unsupported format')
+    expect(result.imageId).toBe(FAKE_IMAGE_ID)
+  })
+
+  it('reports originalSize and compressedSize equal to the buffer length on compression error', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('valid-png-data'), error: null })
+    mockCompress.mockRejectedValue(new Error('pixel bomb detected'))
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(result.originalSize).toBeGreaterThan(0)
+    expect(result.originalSize).toBe(result.compressedSize)
+  })
+
+  it('does not attempt upload or DB update when compression throws', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('data'), error: null })
+    mockCompress.mockRejectedValue(new Error('compression error'))
+
+    await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockUpload).not.toHaveBeenCalled()
+    expect(mockDbUpdate).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a non-Error rejection as "Compression failed"', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('data'), error: null })
+    mockCompress.mockRejectedValue('string-error')
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+    expect(result.error).toBe('Compression failed')
   })
 })
 
