@@ -15,6 +15,8 @@ import {
   Camera,
   Save,
   X,
+  Plus,
+  Minus,
 } from 'lucide-react'
 import { PromptEnhancements } from './PromptEnhancements'
 import { ReferenceImagePicker } from './ReferenceImagePicker'
@@ -30,6 +32,7 @@ type RefSlot = {
   reference_set_id: string
   role: RefSlotRole
   image_count_input: string
+  manual: boolean
   subject_label: string
 }
 
@@ -50,6 +53,35 @@ let slotKeyCounter = 0
 const nextSlotKey = () => {
   slotKeyCounter += 1
   return `slot-${slotKeyCounter}`
+}
+
+const parseSlotImageCount = (value: string): number | null => {
+  if (!value.trim()) return null
+  const parsed = parseInt(value, 10)
+  if (!Number.isFinite(parsed) || parsed < 1) return null
+  return Math.min(MAX_TOTAL_REFERENCE_IMAGES, parsed)
+}
+
+// Spread the 14-image budget across slots the user hasn't manually adjusted.
+// Manual slots keep their value; unlocked slots split what's left as evenly as possible
+// (remainder lands on the earliest unlocked slots), with a floor of 1 each.
+const distributeBudget = (slots: RefSlot[]): RefSlot[] => {
+  const unlockedCount = slots.reduce((n, s) => (s.manual ? n : n + 1), 0)
+  if (unlockedCount === 0) return slots
+  const lockedTotal = slots.reduce(
+    (sum, s) => (s.manual ? sum + (parseSlotImageCount(s.image_count_input) ?? 0) : sum),
+    0,
+  )
+  const remaining = Math.max(0, MAX_TOTAL_REFERENCE_IMAGES - lockedTotal)
+  const base = Math.floor(remaining / unlockedCount)
+  const extra = remaining - base * unlockedCount
+  let unlockedIdx = 0
+  return slots.map((s) => {
+    if (s.manual) return s
+    const idx = unlockedIdx++
+    const count = Math.max(1, base + (idx < extra ? 1 : 0))
+    return { ...s, image_count_input: String(count) }
+  })
 }
 
 export function ImageGenerateTab({
@@ -189,6 +221,7 @@ export function ImageGenerateTab({
           reference_set_id: sel.reference_set_id,
           role: sel.role,
           image_count_input: sel.image_count != null ? String(sel.image_count) : '',
+          manual: sel.image_count != null,
           subject_label: sel.subject_label ?? '',
         })
       }
@@ -200,10 +233,11 @@ export function ImageGenerateTab({
         reference_set_id: active.id,
         role: 'subject',
         image_count_input: '',
+        manual: false,
         subject_label: '',
       })
     }
-    setRefSlots(hydrated)
+    setRefSlots(distributeBudget(hydrated))
     setDidInitRefSlots(true)
   }, [referenceSets, productSets, textureSets, initialReferenceSets, didInitRefSlots])
 
@@ -330,12 +364,6 @@ export function ImageGenerateTab({
     return Math.min(100, parsed)
   }
   const variationCountValue = parseVariationCount(variationCountInput)
-  const parseSlotImageCount = (value: string): number | null => {
-    if (!value.trim()) return null
-    const parsed = parseInt(value, 10)
-    if (!Number.isFinite(parsed) || parsed < 1) return null
-    return Math.min(MAX_TOTAL_REFERENCE_IMAGES, parsed)
-  }
   const slotImageCounts = refSlots.map((s) => parseSlotImageCount(s.image_count_input))
   const totalImageCount = slotImageCounts.reduce<number>((sum, n) => sum + (n ?? 0), 0)
   const subjectSlotCount = refSlots.filter((s) => s.role === 'subject').length
@@ -361,22 +389,54 @@ export function ImageGenerateTab({
     setRefSlots((prev) => prev.map((s) => (s.key === key ? { ...s, ...patch } : s)))
   }
   const removeSlot = (key: string) => {
-    setRefSlots((prev) => prev.filter((s) => s.key !== key))
+    setRefSlots((prev) => distributeBudget(prev.filter((s) => s.key !== key)))
   }
   const addSlot = (role: RefSlotRole) => {
     const pool = role === 'subject' ? productSets : textureSets
     if (pool.length === 0) return
     const first = pool[0]
-    setRefSlots((prev) => [
-      ...prev,
-      {
-        key: nextSlotKey(),
-        reference_set_id: first.id,
-        role,
-        image_count_input: '',
-        subject_label: '',
-      },
-    ])
+    setRefSlots((prev) =>
+      distributeBudget([
+        ...prev,
+        {
+          key: nextSlotKey(),
+          reference_set_id: first.id,
+          role,
+          image_count_input: '',
+          manual: false,
+          subject_label: '',
+        },
+      ]),
+    )
+  }
+  const incrementSlot = (key: string) => {
+    setRefSlots((prev) =>
+      prev.map((s) => {
+        if (s.key !== key) return s
+        const current = parseSlotImageCount(s.image_count_input) ?? 0
+        return {
+          ...s,
+          image_count_input: String(Math.min(MAX_TOTAL_REFERENCE_IMAGES, current + 1)),
+          manual: true,
+        }
+      }),
+    )
+  }
+  const decrementSlot = (key: string) => {
+    setRefSlots((prev) =>
+      prev.map((s) => {
+        if (s.key !== key) return s
+        const current = parseSlotImageCount(s.image_count_input) ?? 1
+        return {
+          ...s,
+          image_count_input: String(Math.max(1, current - 1)),
+          manual: true,
+        }
+      }),
+    )
+  }
+  const splitEvenly = () => {
+    setRefSlots((prev) => distributeBudget(prev.map((s) => ({ ...s, manual: false }))))
   }
 
   const failedCount = currentJob?.failed_count ?? 0
@@ -407,10 +467,39 @@ export function ImageGenerateTab({
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-zinc-300">Reference Sets</h2>
-          <span className={`text-xs ${totalImageCount > MAX_TOTAL_REFERENCE_IMAGES ? 'text-red-400' : 'text-zinc-500'}`}>
-            Total: {totalImageCount} / {MAX_TOTAL_REFERENCE_IMAGES} max
-          </span>
+          <div className="flex items-center gap-3 text-xs">
+            <span className={totalImageCount > MAX_TOTAL_REFERENCE_IMAGES ? 'text-red-400' : 'text-zinc-500'}>
+              Total: {totalImageCount} / {MAX_TOTAL_REFERENCE_IMAGES} max
+            </span>
+            {refSlots.length > 1 && (
+              <button
+                type="button"
+                onClick={splitEvenly}
+                className="text-zinc-500 underline-offset-2 transition-colors hover:text-zinc-200 hover:underline"
+              >
+                Split evenly
+              </button>
+            )}
+          </div>
         </div>
+        {refSlots.length > 0 && (
+          <div className="flex h-1.5 gap-px overflow-hidden rounded-full bg-zinc-800">
+            {refSlots.map((s) => {
+              const count = parseSlotImageCount(s.image_count_input) ?? 0
+              if (count === 0) return null
+              return (
+                <div
+                  key={s.key}
+                  style={{ flex: count }}
+                  className={s.role === 'subject' ? 'bg-blue-500/80' : 'bg-purple-500/80'}
+                />
+              )
+            })}
+            {totalImageCount < MAX_TOTAL_REFERENCE_IMAGES && (
+              <div style={{ flex: MAX_TOTAL_REFERENCE_IMAGES - totalImageCount }} />
+            )}
+          </div>
+        )}
 
         {productSets.length === 0 && (
           <div className="flex items-center gap-2 rounded-lg border border-yellow-600 bg-yellow-950/40 px-4 py-3 text-yellow-300 text-sm">
@@ -456,21 +545,42 @@ export function ImageGenerateTab({
                     </select>
                     <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
                   </div>
-                  <input
-                    type="number"
-                    min={1}
-                    max={MAX_TOTAL_REFERENCE_IMAGES}
-                    placeholder="# imgs"
-                    value={slot.image_count_input}
-                    onChange={(e) => updateSlot(slot.key, { image_count_input: e.target.value })}
-                    onBlur={() => {
-                      const parsed = parseSlotImageCount(slot.image_count_input)
-                      if (parsed == null && slot.image_count_input.trim()) {
-                        updateSlot(slot.key, { image_count_input: '1' })
-                      }
-                    }}
-                    className="w-20 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-2 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
-                  />
+                  <div className="flex items-stretch overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900">
+                    <button
+                      type="button"
+                      onClick={() => decrementSlot(slot.key)}
+                      aria-label="Decrease image count"
+                      className="px-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                    >
+                      <Minus className="h-3.5 w-3.5" />
+                    </button>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      placeholder="0"
+                      value={slot.image_count_input}
+                      onChange={(e) => {
+                        const v = e.target.value.replace(/[^0-9]/g, '')
+                        updateSlot(slot.key, { image_count_input: v, manual: true })
+                      }}
+                      onBlur={() => {
+                        const parsed = parseSlotImageCount(slot.image_count_input)
+                        if (parsed == null && slot.image_count_input.trim()) {
+                          updateSlot(slot.key, { image_count_input: '1' })
+                        }
+                      }}
+                      className="w-10 bg-transparent px-1 py-2 text-center text-sm text-zinc-100 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => incrementSlot(slot.key)}
+                      aria-label="Increase image count"
+                      className="px-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                   <button
                     onClick={() => removeSlot(slot.key)}
                     aria-label="Remove reference set"
