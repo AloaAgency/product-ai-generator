@@ -474,7 +474,7 @@ export function ImageGenerateTab({
                   <button
                     onClick={() => removeSlot(slot.key)}
                     aria-label="Remove reference set"
-                    className="rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-400 hover:text-red-400 hover:border-red-900 transition-colors"
+                    className="rounded-lg border border-zinc-700 bg-zinc-900 p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-zinc-400 hover:text-red-400 hover:border-red-900 transition-colors"
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -500,14 +500,14 @@ export function ImageGenerateTab({
           <button
             onClick={() => addSlot('subject')}
             disabled={productSets.length === 0}
-            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 min-h-[44px] inline-flex items-center justify-center text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             + Add subject
           </button>
           <button
             onClick={() => addSlot('texture')}
             disabled={textureSets.length === 0}
-            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 min-h-[44px] inline-flex items-center justify-center text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             + Add texture
           </button>
@@ -557,11 +557,11 @@ export function ImageGenerateTab({
           onChange={(e) => setPrompt(e.target.value)}
         />
 
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3">
           <button
             onClick={handleRefine}
             disabled={aiLoading || !prompt.trim()}
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2.5 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-[44px]"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2.5 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-[44px]"
           >
             {aiLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -573,7 +573,7 @@ export function ImageGenerateTab({
           <button
             onClick={handleSuggest}
             disabled={aiLoading}
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2.5 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-[44px]"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2.5 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-[44px]"
           >
             {aiLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -585,7 +585,7 @@ export function ImageGenerateTab({
           <button
             onClick={() => setShowSaveTemplate(true)}
             disabled={!prompt.trim() || savingTemplate}
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2.5 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-[44px]"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2.5 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-[44px]"
           >
             <Save className="h-4 w-4" />
             Save as Template
@@ -681,7 +681,7 @@ export function ImageGenerateTab({
       <section className="space-y-3">
         <button
           onClick={() => setPhotoSettingsExpanded((prev) => !prev)}
-          className="flex w-full items-center justify-between text-left"
+          className="flex w-full min-h-[44px] items-center justify-between text-left"
         >
           <h2 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
             <Camera className="h-4 w-4 text-zinc-400" />
