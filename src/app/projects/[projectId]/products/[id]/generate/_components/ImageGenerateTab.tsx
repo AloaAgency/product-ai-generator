@@ -11,12 +11,14 @@ import {
   Image as ImageIcon,
   Play,
   ChevronDown,
+  ChevronUp,
   Settings,
   Camera,
   Save,
   X,
   Plus,
   Minus,
+  Check,
 } from 'lucide-react'
 import { PromptEnhancements } from './PromptEnhancements'
 import { ReferenceImagePicker } from './ReferenceImagePicker'
@@ -34,6 +36,8 @@ type RefSlot = {
   image_count_input: string
   manual: boolean
   subject_label: string
+  selected_image_ids: string[]
+  picker_open: boolean
 }
 
 export type InitialReferenceSetSelection = {
@@ -62,25 +66,65 @@ const parseSlotImageCount = (value: string): number | null => {
   return Math.min(MAX_TOTAL_REFERENCE_IMAGES, parsed)
 }
 
-// Spread the 14-image budget across slots the user hasn't manually adjusted.
-// Manual slots keep their value; unlocked slots split what's left as evenly as possible
-// (remainder lands on the earliest unlocked slots), with a floor of 1 each.
-const distributeBudget = (slots: RefSlot[]): RefSlot[] => {
-  const unlockedCount = slots.reduce((n, s) => (s.manual ? n : n + 1), 0)
-  if (unlockedCount === 0) return slots
+const slotContribution = (s: RefSlot): number => {
+  if (s.selected_image_ids.length > 0) return s.selected_image_ids.length
+  return parseSlotImageCount(s.image_count_input) ?? 0
+}
+
+// Spread the 14-image budget across slots the user hasn't manually adjusted, while
+// capping each unlocked slot at its reference set's available image count. So if
+// Set A has 14 images and Set B has 1, B fills to 1 and A absorbs the remaining 13.
+// availableBySetId may be empty/partial — slots without a known cap are treated as
+// effectively unlimited (capped only by the total budget).
+const distributeBudget = (
+  slots: RefSlot[],
+  availableBySetId: Map<string, number | undefined>,
+): RefSlot[] => {
+  const isLocked = (s: RefSlot) => s.manual || s.selected_image_ids.length > 0
+  const unlocked = slots.map((s, i) => ({ s, i })).filter(({ s }) => !isLocked(s))
+  if (unlocked.length === 0) return slots
+
   const lockedTotal = slots.reduce(
-    (sum, s) => (s.manual ? sum + (parseSlotImageCount(s.image_count_input) ?? 0) : sum),
+    (sum, s) => (isLocked(s) ? sum + slotContribution(s) : sum),
     0,
   )
-  const remaining = Math.max(0, MAX_TOTAL_REFERENCE_IMAGES - lockedTotal)
-  const base = Math.floor(remaining / unlockedCount)
-  const extra = remaining - base * unlockedCount
-  let unlockedIdx = 0
-  return slots.map((s) => {
-    if (s.manual) return s
-    const idx = unlockedIdx++
-    const count = Math.max(1, base + (idx < extra ? 1 : 0))
-    return { ...s, image_count_input: String(count) }
+  let remaining = Math.max(0, MAX_TOTAL_REFERENCE_IMAGES - lockedTotal)
+
+  // Water-fill: give each unlocked slot at least 1 (if possible), then distribute
+  // the rest, never exceeding the set's available count.
+  const cap = (setId: string) => {
+    const a = availableBySetId.get(setId)
+    return a == null ? MAX_TOTAL_REFERENCE_IMAGES : Math.max(0, a)
+  }
+  const targets = new Map<number, number>()
+  for (const { i, s } of unlocked) {
+    const want = Math.min(1, cap(s.reference_set_id))
+    const give = Math.min(want, remaining)
+    targets.set(i, give)
+    remaining -= give
+  }
+  while (remaining > 0) {
+    const openIdx = unlocked.filter(({ i, s }) => (targets.get(i) ?? 0) < cap(s.reference_set_id))
+    if (openIdx.length === 0) break
+    const base = Math.max(1, Math.floor(remaining / openIdx.length))
+    let progressed = false
+    for (const { i, s } of openIdx) {
+      if (remaining <= 0) break
+      const room = cap(s.reference_set_id) - (targets.get(i) ?? 0)
+      const give = Math.min(base, room, remaining)
+      if (give > 0) {
+        targets.set(i, (targets.get(i) ?? 0) + give)
+        remaining -= give
+        progressed = true
+      }
+    }
+    if (!progressed) break
+  }
+
+  return slots.map((s, i) => {
+    if (isLocked(s)) return s
+    const t = targets.get(i) ?? 0
+    return { ...s, image_count_input: t > 0 ? String(t) : '' }
   })
 }
 
@@ -92,12 +136,14 @@ export function ImageGenerateTab({
   const {
     promptTemplates,
     referenceSets,
+    referenceImages,
     currentJob,
     currentProduct,
     aiLoading,
     fetchPromptTemplates,
     createPromptTemplate,
     fetchReferenceSets,
+    fetchReferenceImages,
     startGeneration,
     fetchJobStatus,
     retryGenerationJob,
@@ -203,6 +249,14 @@ export function ImageGenerateTab({
     [referenceSets]
   )
 
+  const availableBySetId = useMemo(() => {
+    const m = new Map<string, number | undefined>()
+    for (const [setId, imgs] of Object.entries(referenceImages)) {
+      m.set(setId, imgs?.length ?? 0)
+    }
+    return m
+  }, [referenceImages])
+
   // Seed slots once the reference set catalog has loaded. Prefer initialReferenceSets from the
   // regenerate URL flow; otherwise default to a single subject slot pointed at the active set.
   useEffect(() => {
@@ -223,6 +277,8 @@ export function ImageGenerateTab({
           image_count_input: sel.image_count != null ? String(sel.image_count) : '',
           manual: sel.image_count != null,
           subject_label: sel.subject_label ?? '',
+          selected_image_ids: [],
+          picker_open: false,
         })
       }
     }
@@ -235,11 +291,37 @@ export function ImageGenerateTab({
         image_count_input: '',
         manual: false,
         subject_label: '',
+        selected_image_ids: [],
+        picker_open: false,
       })
     }
-    setRefSlots(distributeBudget(hydrated))
+    setRefSlots(distributeBudget(hydrated, new Map()))
     setDidInitRefSlots(true)
   }, [referenceSets, productSets, textureSets, initialReferenceSets, didInitRefSlots])
+
+  // Eagerly fetch images for each referenced set so we know the available count
+  // (drives auto-distribute caps) and can render the picker without a click delay.
+  useEffect(() => {
+    const seen = new Set<string>()
+    for (const s of refSlots) {
+      if (!s.reference_set_id || seen.has(s.reference_set_id)) continue
+      seen.add(s.reference_set_id)
+      if (!(s.reference_set_id in referenceImages)) {
+        fetchReferenceImages(productId, s.reference_set_id)
+      }
+    }
+  }, [refSlots, referenceImages, productId, fetchReferenceImages])
+
+  // When new available counts arrive, re-balance unlocked slots to honor caps
+  // (e.g. 14+1 should auto-shift from 7/7 → 13/1 once we know B only has 1 image).
+  useEffect(() => {
+    if (!didInitRefSlots) return
+    setRefSlots((prev) => {
+      const next = distributeBudget(prev, availableBySetId)
+      const changed = next.some((s, i) => s.image_count_input !== prev[i]?.image_count_input)
+      return changed ? next : prev
+    })
+  }, [availableBySetId, didInitRefSlots])
 
   // Poll job status
   useEffect(() => {
@@ -364,16 +446,28 @@ export function ImageGenerateTab({
     return Math.min(100, parsed)
   }
   const variationCountValue = parseVariationCount(variationCountInput)
-  const slotImageCounts = refSlots.map((s) => parseSlotImageCount(s.image_count_input))
+  const slotImageCounts = refSlots.map((s) => {
+    if (s.selected_image_ids.length > 0) return s.selected_image_ids.length
+    return parseSlotImageCount(s.image_count_input)
+  })
   const totalImageCount = slotImageCounts.reduce<number>((sum, n) => sum + (n ?? 0), 0)
   const subjectSlotCount = refSlots.filter((s) => s.role === 'subject').length
 
   const buildRefSetsPayload = (slots: RefSlot[]) => {
     const payload = slots.map((slot) => {
       if (!slot.reference_set_id) return null
+      const label = slot.role === 'subject' ? slot.subject_label.trim().slice(0, MAX_SUBJECT_LABEL_LEN) : ''
+      if (slot.selected_image_ids.length > 0) {
+        return {
+          reference_set_id: slot.reference_set_id,
+          role: slot.role,
+          image_count: slot.selected_image_ids.length,
+          image_ids: [...slot.selected_image_ids],
+          subject_label: label ? label : null,
+        }
+      }
       const count = parseSlotImageCount(slot.image_count_input)
       if (count == null) return null
-      const label = slot.role === 'subject' ? slot.subject_label.trim().slice(0, MAX_SUBJECT_LABEL_LEN) : ''
       return {
         reference_set_id: slot.reference_set_id,
         role: slot.role,
@@ -388,37 +482,59 @@ export function ImageGenerateTab({
   const updateSlot = (key: string, patch: Partial<Omit<RefSlot, 'key'>>) => {
     setRefSlots((prev) => prev.map((s) => (s.key === key ? { ...s, ...patch } : s)))
   }
+  // Changing the underlying set invalidates any image-id selection — IDs are
+  // bound to the previous set's images. Reset selection to keep state consistent.
+  const changeSlotReferenceSet = (key: string, referenceSetId: string) => {
+    setRefSlots((prev) =>
+      distributeBudget(
+        prev.map((s) =>
+          s.key === key
+            ? { ...s, reference_set_id: referenceSetId, selected_image_ids: [] }
+            : s,
+        ),
+        availableBySetId,
+      ),
+    )
+  }
   const removeSlot = (key: string) => {
-    setRefSlots((prev) => distributeBudget(prev.filter((s) => s.key !== key)))
+    setRefSlots((prev) => distributeBudget(prev.filter((s) => s.key !== key), availableBySetId))
   }
   const addSlot = (role: RefSlotRole) => {
     const pool = role === 'subject' ? productSets : textureSets
     if (pool.length === 0) return
     const first = pool[0]
     setRefSlots((prev) =>
-      distributeBudget([
-        ...prev,
-        {
-          key: nextSlotKey(),
-          reference_set_id: first.id,
-          role,
-          image_count_input: '',
-          manual: false,
-          subject_label: '',
-        },
-      ]),
+      distributeBudget(
+        [
+          ...prev,
+          {
+            key: nextSlotKey(),
+            reference_set_id: first.id,
+            role,
+            image_count_input: '',
+            manual: false,
+            subject_label: '',
+            selected_image_ids: [],
+            picker_open: false,
+          },
+        ],
+        availableBySetId,
+      ),
     )
   }
+  const currentTotal = totalImageCount
   const incrementSlot = (key: string) => {
     setRefSlots((prev) =>
       prev.map((s) => {
         if (s.key !== key) return s
+        if (s.selected_image_ids.length > 0) return s // selection drives count
         const current = parseSlotImageCount(s.image_count_input) ?? 0
-        return {
-          ...s,
-          image_count_input: String(Math.min(MAX_TOTAL_REFERENCE_IMAGES, current + 1)),
-          manual: true,
-        }
+        const available = availableBySetId.get(s.reference_set_id) ?? MAX_TOTAL_REFERENCE_IMAGES
+        const otherTotal = currentTotal - current
+        const ceiling = Math.min(MAX_TOTAL_REFERENCE_IMAGES - otherTotal, available)
+        const next = Math.min(ceiling, current + 1)
+        if (next <= current) return s
+        return { ...s, image_count_input: String(next), manual: true }
       }),
     )
   }
@@ -426,6 +542,7 @@ export function ImageGenerateTab({
     setRefSlots((prev) =>
       prev.map((s) => {
         if (s.key !== key) return s
+        if (s.selected_image_ids.length > 0) return s
         const current = parseSlotImageCount(s.image_count_input) ?? 1
         return {
           ...s,
@@ -436,7 +553,60 @@ export function ImageGenerateTab({
     )
   }
   const splitEvenly = () => {
-    setRefSlots((prev) => distributeBudget(prev.map((s) => ({ ...s, manual: false }))))
+    setRefSlots((prev) =>
+      distributeBudget(
+        prev.map((s) => ({ ...s, manual: false, selected_image_ids: [] })),
+        availableBySetId,
+      ),
+    )
+  }
+  const togglePicker = (key: string) => {
+    setRefSlots((prev) =>
+      prev.map((s) => (s.key === key ? { ...s, picker_open: !s.picker_open } : s)),
+    )
+  }
+  const toggleImageSelection = (key: string, imageId: string) => {
+    setRefSlots((prev) =>
+      prev.map((s) => {
+        if (s.key !== key) return s
+        const isSelected = s.selected_image_ids.includes(imageId)
+        if (isSelected) {
+          const nextIds = s.selected_image_ids.filter((id) => id !== imageId)
+          return {
+            ...s,
+            selected_image_ids: nextIds,
+            image_count_input: nextIds.length > 0 ? String(nextIds.length) : s.image_count_input,
+          }
+        }
+        // Reject if adding would push total above the 14-image budget.
+        const slotCurrent = s.selected_image_ids.length > 0
+          ? s.selected_image_ids.length
+          : (parseSlotImageCount(s.image_count_input) ?? 0)
+        const otherTotal = currentTotal - slotCurrent
+        if (otherTotal + s.selected_image_ids.length + 1 > MAX_TOTAL_REFERENCE_IMAGES) {
+          return s
+        }
+        const nextIds = [...s.selected_image_ids, imageId]
+        return {
+          ...s,
+          selected_image_ids: nextIds,
+          image_count_input: String(nextIds.length),
+          manual: true,
+        }
+      }),
+    )
+  }
+  const clearSlotSelection = (key: string) => {
+    setRefSlots((prev) =>
+      distributeBudget(
+        prev.map((s) =>
+          s.key === key
+            ? { ...s, selected_image_ids: [], manual: false, image_count_input: '' }
+            : s,
+        ),
+        availableBySetId,
+      ),
+    )
   }
 
   const failedCount = currentJob?.failed_count ?? 0
@@ -515,6 +685,15 @@ export function ImageGenerateTab({
         <div className="space-y-2">
           {refSlots.map((slot) => {
             const pool = slot.role === 'subject' ? productSets : textureSets
+            const setImages = referenceImages[slot.reference_set_id] ?? []
+            const available = setImages.length
+            const hasSelection = slot.selected_image_ids.length > 0
+            const slotCount = hasSelection
+              ? slot.selected_image_ids.length
+              : (parseSlotImageCount(slot.image_count_input) ?? 0)
+            const otherTotal = totalImageCount - slotCount
+            const remainingBudget = Math.max(0, MAX_TOTAL_REFERENCE_IMAGES - otherTotal)
+            const canIncrement = !hasSelection && slotCount < Math.min(available || MAX_TOTAL_REFERENCE_IMAGES, remainingBudget)
             return (
               <div
                 key={slot.key}
@@ -533,7 +712,7 @@ export function ImageGenerateTab({
                   <div className="relative flex-1 min-w-[180px]">
                     <select
                       value={slot.reference_set_id}
-                      onChange={(e) => updateSlot(slot.key, { reference_set_id: e.target.value })}
+                      onChange={(e) => changeSlotReferenceSet(slot.key, e.target.value)}
                       className="w-full appearance-none rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 pr-9 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
                     >
                       {pool.length === 0 && <option value="">No {slot.role} sets available</option>}
@@ -545,42 +724,62 @@ export function ImageGenerateTab({
                     </select>
                     <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
                   </div>
-                  <div className="flex items-stretch overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900">
-                    <button
-                      type="button"
-                      onClick={() => decrementSlot(slot.key)}
-                      aria-label="Decrease image count"
-                      className="px-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
-                    >
-                      <Minus className="h-3.5 w-3.5" />
-                    </button>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      placeholder="0"
-                      value={slot.image_count_input}
-                      onChange={(e) => {
-                        const v = e.target.value.replace(/[^0-9]/g, '')
-                        updateSlot(slot.key, { image_count_input: v, manual: true })
-                      }}
-                      onBlur={() => {
-                        const parsed = parseSlotImageCount(slot.image_count_input)
-                        if (parsed == null && slot.image_count_input.trim()) {
-                          updateSlot(slot.key, { image_count_input: '1' })
-                        }
-                      }}
-                      className="w-10 bg-transparent px-1 py-2 text-center text-sm text-zinc-100 focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => incrementSlot(slot.key)}
-                      aria-label="Increase image count"
-                      className="px-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
+                  {hasSelection ? (
+                    <div className="inline-flex items-center gap-1 rounded-lg border border-blue-700/60 bg-blue-900/30 px-2.5 py-1.5 text-xs text-blue-200">
+                      <Check className="h-3.5 w-3.5" />
+                      <span>{slot.selected_image_ids.length} picked</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-stretch overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900">
+                      <button
+                        type="button"
+                        onClick={() => decrementSlot(slot.key)}
+                        aria-label="Decrease image count"
+                        className="px-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                      >
+                        <Minus className="h-3.5 w-3.5" />
+                      </button>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        placeholder="0"
+                        value={slot.image_count_input}
+                        onChange={(e) => {
+                          const v = e.target.value.replace(/[^0-9]/g, '')
+                          updateSlot(slot.key, { image_count_input: v, manual: true })
+                        }}
+                        onBlur={() => {
+                          const parsed = parseSlotImageCount(slot.image_count_input)
+                          if (parsed == null && slot.image_count_input.trim()) {
+                            updateSlot(slot.key, { image_count_input: '1' })
+                            return
+                          }
+                          // Clamp on blur so typed values can't exceed available count
+                          // or the remaining 14-image budget.
+                          if (parsed != null) {
+                            const ceiling = Math.max(1, Math.min(
+                              available || MAX_TOTAL_REFERENCE_IMAGES,
+                              remainingBudget + slotCount,
+                            ))
+                            if (parsed > ceiling) {
+                              updateSlot(slot.key, { image_count_input: String(ceiling) })
+                            }
+                          }
+                        }}
+                        className="w-10 bg-transparent px-1 py-2 text-center text-sm text-zinc-100 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => incrementSlot(slot.key)}
+                        disabled={!canIncrement}
+                        aria-label="Increase image count"
+                        className="px-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
                   <button
                     onClick={() => removeSlot(slot.key)}
                     aria-label="Remove reference set"
@@ -600,6 +799,77 @@ export function ImageGenerateTab({
                       className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
                     />
                   </div>
+                )}
+
+                {/* Picker toggle */}
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => togglePicker(slot.key)}
+                    className="inline-flex items-center gap-1 text-xs text-zinc-400 transition-colors hover:text-zinc-200"
+                  >
+                    {slot.picker_open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                    {hasSelection
+                      ? `Picked ${slot.selected_image_ids.length} of ${available || '?'}`
+                      : available > 0
+                        ? `Pick specific images (${available} available)`
+                        : 'Pick specific images'}
+                  </button>
+                  {hasSelection && (
+                    <button
+                      type="button"
+                      onClick={() => clearSlotSelection(slot.key)}
+                      className="text-xs text-zinc-500 underline-offset-2 transition-colors hover:text-zinc-200 hover:underline"
+                    >
+                      Clear selection
+                    </button>
+                  )}
+                </div>
+
+                {slot.picker_open && (
+                  setImages.length === 0 ? (
+                    <p className="text-xs text-zinc-500">
+                      {slot.reference_set_id in referenceImages
+                        ? 'No images in this set yet.'
+                        : 'Loading images…'}
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-7">
+                      {setImages.map((img) => {
+                        const selectionIdx = slot.selected_image_ids.indexOf(img.id)
+                        const selected = selectionIdx >= 0
+                        const wouldExceedBudget = !selected && otherTotal + slot.selected_image_ids.length + 1 > MAX_TOTAL_REFERENCE_IMAGES
+                        const disabled = wouldExceedBudget
+                        return (
+                          <button
+                            key={img.id}
+                            type="button"
+                            onClick={() => toggleImageSelection(slot.key, img.id)}
+                            disabled={disabled}
+                            className={`group relative aspect-square overflow-hidden rounded-md border transition-colors ${
+                              selected
+                                ? 'border-blue-500 ring-2 ring-blue-500/60'
+                                : 'border-zinc-700 hover:border-zinc-500'
+                            } ${disabled ? 'opacity-30 cursor-not-allowed' : ''}`}
+                          >
+                            {img.public_url ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={img.public_url} alt="" className="h-full w-full object-cover" />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center bg-zinc-900">
+                                <ImageIcon className="h-5 w-5 text-zinc-600" />
+                              </div>
+                            )}
+                            {selected && (
+                              <div className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-blue-500 text-[10px] font-semibold text-white">
+                                {selectionIdx + 1}
+                              </div>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )
                 )}
               </div>
             )

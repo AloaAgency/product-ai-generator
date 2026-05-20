@@ -20,8 +20,11 @@ type ReferenceSetSelection = {
   reference_set_id: string
   role: 'subject' | 'texture'
   image_count: number | null
+  image_ids: string[] | null
   subject_label: string | null
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function parseReferenceSetsInput(input: unknown): { sets: ReferenceSetSelection[] } | { error: string } {
   if (!Array.isArray(input) || input.length === 0) {
@@ -40,6 +43,25 @@ function parseReferenceSetsInput(input: unknown): { sets: ReferenceSetSelection[
     if (!refId) return { error: `reference_sets[${i}].reference_set_id is required` }
     if (r.role !== 'subject' && r.role !== 'texture') {
       return { error: `reference_sets[${i}].role must be "subject" or "texture"` }
+    }
+    let imageIds: string[] | null = null
+    if (r.image_ids != null) {
+      if (!Array.isArray(r.image_ids)) {
+        return { error: `reference_sets[${i}].image_ids must be an array of UUIDs` }
+      }
+      const ids: string[] = []
+      const seen = new Set<string>()
+      for (const v of r.image_ids) {
+        if (typeof v !== 'string' || !UUID_RE.test(v)) {
+          return { error: `reference_sets[${i}].image_ids must contain UUID strings` }
+        }
+        if (seen.has(v)) {
+          return { error: `reference_sets[${i}].image_ids must not contain duplicates` }
+        }
+        seen.add(v)
+        ids.push(v)
+      }
+      if (ids.length > 0) imageIds = ids
     }
     let imageCount: number | null = null
     if (r.image_count != null) {
@@ -60,7 +82,13 @@ function parseReferenceSetsInput(input: unknown): { sets: ReferenceSetSelection[
     if (r.role === 'texture' && subjectLabel) {
       return { error: `reference_sets[${i}].subject_label only applies to subject sets` }
     }
-    sets.push({ reference_set_id: refId, role: r.role, image_count: imageCount, subject_label: subjectLabel })
+    sets.push({
+      reference_set_id: refId,
+      role: r.role,
+      image_count: imageCount,
+      image_ids: imageIds,
+      subject_label: subjectLabel,
+    })
   }
   if (!sets.some(s => s.role === 'subject')) {
     return { error: 'reference_sets must include at least one subject set' }
@@ -230,20 +258,38 @@ export async function POST(
     }
 
     const finalCounts: number[] = []
+    const finalSelectedIds: (string[] | null)[] = []
     let totalImages = 0
     for (let i = 0; i < parsedRefSets.length; i += 1) {
       const ps = parsedRefSets[i]
-      const available = imagesBySetId.get(ps.reference_set_id)?.length ?? 0
-      const requested = ps.image_count ?? available
-      const final = Math.max(0, Math.min(requested, available))
-      if (final === 0) {
-        return NextResponse.json(
-          { error: `reference_sets[${i}] has no available images` },
-          { status: 400 }
-        )
+      const setImages = imagesBySetId.get(ps.reference_set_id) ?? []
+      const available = setImages.length
+      if (ps.image_ids && ps.image_ids.length > 0) {
+        const validIds = new Set(setImages.map(img => img.id))
+        for (const imgId of ps.image_ids) {
+          if (!validIds.has(imgId)) {
+            return NextResponse.json(
+              { error: `reference_sets[${i}].image_ids contains "${imgId}" which is not in the set` },
+              { status: 400 }
+            )
+          }
+        }
+        finalSelectedIds.push([...ps.image_ids])
+        finalCounts.push(ps.image_ids.length)
+        totalImages += ps.image_ids.length
+      } else {
+        const requested = ps.image_count ?? available
+        const final = Math.max(0, Math.min(requested, available))
+        if (final === 0) {
+          return NextResponse.json(
+            { error: `reference_sets[${i}] has no available images` },
+            { status: 400 }
+          )
+        }
+        finalSelectedIds.push(null)
+        finalCounts.push(final)
+        totalImages += final
       }
-      finalCounts.push(final)
-      totalImages += final
     }
     if (totalImages > MAX_TOTAL_REFERENCE_IMAGES) {
       return NextResponse.json(
@@ -315,6 +361,7 @@ export async function POST(
         role: ps.role,
         display_order: i,
         image_count: finalCounts[i],
+        selected_image_ids: finalSelectedIds[i],
         subject_label: ps.subject_label,
       }))
       const { error: joinError } = await supabase

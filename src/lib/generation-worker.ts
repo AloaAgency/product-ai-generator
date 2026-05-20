@@ -59,6 +59,7 @@ type JobReferenceSetRow = {
   role: 'subject' | 'texture'
   display_order: number
   image_count: number | null
+  selected_image_ids: string[] | null
 }
 
 type WorkerReferenceImage = Pick<ReferenceImage, 'id' | 'reference_set_id' | 'storage_path' | 'mime_type' | 'display_order'>
@@ -399,7 +400,7 @@ async function fetchJobReferenceSetRows(
 ): Promise<JobReferenceSetRow[]> {
   const { data, error } = await supabase
     .from(T.generation_job_reference_sets)
-    .select('reference_set_id, role, display_order, image_count')
+    .select('reference_set_id, role, display_order, image_count, selected_image_ids')
     .eq('job_id', jobId)
     .order('display_order', { ascending: true })
 
@@ -461,6 +462,19 @@ function limitReferenceImages(
 ): WorkerReferenceImage[] {
   const maxImages = limit ?? images.length
   return images.slice(0, maxImages)
+}
+
+function pickReferenceImagesByIds(
+  images: WorkerReferenceImage[],
+  selectedIds: string[]
+): WorkerReferenceImage[] {
+  const byId = new Map(images.map((img) => [img.id, img]))
+  const picked: WorkerReferenceImage[] = []
+  for (const id of selectedIds) {
+    const img = byId.get(id)
+    if (img) picked.push(img)
+  }
+  return picked
 }
 
 async function getCurrentJobCounts(
@@ -599,7 +613,11 @@ async function loadImageJobResources(
   const orderedReferenceImages: WorkerReferenceImage[] = []
   for (const row of jobRefSets) {
     const setImages = imagesBySet.get(row.reference_set_id) ?? []
-    orderedReferenceImages.push(...limitReferenceImages(setImages, row.image_count))
+    if (row.selected_image_ids && row.selected_image_ids.length > 0) {
+      orderedReferenceImages.push(...pickReferenceImagesByIds(setImages, row.selected_image_ids))
+    } else {
+      orderedReferenceImages.push(...limitReferenceImages(setImages, row.image_count))
+    }
   }
 
   const [geminiApiKey, referenceImages] = await Promise.all([
