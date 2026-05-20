@@ -149,7 +149,7 @@ export async function middleware(request: NextRequest) {
       new NextResponse(loginPage(showError, pathname), {
         status: 200,
         headers: {
-          'content-type': 'text/html',
+          'content-type': 'text/html; charset=utf-8',
           'cache-control': 'no-store',
         },
       })
@@ -162,9 +162,9 @@ export async function middleware(request: NextRequest) {
     console.error('[Middleware] Unexpected error', err)
     if (pathname.startsWith('/api/')) {
       return withSecurityHeaders(
-        new NextResponse(
-          JSON.stringify({ error: 'Service unavailable' }),
-          { status: 503, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }
+        NextResponse.json(
+          { error: 'Service unavailable' },
+          { status: 503, headers: { 'cache-control': 'no-store' } }
         )
       )
     }
