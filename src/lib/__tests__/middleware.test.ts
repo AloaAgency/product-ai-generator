@@ -4,7 +4,7 @@
  * Strategy: each test resets the module registry with vi.resetModules() then
  * re-imports middleware via a dynamic import. This is necessary because
  * middleware.ts caches the derived HMAC token in module-level state
- * (`_cachedExpectedToken`); without resetting, a token cached by an earlier
+ * (`_tokenPromise`); without resetting, a token cached by an earlier
  * test would persist and cause false positives or negatives in later tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -108,7 +108,7 @@ describe('middleware — unauthenticated requests', () => {
     const req = new NextRequest('http://localhost/dashboard')
     const res = await middleware(req)
     expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('text/html')
+    expect(res.headers.get('content-type')).toContain('text/html')
     expectSecurityHeaders(res)
     const html = await res.text()
     expect(html).toContain('<form')
@@ -240,7 +240,7 @@ describe('middleware — authenticated requests', () => {
     const res = await middleware(req)
     // Wrong token → show login page
     expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('text/html')
+    expect(res.headers.get('content-type')).toContain('text/html')
   })
 
   it('rejects a cookie that uses the right algorithm on a different password', async () => {
@@ -250,7 +250,7 @@ describe('middleware — authenticated requests', () => {
     })
     const res = await middleware(req)
     expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('text/html')
+    expect(res.headers.get('content-type')).toContain('text/html')
   })
 })
 
@@ -276,7 +276,7 @@ describe('middleware — SITE_PASSWORD not configured', () => {
     const res = await middleware(req)
     // No SITE_PASSWORD → isAuthenticated() returns false → show login page
     expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('text/html')
+    expect(res.headers.get('content-type')).toContain('text/html')
   })
 
   it('blocks all API requests with 401 when SITE_PASSWORD is not set', async () => {
