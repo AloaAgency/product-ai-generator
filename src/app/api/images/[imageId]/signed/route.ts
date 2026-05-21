@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { requireUuid } from '@/lib/request-guards'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 
@@ -11,12 +12,13 @@ export async function GET(
   const { imageId } = await params
 
   try {
+    const sanitizedImageId = requireUuid(imageId, 'image id')
     const supabase = createServiceClient()
 
     const { data: image, error } = await supabase
       .from(T.generated_images)
       .select('*')
-      .eq('id', imageId)
+      .eq('id', sanitizedImageId)
       .single()
 
     if (error || !image) {
@@ -52,7 +54,7 @@ export async function GET(
         ])
 
     return NextResponse.json({
-      image_id: imageId,
+      image_id: sanitizedImageId,
       signed_url: signedUrl,
       thumb_signed_url: thumbSignedUrl,
       preview_signed_url: previewSignedUrl,
