@@ -127,7 +127,8 @@ export async function POST(request: NextRequest) {
       remaining: remaining ?? 0,
       results,
     })
-  } catch {
+  } catch (err) {
+    console.error('[Admin BackfillImageThumbs] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

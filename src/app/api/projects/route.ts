@@ -17,7 +17,8 @@ export async function GET() {
 
     if (error) { console.error('[Projects GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    console.error('[Projects GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -54,7 +55,8 @@ export async function POST(request: NextRequest) {
 
     if (error) { console.error('[Projects POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
-  } catch {
+  } catch (err) {
+    console.error('[Projects POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

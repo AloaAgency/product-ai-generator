@@ -64,13 +64,14 @@ export async function POST(request: NextRequest) {
           .eq('id', img.id)
 
         success++
-      } catch {
-        // Skip individual failures
+      } catch (err) {
+        console.warn('[GenerateThumbs] Skipping image', img.id, ':', err)
       }
     }
 
     return NextResponse.json({ processed: success })
-  } catch {
+  } catch (err) {
+    console.error('[GenerateThumbs] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

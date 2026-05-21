@@ -56,7 +56,10 @@ export async function POST(request: NextRequest) {
 
     // Delete storage files
     if (imagePaths.length > 0) {
-      await supabase.storage.from('generated-images').remove(imagePaths)
+      const { error: storageError } = await supabase.storage.from('generated-images').remove(imagePaths)
+      if (storageError) {
+        console.error('[BulkDelete] Storage deletion failed, orphaned files may remain:', storageError)
+      }
     }
 
     // Delete DB records

@@ -42,7 +42,8 @@ export async function DELETE(
       return NextResponse.json({ error: 'Failed to delete image record' }, { status: 500 })
     }
     return NextResponse.json({ success: true })
-  } catch {
+  } catch (err) {
+    console.error('[ReferenceImageDelete] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
