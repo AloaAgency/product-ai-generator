@@ -109,6 +109,7 @@ export interface GenerationJobReferenceSet {
   role: GenerationJobReferenceSetRole
   display_order: number
   image_count: number | null
+  selected_image_ids: string[] | null
   subject_label: string | null
   created_at: string
 }
