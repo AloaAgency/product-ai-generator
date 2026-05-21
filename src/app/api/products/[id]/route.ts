@@ -18,7 +18,8 @@ export async function GET(
 
     if (error) return NextResponse.json({ error: 'Not found' }, { status: 404 })
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    console.error('[Product GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -50,7 +51,8 @@ export async function PATCH(
 
     if (error) { console.error('[Product PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    console.error('[Product PATCH] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -70,7 +72,8 @@ export async function DELETE(
 
     if (error) { console.error('[Product DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
-  } catch {
+  } catch (err) {
+    console.error('[Product DELETE] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

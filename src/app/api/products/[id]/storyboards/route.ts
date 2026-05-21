@@ -18,7 +18,8 @@ export async function GET(
 
     if (error) { console.error('[Storyboards GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data || [])
-  } catch {
+  } catch (err) {
+    console.error('[Storyboards GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -56,7 +57,8 @@ export async function POST(
 
     if (error) { console.error('[Storyboards POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
-  } catch {
+  } catch (err) {
+    console.error('[Storyboards POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

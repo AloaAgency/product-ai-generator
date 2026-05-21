@@ -187,7 +187,8 @@ export async function POST(
     }
 
     return NextResponse.json(results, { status: 201 })
-  } catch {
+  } catch (err) {
+    console.error('[ReferenceImages POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -232,7 +233,8 @@ export async function GET(
     }))
 
     return NextResponse.json(images)
-  } catch {
+  } catch (err) {
+    console.error('[ReferenceImages GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

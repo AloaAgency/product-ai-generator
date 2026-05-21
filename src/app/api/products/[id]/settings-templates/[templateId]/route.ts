@@ -50,7 +50,8 @@ export async function PATCH(
     }
 
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    console.error('[SettingsTemplate PATCH] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -71,7 +72,8 @@ export async function DELETE(
 
     if (error) { console.error('[SettingsTemplate DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
-  } catch {
+  } catch (err) {
+    console.error('[SettingsTemplate DELETE] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

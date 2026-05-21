@@ -55,7 +55,8 @@ export async function POST(
       errors,
       results,
     })
-  } catch {
+  } catch (err) {
+    console.error('[ReferenceImagesCompress] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

@@ -29,7 +29,8 @@ export async function GET(
     const { data, error } = await query
     if (error) { console.error('[Scenes GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    console.error('[Scenes GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -94,7 +95,8 @@ export async function POST(
 
     if (error) { console.error('[Scenes POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
-  } catch {
+  } catch (err) {
+    console.error('[Scenes POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

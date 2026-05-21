@@ -70,7 +70,8 @@ export async function POST(request: NextRequest) {
       errors,
       results,
     })
-  } catch {
+  } catch (err) {
+    console.error('[Admin CompressReferences] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
