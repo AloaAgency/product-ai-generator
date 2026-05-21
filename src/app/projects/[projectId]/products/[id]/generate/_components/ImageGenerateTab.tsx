@@ -142,6 +142,7 @@ export function ImageGenerateTab({
     aiLoading,
     fetchPromptTemplates,
     createPromptTemplate,
+    updatePromptTemplate,
     fetchReferenceSets,
     fetchReferenceImages,
     startGeneration,
@@ -168,6 +169,7 @@ export function ImageGenerateTab({
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
   const [templateName, setTemplateName] = useState('')
   const [savingTemplate, setSavingTemplate] = useState(false)
+  const [loadedTemplateId, setLoadedTemplateId] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
@@ -357,6 +359,40 @@ export function ImageGenerateTab({
   const handleSuggest = async () => {
     const results = await suggestPrompts(productId)
     setSuggestions(results)
+  }
+
+  const loadedTemplate = useMemo(
+    () => (loadedTemplateId ? promptTemplates.find((t) => t.id === loadedTemplateId) ?? null : null),
+    [loadedTemplateId, promptTemplates]
+  )
+
+  const openSaveTemplate = () => {
+    setTemplateName(loadedTemplate?.name ?? '')
+    setShowSaveTemplate(true)
+  }
+
+  const handleSaveTemplate = async ({ asNew }: { asNew: boolean }) => {
+    const name = templateName.trim()
+    if (!name) return
+    setSavingTemplate(true)
+    try {
+      if (!asNew && loadedTemplate) {
+        await updatePromptTemplate(productId, loadedTemplate.id, {
+          name,
+          prompt_text: prompt,
+        })
+      } else {
+        const created = await createPromptTemplate(productId, {
+          name,
+          prompt_text: prompt,
+        })
+        if (created?.id) setLoadedTemplateId(created.id)
+      }
+      setTemplateName('')
+      setShowSaveTemplate(false)
+    } finally {
+      setSavingTemplate(false)
+    }
   }
 
   const handleGenerate = async () => {
@@ -910,10 +946,13 @@ export function ImageGenerateTab({
           <div className="relative">
             <select
               className="w-full appearance-none rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2.5 pr-10 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
-              defaultValue=""
+              value={loadedTemplateId ?? ''}
               onChange={(e) => {
                 const tmpl = promptTemplates.find((t) => t.id === e.target.value)
-                if (tmpl) setPrompt(tmpl.prompt_text)
+                if (tmpl) {
+                  setPrompt(tmpl.prompt_text)
+                  setLoadedTemplateId(tmpl.id)
+                }
               }}
             >
               <option value="" disabled>
@@ -963,16 +1002,16 @@ export function ImageGenerateTab({
             AI Suggest
           </button>
           <button
-            onClick={() => setShowSaveTemplate(true)}
+            onClick={openSaveTemplate}
             disabled={!prompt.trim() || savingTemplate}
             className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-800 px-4 py-2.5 text-sm font-medium hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-[44px]"
           >
             <Save className="h-4 w-4" />
-            Save as Template
+            {loadedTemplate ? 'Save Template' : 'Save as Template'}
           </button>
         </div>
 
-        {/* Save as Template inline form */}
+        {/* Save Template inline form */}
         {showSaveTemplate && (
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
@@ -984,44 +1023,38 @@ export function ImageGenerateTab({
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && templateName.trim()) {
-                  (async () => {
-                    setSavingTemplate(true)
-                    try {
-                      await createPromptTemplate(productId, {
-                        name: templateName.trim(),
-                        prompt_text: prompt,
-                      })
-                      setTemplateName('')
-                      setShowSaveTemplate(false)
-                    } finally {
-                      setSavingTemplate(false)
-                    }
-                  })()
+                  handleSaveTemplate({ asNew: !loadedTemplate })
                 }
                 if (e.key === 'Escape') setShowSaveTemplate(false)
               }}
             />
             <div className="flex gap-2">
-              <button
-                onClick={async () => {
-                  if (!templateName.trim()) return
-                  setSavingTemplate(true)
-                  try {
-                    await createPromptTemplate(productId, {
-                      name: templateName.trim(),
-                      prompt_text: prompt,
-                    })
-                    setTemplateName('')
-                    setShowSaveTemplate(false)
-                  } finally {
-                    setSavingTemplate(false)
-                  }
-                }}
-                disabled={!templateName.trim() || savingTemplate}
-                className="flex-1 sm:flex-none inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors min-h-[44px]"
-              >
-                {savingTemplate ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
-              </button>
+              {loadedTemplate ? (
+                <>
+                  <button
+                    onClick={() => handleSaveTemplate({ asNew: false })}
+                    disabled={!templateName.trim() || savingTemplate}
+                    className="flex-1 sm:flex-none inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors min-h-[44px]"
+                  >
+                    {savingTemplate ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Update'}
+                  </button>
+                  <button
+                    onClick={() => handleSaveTemplate({ asNew: true })}
+                    disabled={!templateName.trim() || savingTemplate}
+                    className="flex-1 sm:flex-none inline-flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200 hover:bg-zinc-700 disabled:opacity-40 transition-colors min-h-[44px]"
+                  >
+                    Save as New
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => handleSaveTemplate({ asNew: true })}
+                  disabled={!templateName.trim() || savingTemplate}
+                  className="flex-1 sm:flex-none inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors min-h-[44px]"
+                >
+                  {savingTemplate ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+                </button>
+              )}
               <button
                 onClick={() => setShowSaveTemplate(false)}
                 className="flex-1 sm:flex-none rounded-lg border border-zinc-700 px-4 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 transition-colors min-h-[44px]"
