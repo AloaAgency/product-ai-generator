@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { createThumbnail, buildThumbnailPath } from '@/lib/image-utils'
+import { isUuid } from '@/lib/request-guards'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -23,6 +24,9 @@ export async function POST(request: NextRequest) {
     const imageIds: string[] = body.image_ids
     if (!Array.isArray(imageIds) || imageIds.length === 0) {
       return NextResponse.json({ error: 'image_ids required' }, { status: 400 })
+    }
+    if (imageIds.some((id) => typeof id !== 'string' || !isUuid(id))) {
+      return NextResponse.json({ error: 'image_ids must be valid UUIDs' }, { status: 400 })
     }
 
     const supabase = createServiceClient()
