@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { compressReferenceImage, CompressResult } from '@/lib/image-utils'
 import { T } from '@/lib/db-tables'
+import { sanitizePublicErrorMessage } from '@/lib/request-guards'
 
 const BUCKET = 'reference-images'
 
@@ -43,7 +44,7 @@ export async function processReferenceImageCompression(
       wasCompressed: false,
       originalSize: 0,
       compressedSize: 0,
-      error: downloadError?.message ?? 'Download failed',
+      error: sanitizePublicErrorMessage(downloadError?.message ?? 'Download failed', { fallback: 'Download failed' }),
     }
   }
 
@@ -56,7 +57,9 @@ export async function processReferenceImageCompression(
       wasCompressed: false,
       originalSize: 0,
       compressedSize: 0,
-      error: err instanceof Error ? err.message : 'Buffer conversion failed',
+      error: err instanceof Error
+        ? sanitizePublicErrorMessage(err.message, { fallback: 'Buffer conversion failed' })
+        : 'Buffer conversion failed',
     }
   }
 
@@ -69,7 +72,9 @@ export async function processReferenceImageCompression(
       wasCompressed: false,
       originalSize: buffer.length,
       compressedSize: buffer.length,
-      error: err instanceof Error ? err.message : 'Compression failed',
+      error: err instanceof Error
+        ? sanitizePublicErrorMessage(err.message, { fallback: 'Compression failed' })
+        : 'Compression failed',
     }
   }
 
@@ -99,7 +104,7 @@ export async function processReferenceImageCompression(
       wasCompressed: false,
       originalSize: result.originalSize,
       compressedSize: result.compressedSize,
-      error: uploadError.message ?? 'Upload failed',
+      error: sanitizePublicErrorMessage(uploadError?.message ?? 'Upload failed', { fallback: 'Upload failed' }),
     }
   }
 
@@ -121,7 +126,7 @@ export async function processReferenceImageCompression(
       originalSize: result.originalSize,
       compressedSize: result.compressedSize,
       newStoragePath,
-      error: dbError.message ?? 'DB update failed',
+      error: sanitizePublicErrorMessage(dbError?.message ?? 'DB update failed', { fallback: 'DB update failed' }),
     }
   }
 
