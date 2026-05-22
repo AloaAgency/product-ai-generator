@@ -252,6 +252,21 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   }
   const compressed = await pipeline.webp({ quality: 90 }).toBuffer()
 
+  // Only replace the original when the output is actually smaller. Re-encoding
+  // an already-optimised file (e.g. a small PNG or a high-quality WebP) can
+  // produce a larger output, which would inflate storage and trigger a needless
+  // DB update without any benefit.
+  if (compressed.length >= originalSize) {
+    return {
+      buffer,
+      mimeType: (meta.format && FORMAT_MIME_MAP[meta.format]) ?? 'application/octet-stream',
+      extension: meta.format ?? 'bin',
+      originalSize,
+      compressedSize: originalSize,
+      wasCompressed: false,
+    }
+  }
+
   return {
     buffer: compressed,
     mimeType: 'image/webp',
