@@ -42,6 +42,14 @@ const STYLE_PROMPT_KEYS: ReadonlyArray<keyof GlobalStyleSettings> = [
 ]
 
 /**
+ * Truncate, sanitize double-quotes, and strip newlines from a field before AI interpolation.
+ * Used by both prompt-building functions so they enforce identical injection / payload limits.
+ */
+function sanitizeField(value: string, maxLen: number): string {
+  return value.slice(0, maxLen).replace(/"/g, '″').replace(/[\r\n]/g, ' ')
+}
+
+/**
  * Build a bullet-point style block from settings.
  * Only includes fields from the safe allowlist — API keys, internal IDs,
  * and non-visual fields are never interpolated into AI prompts.
@@ -52,7 +60,7 @@ export function buildStyleBlock(settings: GlobalStyleSettings): string {
       const v = settings[k]
       return typeof v === 'string' && (v as string).trim()
     })
-    .map(k => `• ${k}: ${(settings[k] as string).slice(0, MAX_STYLE_VALUE_LEN)}`)
+    .map(k => `• ${k}: ${(settings[k] as string).trim().slice(0, MAX_STYLE_VALUE_LEN)}`)
     .join('\n')
 }
 
@@ -70,10 +78,8 @@ export function buildRefinedPromptUserMessage(
   settings: GlobalStyleSettings,
   userPrompt: string
 ): string {
-  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN).replace(/"/g, '\u2033').replace(/[\r\n]/g, ' ')
-  const safeDesc = productDescription
-    ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN).replace(/"/g, '\u2033').replace(/[\r\n]/g, ' ')
-    : null
+  const safeName = sanitizeField(productName, MAX_PRODUCT_NAME_LEN)
+  const safeDesc = productDescription ? sanitizeField(productDescription, MAX_PRODUCT_DESC_LEN) : null
   const safePrompt = userPrompt.slice(0, MAX_USER_PROMPT_LEN)
   const styleBlock = buildStyleBlock(settings)
   return (
@@ -194,13 +200,8 @@ export function buildPromptSuggestionSystemPrompt(
   settings: GlobalStyleSettings,
   count: number
 ): string {
-  // Sanitize interpolated fields to prevent prompt injection and oversized API payloads.
-  // Double-quotes are replaced with a typographic alternative so they cannot break out of
-  // the inline "product name" context in the assembled system prompt.
-  const safeName = productName.slice(0, MAX_PRODUCT_NAME_LEN).replace(/"/g, '\u2033').replace(/[\r\n]/g, ' ')
-  const safeDesc = productDescription
-    ? productDescription.slice(0, MAX_PRODUCT_DESC_LEN).replace(/"/g, '\u2033').replace(/[\r\n]/g, ' ')
-    : null
+  const safeName = sanitizeField(productName, MAX_PRODUCT_NAME_LEN)
+  const safeDesc = productDescription ? sanitizeField(productDescription, MAX_PRODUCT_DESC_LEN) : null
   const safeCount = Math.max(1, Math.min(Math.floor(count), MAX_SUGGESTION_COUNT))
 
   const styleBlock = buildStyleBlock(settings)
@@ -240,11 +241,23 @@ export function safeTextFromContent(content: ReadonlyArray<{ type: string; text?
 export function parsePromptSuggestions(raw: string): { name: string; prompt_text: string }[] {
   if (!raw) return []
 
-  // Collect JSON candidates: all code fence contents first, then full raw text.
+  // Collect JSON candidates in priority order:
+  // 1. Code fence contents (Claude sometimes wraps JSON in ```json``` despite instructions).
+  // 2. Outer-brace extract — handles "Here is the JSON: {...}" prose-wrapped responses
+  //    that have no fences. Scanning from first '{' to last '}' avoids a JSON.parse miss
+  //    on the full raw string, preventing a silent empty return that the caller would retry.
+  // 3. Full raw text as final fallback.
   // matchAll internally clones the regex, so CODE_FENCE_RE.lastIndex is not mutated.
+  const fencedCandidates = Array.from(raw.matchAll(CODE_FENCE_RE), m => m[1]?.trim() ?? '').filter(Boolean)
+  const firstBrace = raw.indexOf('{')
+  const lastBrace = raw.lastIndexOf('}')
+  const bracketExtract =
+    firstBrace !== -1 && lastBrace > firstBrace ? raw.slice(firstBrace, lastBrace + 1) : null
+  const rawTrimmed = raw.trim()
   const candidates: string[] = [
-    ...Array.from(raw.matchAll(CODE_FENCE_RE), m => m[1]?.trim() ?? '').filter(Boolean),
-    raw.trim(),
+    ...fencedCandidates,
+    ...(bracketExtract && bracketExtract !== rawTrimmed ? [bracketExtract] : []),
+    rawTrimmed,
   ]
 
   for (const jsonStr of candidates) {
