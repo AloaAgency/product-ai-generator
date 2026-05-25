@@ -575,17 +575,3 @@ describe('extractVideoThumbnail', () => {
     )
   })
 })
-
-// ---------------------------------------------------------------------------
-// extractVideoThumbnail — guard tests (no ffmpeg required)
-// The empty-buffer guard fires before ensureFfmpegPath(), so these tests
-// run without a real video file or ffmpeg binary.
-// ---------------------------------------------------------------------------
-
-describe('extractVideoThumbnail', () => {
-  it('throws when given an empty buffer', async () => {
-    await expect(extractVideoThumbnail(Buffer.alloc(0))).rejects.toThrow(
-      'extractVideoThumbnail: buffer is empty'
-    )
-  })
-})
