@@ -145,7 +145,11 @@ const MAX_SAFE_INPUT_DIMENSION = 32_768
 
 function assertBufferSize(buffer: Buffer, context: string): void {
   if (buffer.length === 0) throw new Error(`${context}: buffer is empty`)
-  if (buffer.length > MAX_BUFFER_BYTES) throw new Error(`${context}: buffer exceeds maximum size limit`)
+  if (buffer.length > MAX_BUFFER_BYTES) {
+    throw new Error(
+      `${context}: buffer exceeds maximum size limit (${MAX_BUFFER_BYTES / 1024 / 1024} MB)`
+    )
+  }
 }
 
 /** Shared return shape for all Sharp encode operations. */
