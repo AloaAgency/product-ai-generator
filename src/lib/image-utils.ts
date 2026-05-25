@@ -223,7 +223,12 @@ export type CompressResult = {
 export const compressReferenceImage = async (buffer: Buffer): Promise<CompressResult> => {
   assertBufferSize(buffer, 'compressReferenceImage')
   const originalSize = buffer.length
-  const meta = await sharp(buffer).metadata()
+  let meta: sharp.Metadata
+  try {
+    meta = await sharp(buffer).metadata()
+  } catch {
+    throw new Error('compressReferenceImage: could not read image metadata (file may be corrupt or unsupported)')
+  }
   if (!meta.format || !ALLOWED_REF_FORMATS.has(meta.format)) {
     throw new Error(`compressReferenceImage: unsupported format '${meta.format ?? 'unknown'}'`)
   }
