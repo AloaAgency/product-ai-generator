@@ -125,7 +125,7 @@ export async function GET(request: NextRequest) {
       .limit(Math.max(1, jobBatchSize))
 
     if (error) {
-      console.error('[Worker] job fetch error', error)
+      console.error('[Worker] job fetch error', { error: sanitizeWorkerErrorMessage(error, 'Failed to fetch jobs') })
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
