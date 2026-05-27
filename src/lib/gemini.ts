@@ -158,7 +158,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
     if (!response.ok) {
       const message = raw?.error?.message || raw?.message || response.statusText
       const errorCode = raw?.error?.code || raw?.error?.status || response.status
-      console.error(`[Gemini] API error (${response.status}):`, message, JSON.stringify(raw?.error || raw, null, 2))
+      console.error(`[Gemini] API error (${response.status}):`, message, raw?.error ?? null)
 
       if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
         lastError = new Error(response.status === 429
