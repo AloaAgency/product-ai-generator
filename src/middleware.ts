@@ -160,7 +160,7 @@ export async function middleware(request: NextRequest) {
     // runtime fault unrelated to auth), return a structured error response
     // instead of letting the middleware throw an unhandled exception, which
     // would surface as an opaque 500 with no useful headers.
-    console.error('[Middleware] Unexpected error', err)
+    console.error('[Middleware] Unexpected error', err instanceof Error ? err.message : String(err))
     if (pathname.startsWith('/api/')) {
       return withSecurityHeaders(
         NextResponse.json(
