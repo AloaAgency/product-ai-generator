@@ -7,7 +7,9 @@ const REQUIRED_HEADERS = new Map([
   ['x-content-type-options', 'nosniff'],
   ['x-frame-options', 'DENY'],
   ['referrer-policy', 'strict-origin-when-cross-origin'],
-  ['permissions-policy', 'camera=(), microphone=(), geolocation=()'],
+  ['permissions-policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), interest-cohort=()'],
+  ['x-dns-prefetch-control', 'off'],
+  ['cross-origin-opener-policy', 'same-origin'],
 ])
 
 describe('security headers', () => {
