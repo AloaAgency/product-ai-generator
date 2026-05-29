@@ -1,6 +1,8 @@
-import { Check, Download, Eye, MessageSquare, Trash2, X } from 'lucide-react'
+import { Check, Download, Eye, MessageSquare, Trash2, Video, X } from 'lucide-react'
 
-export type ContextMenuAction = 'approve' | 'reject' | 'request_changes' | 'download' | 'delete' | 'open'
+export type ContextMenuAction = 'approve' | 'reject' | 'request_changes' | 'download' | 'delete' | 'open' | 'create_video'
+
+export type ContextMenuMediaType = 'image' | 'video' | null
 
 export interface ContextMenuItem {
   action: ContextMenuAction
@@ -8,11 +10,19 @@ export interface ContextMenuItem {
   icon: typeof Check
   shortcut?: string
   className?: string
-  condition?: (status: string | null) => boolean
+  condition?: (status: string | null, mediaType: ContextMenuMediaType) => boolean
 }
 
 export const MENU_ITEMS: ContextMenuItem[] = [
   { action: 'open', label: 'Open', icon: Eye, shortcut: 'Click' },
+  {
+    action: 'create_video',
+    label: 'Turn into Video',
+    icon: Video,
+    shortcut: 'V',
+    className: 'text-purple-400',
+    condition: (_status, mediaType) => mediaType !== 'video',
+  },
   { action: 'approve', label: 'Approve', icon: Check, shortcut: 'A', className: 'text-green-400' },
   { action: 'reject', label: 'Reject', icon: X, shortcut: 'R', className: 'text-red-400' },
   { action: 'request_changes', label: 'Request Changes', icon: MessageSquare, shortcut: 'C', className: 'text-orange-400' },
@@ -31,8 +41,8 @@ export const MENU_MIN_WIDTH_PX = 200
 export const MENU_ITEM_HEIGHT_PX = 34
 export const MENU_SEPARATOR_HEIGHT_PX = 9
 
-export const getVisibleMenuItems = (approvalStatus: string | null) =>
-  MENU_ITEMS.filter((item) => !item.condition || item.condition(approvalStatus))
+export const getVisibleMenuItems = (approvalStatus: string | null, mediaType: ContextMenuMediaType = null) =>
+  MENU_ITEMS.filter((item) => !item.condition || item.condition(approvalStatus, mediaType))
 
 export const getGalleryContextMenuPosition = ({
   x,
@@ -47,7 +57,7 @@ export const getGalleryContextMenuPosition = ({
   viewportWidth: number
   viewportHeight: number
 }) => {
-  const estimatedHeight = itemCount * MENU_ITEM_HEIGHT_PX + 3 * MENU_SEPARATOR_HEIGHT_PX + 8
+  const estimatedHeight = itemCount * MENU_ITEM_HEIGHT_PX + 4 * MENU_SEPARATOR_HEIGHT_PX + 8
   const adjustedX = x + MENU_MIN_WIDTH_PX > viewportWidth ? x - MENU_MIN_WIDTH_PX : x
   const adjustedY = y + estimatedHeight > viewportHeight ? y - estimatedHeight : y
 
