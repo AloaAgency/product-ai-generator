@@ -7,20 +7,22 @@ import {
   getVisibleMenuItems,
   isCurrentMenuStatus,
   type ContextMenuAction,
+  type ContextMenuMediaType,
 } from './galleryContextMenu.helpers'
 
-export type { ContextMenuAction } from './galleryContextMenu.helpers'
+export type { ContextMenuAction, ContextMenuMediaType } from './galleryContextMenu.helpers'
 
 interface GalleryContextMenuProps {
   x: number
   y: number
   imageId: string
   approvalStatus: string | null
+  mediaType?: ContextMenuMediaType
   onAction: (action: ContextMenuAction, imageId: string) => void
   onClose: () => void
 }
 
-export function GalleryContextMenu({ x, y, imageId, approvalStatus, onAction, onClose }: GalleryContextMenuProps) {
+export function GalleryContextMenu({ x, y, imageId, approvalStatus, mediaType = null, onAction, onClose }: GalleryContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
 
@@ -51,7 +53,7 @@ export function GalleryContextMenu({ x, y, imageId, approvalStatus, onAction, on
     onClose()
   }, [onAction, imageId, onClose])
 
-  const visibleItems = getVisibleMenuItems(approvalStatus)
+  const visibleItems = getVisibleMenuItems(approvalStatus, mediaType)
   const position = useMemo(() => {
     return getGalleryContextMenuPosition({
       x,
@@ -94,7 +96,8 @@ export function GalleryContextMenu({ x, y, imageId, approvalStatus, onAction, on
     >
       {visibleItems.map((item, i) => (
         <div key={item.action}>
-          {i === 1 && <div className="my-1 border-t border-zinc-700" />}
+          {item.action === 'create_video' && <div className="my-1 border-t border-zinc-700" />}
+          {item.action === 'approve' && <div className="my-1 border-t border-zinc-700" />}
           {item.action === 'download' && <div className="my-1 border-t border-zinc-700" />}
           {item.action === 'delete' && <div className="my-1 border-t border-zinc-700" />}
           <button

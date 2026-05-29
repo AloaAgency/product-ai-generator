@@ -4,7 +4,8 @@ import { use, useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
-import { GalleryContextMenu, type ContextMenuAction } from '@/components/GalleryContextMenu'
+import { GalleryContextMenu, type ContextMenuAction, type ContextMenuMediaType } from '@/components/GalleryContextMenu'
+import { CreateVideoModal } from '@/components/CreateVideoModal'
 import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
 import type { PromptTemplate } from '@/lib/types'
 import {
@@ -88,8 +89,16 @@ export default function GalleryPage({
 
   const [uploadingGallery, setUploadingGallery] = useState(false)
   const galleryFileInputRef = useRef<HTMLInputElement>(null)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null; mediaType: ContextMenuMediaType } | null>(null)
+  const [videoModal, setVideoModal] = useState<{ imageId: string; previewUrl: string | null; sourcePrompt: string | null } | null>(null)
+  const [videoToast, setVideoToast] = useState<string | null>(null)
   const loadMoreRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!videoToast) return
+    const timer = setTimeout(() => setVideoToast(null), 6000)
+    return () => clearTimeout(timer)
+  }, [videoToast])
 
   useEffect(() => {
     signedUrlsRef.current = signedUrlsById
@@ -414,6 +423,19 @@ export default function GalleryPage({
       case 'open': {
         const idx = imageIndexById.get(imageId) ?? -1
         if (idx !== -1) setLightboxIndex(idx)
+        break
+      }
+      case 'create_video': {
+        const signed = await ensureSignedUrls(imageId)
+        const previewUrl =
+          img.thumb_public_url ??
+          img.preview_public_url ??
+          img.public_url ??
+          signed?.thumb_signed_url ??
+          signed?.preview_signed_url ??
+          signed?.signed_url ??
+          null
+        setVideoModal({ imageId, previewUrl, sourcePrompt: img.prompt ?? null })
         break
       }
       case 'approve':
@@ -862,7 +884,7 @@ export default function GalleryPage({
                         }}
                         onContextMenu={(e) => {
                           e.preventDefault()
-                          setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status })
+                          setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status, mediaType: (img.media_type as ContextMenuMediaType) ?? 'image' })
                         }}
                         onMouseEnter={() => warmLightboxAssets(img.id)}
                         onFocus={() => warmLightboxAssets(img.id)}
@@ -939,7 +961,7 @@ export default function GalleryPage({
                     onContextMenu={(e) => {
                       if (isVideo) return
                       e.preventDefault()
-                      setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status })
+                      setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status, mediaType: 'image' })
                     }}
                     onMouseEnter={() => {
                       if (!isVideo) warmLightboxAssets(img.id)
@@ -1098,9 +1120,39 @@ export default function GalleryPage({
           y={contextMenu.y}
           imageId={contextMenu.imageId}
           approvalStatus={contextMenu.approvalStatus}
+          mediaType={contextMenu.mediaType}
           onAction={handleContextMenuAction}
           onClose={() => setContextMenu(null)}
         />
+      )}
+
+      {/* Turn-into-video modal */}
+      {videoModal && (
+        <CreateVideoModal
+          productId={id}
+          imageId={videoModal.imageId}
+          previewUrl={videoModal.previewUrl}
+          sourcePrompt={videoModal.sourcePrompt}
+          onClose={() => setVideoModal(null)}
+          onQueued={(message) => setVideoToast(message)}
+        />
+      )}
+
+      {/* Transient toast */}
+      {videoToast && (
+        <div className="fixed bottom-4 left-1/2 z-[120] -translate-x-1/2 px-4" role="status" aria-live="polite">
+          <div className="flex items-center gap-3 rounded-lg border border-purple-700/50 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 shadow-xl shadow-black/50">
+            <Video className="h-4 w-4 shrink-0 text-purple-400" />
+            <span className="flex-1">{videoToast}</span>
+            <button
+              onClick={() => setVideoToast(null)}
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+              aria-label="Dismiss"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Lightbox */}
