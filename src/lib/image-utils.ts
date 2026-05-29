@@ -324,6 +324,7 @@ export const extractVideoThumbnail = async (
     await runFfmpegExtract(tmpVideo, tmpFrame)
 
     const frameBuffer = await readFile(tmpFrame)
+    assertBufferSize(frameBuffer, 'extractVideoThumbnail:frame')
     const thumb = await sharp(frameBuffer)
       .rotate()
       .resize({ width, withoutEnlargement: true })
