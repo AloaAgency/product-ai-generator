@@ -234,7 +234,7 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   }
   const w = meta.width ?? 0
   const h = meta.height ?? 0
-  if (w > MAX_SAFE_INPUT_DIMENSION || h > MAX_SAFE_INPUT_DIMENSION) {
+  if (w >= MAX_SAFE_INPUT_DIMENSION || h >= MAX_SAFE_INPUT_DIMENSION) {
     throw new Error(
       `compressReferenceImage: image dimensions ${w}x${h} exceed maximum allowed (${MAX_SAFE_INPUT_DIMENSION}px per side)`
     )
