@@ -436,6 +436,20 @@ describe('compressReferenceImage', () => {
       /dimensions.*exceed maximum/i
     )
   })
+
+  it('throws at the exact MAX_SAFE_INPUT_DIMENSION boundary (pixel bomb guard)', async () => {
+    // A 32 768-px wide image passes the old `>` check but should be rejected.
+    // Decoded at 32 768×100 RGBA that is ~13 MB, but the guard fires before
+    // any decode, so the test is cheap to run.
+    const atLimit = await sharp({
+      create: { width: 32_768, height: 100, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    })
+      .png()
+      .toBuffer()
+    await expect(compressReferenceImage(atLimit)).rejects.toThrow(
+      /dimensions.*exceed maximum/i
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------
