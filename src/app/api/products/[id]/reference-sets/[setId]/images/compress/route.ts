@@ -2,15 +2,20 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processReferenceImageCompression } from '@/lib/reference-image-compression'
+import { isAdminAuthorizedNode } from '@/lib/server-secrets'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
 export const dynamic = 'force-dynamic'
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string; setId: string }> }
 ) {
+  if (!isAdminAuthorizedNode(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   try {
     const { setId } = await params
     const supabase = createServiceClient()
