@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { requireUuid } from '@/lib/request-guards'
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params
+    const { id: rawId } = await params
+    const id = requireUuid(rawId, 'product id')
     const supabase = createServiceClient()
 
     const { data, error } = await supabase
@@ -29,7 +31,8 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params
+    const { id: rawId } = await params
+    const id = requireUuid(rawId, 'product id')
     const supabase = createServiceClient()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let body: any = {}
@@ -62,7 +65,8 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params
+    const { id: rawId } = await params
+    const id = requireUuid(rawId, 'product id')
     const supabase = createServiceClient()
 
     const { error } = await supabase

@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { requireUuid } from '@/lib/request-guards'
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
   try {
-    const { projectId } = await params
+    const { projectId: rawProjectId } = await params
+    const projectId = requireUuid(rawProjectId, 'project id')
     const supabase = createServiceClient()
 
     const { data, error } = await supabase
@@ -29,7 +31,8 @@ export async function PATCH(
   { params }: { params: Promise<{ projectId: string }> }
 ) {
   try {
-    const { projectId } = await params
+    const { projectId: rawProjectId } = await params
+    const projectId = requireUuid(rawProjectId, 'project id')
     const supabase = createServiceClient()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let body: any = {}
@@ -61,7 +64,8 @@ export async function DELETE(
   { params }: { params: Promise<{ projectId: string }> }
 ) {
   try {
-    const { projectId } = await params
+    const { projectId: rawProjectId } = await params
+    const projectId = requireUuid(rawProjectId, 'project id')
     const supabase = createServiceClient()
 
     const { error } = await supabase
