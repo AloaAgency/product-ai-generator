@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { optionalUuid, requireUuid } from '@/lib/request-guards'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const DEFAULT_PAGE_SIZE = 48
@@ -80,15 +81,17 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
-  const { projectId } = await params
+  const { projectId: rawProjectId } = await params
   const { searchParams } = request.nextUrl
   const approvalStatus = searchParams.get('approval_status')
   const mediaType = searchParams.get('media_type')
-  const productIdFilter = searchParams.get('product_id')
+  const rawProductIdFilter = searchParams.get('product_id')
   const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_PAGE_SIZE, 1), 200)
   const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
 
   try {
+    const projectId = requireUuid(rawProjectId, 'project id')
+    const productIdFilter = optionalUuid(rawProductIdFilter, 'product id')
     const supabase = createServiceClient()
 
     let productsQuery = supabase
