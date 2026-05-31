@@ -152,12 +152,32 @@ function assertBufferSize(buffer: Buffer, context: string): void {
   }
 }
 
+// Reads only the image header (fast) to guard against pixel bombs: files whose
+// compressed size passes the buffer check but whose decoded dimensions would
+// exhaust available memory. Must be called before any Sharp decode pipeline.
+async function assertInputDimensions(buffer: Buffer, context: string): Promise<void> {
+  let meta: sharp.Metadata
+  try {
+    meta = await sharp(buffer).metadata()
+  } catch {
+    throw new Error(`${context}: could not read image metadata (file may be corrupt or unsupported)`)
+  }
+  const w = meta.width ?? 0
+  const h = meta.height ?? 0
+  if (w >= MAX_SAFE_INPUT_DIMENSION || h >= MAX_SAFE_INPUT_DIMENSION) {
+    throw new Error(
+      `${context}: image dimensions ${w}x${h} exceed maximum allowed (${MAX_SAFE_INPUT_DIMENSION}px per side)`
+    )
+  }
+}
+
 /** Shared return shape for all Sharp encode operations. */
 export type ImageResult = { buffer: Buffer; mimeType: string; extension: string }
 
 /** Resize an image buffer to a WebP of the given width and quality. */
 async function resizeToWebP(buffer: Buffer, width: number, quality: number): Promise<ImageResult> {
   assertBufferSize(buffer, 'resizeToWebP')
+  await assertInputDimensions(buffer, 'resizeToWebP')
   const outBuffer = await sharp(buffer)
     .rotate()
     .resize({ width, withoutEnlargement: true })
@@ -325,6 +345,7 @@ export const extractVideoThumbnail = async (
 
     const frameBuffer = await readFile(tmpFrame)
     assertBufferSize(frameBuffer, 'extractVideoThumbnail:frame')
+    await assertInputDimensions(frameBuffer, 'extractVideoThumbnail:frame')
     const thumb = await sharp(frameBuffer)
       .rotate()
       .resize({ width, withoutEnlargement: true })
