@@ -22,6 +22,7 @@ const DEFAULT_LTX_DURATION_SECONDS = 8
 const DEFAULT_LTX_RESOLUTION = '1920x1080'
 const SCENE_SELECT_COLUMNS = [
   'id',
+  'product_id',
   'title',
   'motion_prompt',
   'generation_model',
@@ -699,6 +700,7 @@ async function uploadVideoThumbnail(
 async function createGeneratedVideoRecord(
   supabase: ReturnType<typeof createServiceClient>,
   scene: SceneRecord,
+  productId: string,
   jobId: string | null | undefined,
   storagePath: string,
   thumbStoragePath: string | null,
@@ -707,7 +709,7 @@ async function createGeneratedVideoRecord(
   const { data: record, error: insertErr } = await supabase
     .from(T.generated_images)
     .insert({
-      product_id: scene.product_id,
+      product_id: scene.product_id || productId,
       job_id: jobId || null,
       variation_number: 1,
       storage_path: storagePath,
@@ -780,7 +782,7 @@ export async function generateSceneVideo(
   const thumbStoragePath = await uploadVideoThumbnail(supabase, storagePath, result.buffer)
 
   try {
-    return await createGeneratedVideoRecord(supabase, scene, jobId, storagePath, thumbStoragePath, result)
+    return await createGeneratedVideoRecord(supabase, scene, productId, jobId, storagePath, thumbStoragePath, result)
   } catch (error) {
     await cleanupUploadedVideoAssets(supabase, [storagePath, thumbStoragePath])
     throw error
