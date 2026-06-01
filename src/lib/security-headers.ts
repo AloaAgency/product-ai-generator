@@ -14,6 +14,9 @@ export const SECURITY_HEADERS: readonly SecurityHeader[] = [
   { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
   { key: 'X-DNS-Prefetch-Control', value: 'off' },
   { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+  // Prevents other origins from reading this app's responses (Spectre mitigation,
+  // pairs with COOP: same-origin). Safe for this private tool — no cross-origin consumers.
+  { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },
 ] as const
 
 export function applySecurityHeaders(headers: Headers) {
