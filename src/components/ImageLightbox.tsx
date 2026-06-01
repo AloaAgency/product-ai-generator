@@ -2,6 +2,7 @@
 
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { FallbackImage } from '@/components/FallbackImage'
 import {
   AlertCircle,
   X,
@@ -582,23 +583,30 @@ export function ImageLightbox({
             </button>
           )}
 
-          {imageUrl ? (
-            <img
-              src={imageUrl}
+          <FallbackImage
+            sources={[
+              imageUrl,
+              currentImage.preview_signed_url,
+              currentImage.preview_public_url,
+              currentImage.thumb_signed_url,
+              currentImage.thumb_public_url,
+              currentImage.signed_url,
+              currentImage.public_url,
+            ]}
               alt={displayName}
               className="max-w-full max-h-full object-contain"
-            />
-          ) : (
-            <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-800 bg-zinc-900/40 px-6 py-8 text-center">
-              <div className="rounded-full bg-zinc-900 p-3">
-                <ImageOff className="h-6 w-6 text-zinc-500" />
+            fallback={(
+              <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-800 bg-zinc-900/40 px-6 py-8 text-center">
+                <div className="rounded-full bg-zinc-900 p-3">
+                  <ImageOff className="h-6 w-6 text-zinc-500" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-zinc-300">No image available</p>
+                  <p className="mt-1 text-xs text-zinc-500">This variation does not have a renderable preview yet.</p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm font-medium text-zinc-300">No image available</p>
-                <p className="mt-1 text-xs text-zinc-500">This variation does not have a renderable preview yet.</p>
-              </div>
-            </div>
-          )}
+            )}
+          />
 
           {isApproved && (
             <div className="absolute right-4 top-4 rounded-full bg-emerald-950/90 px-3 py-1.5 text-sm font-medium text-emerald-200">

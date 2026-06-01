@@ -193,11 +193,10 @@ export async function GET(
     const previewPaths = imageItems
       .map((img) => img.preview_storage_path)
       .filter(Boolean) as string[]
-    const fallbackPaths = imageItems
-      .filter((img) => !img.thumb_storage_path && !img.preview_storage_path && img.storage_path)
+    const originalPaths = imageItems
       .map((img) => img.storage_path)
       .filter(Boolean) as string[]
-    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...previewPaths, ...fallbackPaths]))
+    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...previewPaths, ...originalPaths]))
 
     const videoItems = (images || []).filter((img) => img.media_type === 'video')
     const videoPaths = videoItems
@@ -239,9 +238,7 @@ export async function GET(
       ...img,
       public_url: img.media_type === 'video'
         ? (img.storage_path ? (signedVideos.get(img.storage_path) ?? null) : null)
-        : (!img.thumb_storage_path && !img.preview_storage_path && img.storage_path
-            ? (signedImageBucket.get(img.storage_path) ?? null)
-            : null),
+        : (img.storage_path ? (signedImageBucket.get(img.storage_path) ?? null) : null),
       preview_public_url: img.media_type === 'video'
         ? null
         : (img.preview_storage_path ? (signedImageBucket.get(img.preview_storage_path) ?? null) : null),
