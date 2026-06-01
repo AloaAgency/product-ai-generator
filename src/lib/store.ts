@@ -64,15 +64,6 @@ const isCurrentOrUntrackedSliceScope = (slice: string, scope: string) => {
   return currentScope === (scope.trim() || '_')
 }
 
-const resetProductScopedSliceScopes = (productId: string) => {
-  sliceScopes.set('referenceSets', productId)
-  sliceScopes.set('promptTemplates', productId)
-  sliceScopes.set('generationJobs', buildRequestKey('generationJobs', productId))
-  sliceScopes.set('currentJob', '_')
-  sliceScopes.set('gallery', '_')
-  sliceScopes.set('settingsTemplates', buildRequestKey('settingsTemplates', productId))
-}
-
 const clearProductScopedSliceScopes = () => {
   sliceScopes.set('referenceSets', '_')
   sliceScopes.set('promptTemplates', '_')
@@ -632,8 +623,26 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchProduct: async (id) => {
     const productId = requireUuid(id, 'product id')
     if (updateSliceScope('currentProduct', productId)) {
-      resetProductScopedSliceScopes(productId)
-      set({ currentProduct: null, ...getProductScopedState() })
+      // Switching products: clear the previous product's cached data so the
+      // persistent layout (e.g. GlobalGenerationQueue) doesn't show stale data.
+      // We do NOT reset the per-slice scopes here — each slice's own fetch keys
+      // on the product id and clears/refetches itself on a product change.
+      // Resetting them here would race with sibling page fetches (which run
+      // first, child-before-parent) and silently discard their results,
+      // leaving pages like the gallery blank. Loading flags are preserved so
+      // an in-flight child fetch keeps its spinner instead of flashing empty.
+      set({
+        currentProduct: null,
+        referenceSets: [],
+        referenceImages: {},
+        promptTemplates: [],
+        generationJobs: [],
+        currentJob: null,
+        galleryImages: [],
+        galleryTotal: 0,
+        galleryHasMore: false,
+        settingsTemplates: [],
+      })
     }
     const requestKey = buildRequestKey('currentProduct', productId)
     const requestVersion = beginTrackedRequest(requestKey)
