@@ -267,6 +267,36 @@ const updateGalleryStateAfterRemoval = (state: Pick<AppState, 'galleryImages' | 
   }
 }
 
+const mergeGalleryImagesPreservingLoadedUrls = (
+  previousImages: GeneratedImage[],
+  nextImages: GeneratedImage[]
+) => {
+  if (previousImages.length === 0 || nextImages.length === 0) return nextImages
+
+  const previousById = new Map(previousImages.map((image) => [image.id, image]))
+
+  return nextImages.map((image) => {
+    const previous = previousById.get(image.id)
+    if (!previous) return image
+
+    return {
+      ...image,
+      public_url:
+        previous.storage_path === image.storage_path && previous.public_url
+          ? previous.public_url
+          : image.public_url,
+      thumb_public_url:
+        previous.thumb_storage_path === image.thumb_storage_path && previous.thumb_public_url
+          ? previous.thumb_public_url
+          : image.thumb_public_url,
+      preview_public_url:
+        previous.preview_storage_path === image.preview_storage_path && previous.preview_public_url
+          ? previous.preview_public_url
+          : image.preview_public_url,
+    }
+  })
+}
+
 const getGalleryQueryString = (
   filters?: {
     job_id?: string
@@ -1205,11 +1235,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       )
       if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('gallery', requestKey)) return
       markRequestSuccessful(requestKey)
-      set({
-        galleryImages: data.images ?? data,
+      set((state) => ({
+        galleryImages: mergeGalleryImagesPreservingLoadedUrls(state.galleryImages, data.images ?? data),
         galleryTotal: data.total ?? 0,
         galleryHasMore: data.has_more ?? false,
-      })
+      }))
     } catch (error) {
       if (
         isLatestRequest(requestKey, requestVersion) &&

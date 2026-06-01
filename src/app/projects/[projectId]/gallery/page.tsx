@@ -7,7 +7,8 @@ import { ProjectHeader } from '@/components/ProjectHeader'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
 import { GalleryContextMenu, type ContextMenuAction, type ContextMenuMediaType } from '@/components/GalleryContextMenu'
 import { CreateVideoModal } from '@/components/CreateVideoModal'
-import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
+import { SquareGrid } from '@/components/SquareGrid'
+import { FallbackImage } from '@/components/FallbackImage'
 import type { GeneratedImage } from '@/lib/types'
 import {
   Filter,
@@ -607,7 +608,7 @@ export default function ProjectGalleryPage({
                   {group.images.length}
                 </span>
               </div>
-              <VirtualizedSquareGrid
+              <SquareGrid
                 items={group.images}
                 getItemKey={(img) => img.id}
                 renderItem={(img) => {
@@ -647,13 +648,25 @@ export default function ProjectGalleryPage({
                       {isVideo ? (
                         <>
                           {img.thumb_public_url ? (
-                            /* eslint-disable-next-line @next/next/no-img-element */
-                            <img
-                              src={img.thumb_public_url}
+                            <FallbackImage
+                              sources={[img.thumb_public_url]}
                               alt="Video thumbnail"
                               loading="lazy"
                               decoding="async"
                               className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                              fallback={img.public_url ? (
+                                <video
+                                  src={`${img.public_url}#t=0.1`}
+                                  preload="metadata"
+                                  muted
+                                  playsInline
+                                  className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                                />
+                              ) : (
+                                <div className="flex h-full w-full items-center justify-center">
+                                  <Video className="h-8 w-8 text-zinc-600" />
+                                </div>
+                              )}
                             />
                           ) : (
                             <video
@@ -671,13 +684,17 @@ export default function ProjectGalleryPage({
                           </div>
                         </>
                       ) : (
-                        /* eslint-disable-next-line @next/next/no-img-element */
-                        <img
-                          src={img.thumb_public_url ?? img.preview_public_url ?? img.public_url ?? undefined}
+                        <FallbackImage
+                          sources={[img.thumb_public_url, img.preview_public_url, img.public_url]}
                           alt={`Variation ${img.variation_number}`}
                           loading="lazy"
                           decoding="async"
                           className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                          fallback={(
+                            <div className="flex h-full w-full items-center justify-center">
+                              <ImageIcon className="h-8 w-8 text-zinc-600" />
+                            </div>
+                          )}
                         />
                       )}
                       {isVideo && (

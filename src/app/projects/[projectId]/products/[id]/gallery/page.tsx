@@ -6,7 +6,8 @@ import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
 import { GalleryContextMenu, type ContextMenuAction, type ContextMenuMediaType } from '@/components/GalleryContextMenu'
 import { CreateVideoModal } from '@/components/CreateVideoModal'
-import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
+import { SquareGrid } from '@/components/SquareGrid'
+import { FallbackImage } from '@/components/FallbackImage'
 import type { PromptTemplate } from '@/lib/types'
 import {
   ArrowLeft,
@@ -551,22 +552,33 @@ export default function GalleryPage({
   useEffect(() => {
     let isMounted = true
     let prevHadActive = false
+    let prevProgressSignature = ''
 
     const hasActiveJobs = () => {
       const { generationJobs } = useAppStore.getState()
       return generationJobs.some((job) => job.status === 'pending' || job.status === 'running')
     }
 
+    const getProgressSignature = () => {
+      const { generationJobs } = useAppStore.getState()
+      return generationJobs
+        .filter((job) => job.status === 'pending' || job.status === 'running')
+        .map((job) => `${job.id}:${job.status}:${job.completed_count}:${job.failed_count}`)
+        .join('|')
+    }
+
     const poll = async () => {
       await fetchGenerationJobs(id)
       const hasActive = hasActiveJobs()
+      const progressSignature = getProgressSignature()
       if (!isMounted) return
-      if (hasActive) {
+      if (hasActive && progressSignature !== prevProgressSignature) {
         await fetchGallery(id, { sort: sortOption })
       } else if (prevHadActive && !hasActive) {
         await fetchGallery(id, { sort: sortOption })
       }
       prevHadActive = hasActive
+      prevProgressSignature = progressSignature
     }
 
     const interval = setInterval(() => {
@@ -864,7 +876,7 @@ export default function GalleryPage({
                     {group.images.length}
                   </span>
                 </div>
-                <VirtualizedSquareGrid
+                <SquareGrid
                   items={group.images}
                   getItemKey={(img) => img.id}
                   renderItem={(img) => {
@@ -898,13 +910,17 @@ export default function GalleryPage({
                                 : 'border-zinc-800 hover:border-zinc-600'
                         }`}
                       >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={img.thumb_public_url ?? img.preview_public_url ?? img.public_url ?? undefined}
+                        <FallbackImage
+                          sources={[img.thumb_public_url, img.preview_public_url, img.public_url]}
                           alt={`Variation ${img.variation_number}`}
                           loading="lazy"
                           decoding="async"
                           className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                          fallback={(
+                            <div className="flex h-full w-full items-center justify-center">
+                              <ImageIcon className="h-8 w-8 text-zinc-600" />
+                            </div>
+                          )}
                         />
                         {selectMode && (
                           <div className="absolute top-2 left-2 z-10">
@@ -937,7 +953,7 @@ export default function GalleryPage({
           </div>
         ) : (
           <div className="px-4 py-6 sm:px-6">
-            <VirtualizedSquareGrid
+            <SquareGrid
               items={filteredImages}
               getItemKey={(img) => img.id}
               renderItem={(img) => {
@@ -982,13 +998,25 @@ export default function GalleryPage({
                     {isVideo ? (
                       <>
                         {img.thumb_public_url ? (
-                          /* eslint-disable-next-line @next/next/no-img-element */
-                          <img
-                            src={img.thumb_public_url}
+                          <FallbackImage
+                            sources={[img.thumb_public_url]}
                             alt="Video thumbnail"
                             loading="lazy"
                             decoding="async"
                             className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                            fallback={img.public_url ? (
+                              <video
+                                src={`${img.public_url}#t=0.1`}
+                                preload="metadata"
+                                muted
+                                playsInline
+                                className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center">
+                                <Video className="h-8 w-8 text-zinc-600" />
+                              </div>
+                            )}
                           />
                         ) : (
                           <video
@@ -1006,13 +1034,17 @@ export default function GalleryPage({
                         </div>
                       </>
                     ) : (
-                      /* eslint-disable-next-line @next/next/no-img-element */
-                      <img
-                        src={img.thumb_public_url ?? img.preview_public_url ?? img.public_url ?? undefined}
+                      <FallbackImage
+                        sources={[img.thumb_public_url, img.preview_public_url, img.public_url]}
                         alt={`Variation ${img.variation_number}`}
                         loading="lazy"
                         decoding="async"
                         className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                        fallback={(
+                          <div className="flex h-full w-full items-center justify-center">
+                            <ImageIcon className="h-8 w-8 text-zinc-600" />
+                          </div>
+                        )}
                       />
                     )}
                     {selectMode && (

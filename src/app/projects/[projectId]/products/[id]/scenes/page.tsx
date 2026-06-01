@@ -3,6 +3,7 @@
 import { use, useEffect, useState, useCallback, useRef } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { FallbackImage } from '@/components/FallbackImage'
 import type { StoryboardScene } from '@/lib/types'
 import type { GeneratedImage } from '@/lib/types'
 import {
@@ -236,31 +237,49 @@ export default function ScenesPage({
   // Signed URLs
   const [signedUrlsById, setSignedUrlsById] = useState<Record<string, SignedImageUrls>>({})
   const signedUrlsRef = useRef(signedUrlsById)
+  const signedUrlRequestsRef = useRef<Record<string, Promise<SignedImageUrls | null>>>({})
   useEffect(() => { signedUrlsRef.current = signedUrlsById }, [signedUrlsById])
 
   const ensureSignedUrls = useCallback(async (imageId: string) => {
     const cached = signedUrlsRef.current[imageId]
     if (cached?.expires_at && cached.expires_at - Date.now() > 60_000) return cached
-    const res = await fetch(`/api/images/${imageId}/signed`)
-    if (!res.ok) return null
-    const data = (await res.json()) as SignedImageUrls
-    const next = { ...signedUrlsRef.current, [imageId]: data }
-    signedUrlsRef.current = next
-    setSignedUrlsById(next)
-    return data
+
+    const inFlight = signedUrlRequestsRef.current[imageId]
+    if (inFlight) return inFlight
+
+    const request = fetch(`/api/images/${imageId}/signed`)
+      .then(async (res) => {
+        if (!res.ok) return null
+        const data = (await res.json()) as SignedImageUrls
+        const next = { ...signedUrlsRef.current, [imageId]: data }
+        signedUrlsRef.current = next
+        setSignedUrlsById(next)
+        return data
+      })
+      .finally(() => {
+        delete signedUrlRequestsRef.current[imageId]
+      })
+
+    signedUrlRequestsRef.current[imageId] = request
+    return request
   }, [])
 
-  function sceneThumbUrl(imageId: string | null): string | null {
-    if (!imageId) return null
+  function sceneThumbUrls(imageId: string | null) {
+    if (!imageId) return []
     void ensureSignedUrls(imageId)
-    return signedUrlsById[imageId]?.thumb_signed_url || signedUrlsById[imageId]?.signed_url || null
+    const urls = signedUrlsById[imageId]
+    return [urls?.thumb_signed_url, urls?.preview_signed_url, urls?.signed_url]
   }
 
   function renderThumb(imageId: string | null, alt: string) {
-    const url = sceneThumbUrl(imageId)
-    if (!url) return <ImageIcon className="h-6 w-6 text-zinc-600" />
-    // eslint-disable-next-line @next/next/no-img-element
-    return <img src={url} alt={alt} className="h-full w-full object-cover" />
+    return (
+      <FallbackImage
+        sources={sceneThumbUrls(imageId)}
+        alt={alt}
+        className="h-full w-full object-cover"
+        fallback={<ImageIcon className="h-6 w-6 text-zinc-600" />}
+      />
+    )
   }
 
   // Load all scenes for this product
@@ -1287,18 +1306,16 @@ export default function ScenesPage({
                         onClick={() => selectGalleryImage(img.id)}
                         className="min-h-24 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 transition-colors hover:border-blue-500"
                       >
-                        {(img.thumb_public_url || img.public_url) ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={(img.thumb_public_url || img.public_url)!}
-                            alt=""
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <div className="h-full w-full flex items-center justify-center">
-                            <ImageIcon className="h-6 w-6 text-zinc-600" />
-                          </div>
-                        )}
+                        <FallbackImage
+                          sources={[img.thumb_public_url, img.preview_public_url, img.public_url]}
+                          alt=""
+                          className="h-full w-full object-cover"
+                          fallback={(
+                            <div className="h-full w-full flex items-center justify-center">
+                              <ImageIcon className="h-6 w-6 text-zinc-600" />
+                            </div>
+                          )}
+                        />
                       </button>
                     ))}
                   </div>
