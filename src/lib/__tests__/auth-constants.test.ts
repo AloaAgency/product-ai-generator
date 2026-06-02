@@ -1,6 +1,70 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { NextRequest } from 'next/server'
-import { AUTH_COOKIE_NAME, deriveAuthToken, isAdminAuthorized } from '@/lib/auth-constants'
+import { AUTH_COOKIE_NAME, deriveAuthToken, isAdminAuthorized, timingResistantEqual } from '@/lib/auth-constants'
+
+// ---------------------------------------------------------------------------
+// timingResistantEqual — XOR-based constant-time comparison (Edge Runtime)
+// ---------------------------------------------------------------------------
+
+describe('timingResistantEqual', () => {
+  it('returns true for identical strings', () => {
+    expect(timingResistantEqual('abc', 'abc')).toBe(true)
+  })
+
+  it('returns false for strings that differ by one character', () => {
+    expect(timingResistantEqual('abX', 'abc')).toBe(false)
+  })
+
+  it('returns false when provided is longer than expected', () => {
+    expect(timingResistantEqual('abcd', 'abc')).toBe(false)
+  })
+
+  it('returns false when provided is shorter than expected', () => {
+    expect(timingResistantEqual('ab', 'abc')).toBe(false)
+  })
+
+  it('returns false for empty provided vs non-empty expected', () => {
+    // Empty provided must not pass — previously relied on NaN→0 coercion in bitwise XOR;
+    // explicit bounds check (i < pLen ? charCodeAt(i) : 0) makes this unambiguous.
+    expect(timingResistantEqual('', 'secret')).toBe(false)
+  })
+
+  it('returns false for empty provided vs expected containing only null bytes', () => {
+    // Regression: null-byte expected could trivially XOR to 0 with a dummy value;
+    // the length-mismatch flag (diff = 1) must prevent a false positive.
+    expect(timingResistantEqual('', '\x00\x00\x00')).toBe(false)
+  })
+
+  it('returns false for non-empty provided vs empty expected', () => {
+    expect(timingResistantEqual('secret', '')).toBe(false)
+  })
+
+  it('returns true for two empty strings', () => {
+    expect(timingResistantEqual('', '')).toBe(true)
+  })
+
+  it('is case-sensitive — strings differing only in case are rejected', () => {
+    expect(timingResistantEqual('Secret', 'secret')).toBe(false)
+  })
+
+  it('returns true for a long matching string (64-char HMAC-hex)', () => {
+    const s64 = 'f'.repeat(64)
+    expect(timingResistantEqual(s64, s64)).toBe(true)
+  })
+
+  it('returns false when provided is a prefix repetition of expected (guards against wrap-around false positive)', () => {
+    // If provided = "abc" and expected = "abcabc", a naive wrap-around XOR
+    // could produce all-zero differences and wrongly return true.
+    // The length-mismatch flag must prevent this.
+    expect(timingResistantEqual('abc', 'abcabc')).toBe(false)
+  })
+
+  it('returns false for a 64-char string where only the last character differs', () => {
+    const a = 'f'.repeat(63) + 'a'
+    const b = 'f'.repeat(63) + 'b'
+    expect(timingResistantEqual(a, b)).toBe(false)
+  })
+})
 
 // ---------------------------------------------------------------------------
 // AUTH_COOKIE_NAME — constant guard

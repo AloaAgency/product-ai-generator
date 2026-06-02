@@ -18,11 +18,13 @@ export const AUTH_COOKIE_NAME = 'site-auth'
  */
 export function timingResistantEqual(provided: string, expected: string): boolean {
   const n = expected.length
+  const pLen = provided.length
   // Accumulate length mismatch into diff so we never return early based on length.
-  let diff = provided.length !== n ? 1 : 0
+  let diff = pLen !== n ? 1 : 0
   for (let i = 0; i < n; i++) {
-    // For shorter `provided`, wrap index so charCodeAt never returns NaN.
-    diff |= provided.charCodeAt(i % (provided.length || 1)) ^ expected.charCodeAt(i)
+    // Use 0 for out-of-bounds indices in `provided` instead of the modulo-wrap
+    // trick, which relied on silent NaN→0 coercion when provided is empty.
+    diff |= (i < pLen ? provided.charCodeAt(i) : 0) ^ expected.charCodeAt(i)
   }
   return diff === 0
 }
