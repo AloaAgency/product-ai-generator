@@ -1,3 +1,5 @@
+import { NextResponse } from 'next/server'
+
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -137,6 +139,33 @@ export function validateReferenceUploadFiles(files: File[]): File[] {
   }
 
   return files
+}
+
+/**
+ * Parse a JSON request body with type safety.
+ * Returns `{ ok: true, body }` on success or `{ ok: false, response }` (a 400 NextResponse)
+ * when the body is missing, unparseable, or not a plain object.
+ * Eliminates the repetitive `let body: any` + nested try/catch pattern in route handlers.
+ */
+export async function parseRequestBody<T extends Record<string, unknown> = Record<string, unknown>>(
+  request: Request
+): Promise<{ ok: true; body: T } | { ok: false; response: NextResponse }> {
+  let json: unknown
+  try {
+    json = await request.json()
+  } catch {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }),
+    }
+  }
+  if (json === null || typeof json !== 'object' || Array.isArray(json)) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }),
+    }
+  }
+  return { ok: true, body: json as T }
 }
 
 export function sanitizePublicErrorMessage(
