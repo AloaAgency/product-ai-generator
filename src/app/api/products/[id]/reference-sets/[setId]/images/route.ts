@@ -7,6 +7,7 @@ import {
   MAX_REFERENCE_IMAGES,
   ALLOWED_REFERENCE_IMAGE_TYPES,
   MAX_REFERENCE_IMAGE_SIZE_BYTES,
+  parseRequestBody,
 } from '@/lib/request-guards'
 
 export const runtime = 'nodejs'
@@ -25,10 +26,9 @@ export async function POST(
 
     const contentType = request.headers.get('content-type') || ''
     if (contentType.includes('application/json')) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let body: any = {}
-      try { body = await request.json() }
-      catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+      const parsed = await parseRequestBody(request)
+      if (!parsed.ok) return parsed.response
+      const body = parsed.body
       const uploads = (body?.uploads || []) as Array<{
         storage_path: string
         file_name: string

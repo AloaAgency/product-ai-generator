@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { buildFullPrompt } from '@/lib/prompt-builder'
+import { parseRequestBody } from '@/lib/request-guards'
 import { generateGeminiImage } from '@/lib/gemini'
 import {
   createThumbnailAndPreview,
@@ -105,12 +106,11 @@ export async function POST(
   const { id: productId, sceneId } = await params
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
-    const frame: string = body.frame // 'start' | 'end' | 'both'
-    const referenceSetId: string | undefined = body.reference_set_id
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
+    const frame = body.frame as string // 'start' | 'end' | 'both'
+    const referenceSetId = body.reference_set_id as string | undefined
 
     if (!['start', 'end', 'both'].includes(frame)) {
       return NextResponse.json({ error: 'frame must be "start", "end", or "both"' }, { status: 400 })

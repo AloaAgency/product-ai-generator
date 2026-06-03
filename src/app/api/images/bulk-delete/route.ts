@@ -1,19 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { sanitizePublicErrorMessage, sanitizeUuidArray } from '@/lib/request-guards'
+import { sanitizePublicErrorMessage, sanitizeUuidArray, parseRequestBody } from '@/lib/request-guards'
 
 const MAX_BULK_DELETE = 200
 
 export async function POST(request: NextRequest) {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
-    }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
 
     const { imageIds } = body as { imageIds?: string[] }
 

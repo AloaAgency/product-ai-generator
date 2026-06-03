@@ -1,30 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import Anthropic from '@anthropic-ai/sdk'
-import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
-import { SCENE_TITLE_SYSTEM_PROMPT, MAX_USER_PROMPT_LEN, safeTextFromContent } from '@/lib/prompt-builder'
-
-const anthropic = new Anthropic()
+import { generateSceneTitle } from '@/lib/prompt-builder'
+import { parseRequestBody } from '@/lib/request-guards'
 
 // Must match the limits enforced by the POST route on the same table
 const MAX_NAME_LENGTH = 500
 const MAX_PROMPT_LENGTH = 10000
-
-async function generateSceneTitle(promptText: string): Promise<string> {
-  try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_FAST_MODEL.name,
-      max_tokens: 50,
-      system: SCENE_TITLE_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: promptText.slice(0, MAX_USER_PROMPT_LEN) }],
-    })
-    return safeTextFromContent(response.content).trim()
-  } catch (err) {
-    console.warn('[generateSceneTitle] AI call failed, title will be empty:', err instanceof Error ? err.message : String(err))
-    return ''
-  }
-}
 
 export async function PATCH(
   request: NextRequest,
@@ -33,10 +15,9 @@ export async function PATCH(
   try {
     const { id: productId, promptId } = await params
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
 
     if (body.name !== undefined) {
       if (typeof body.name !== 'string' || body.name.trim().length === 0) {
