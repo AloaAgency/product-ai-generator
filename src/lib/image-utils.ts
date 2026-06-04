@@ -152,6 +152,18 @@ function assertBufferSize(buffer: Buffer, context: string): void {
   }
 }
 
+// Shared dimension assertion used by assertInputDimensions and
+// compressReferenceImage (which already has metadata in hand). Keeping a
+// single implementation prevents the two call-sites from diverging if the
+// threshold changes.
+function assertDimensions(w: number, h: number, context: string): void {
+  if (w >= MAX_SAFE_INPUT_DIMENSION || h >= MAX_SAFE_INPUT_DIMENSION) {
+    throw new Error(
+      `${context}: image dimensions ${w}x${h} exceed maximum allowed (${MAX_SAFE_INPUT_DIMENSION}px per side)`
+    )
+  }
+}
+
 // Reads only the image header (fast) to guard against pixel bombs: files whose
 // compressed size passes the buffer check but whose decoded dimensions would
 // exhaust available memory. Must be called before any Sharp decode pipeline.
@@ -162,13 +174,7 @@ async function assertInputDimensions(buffer: Buffer, context: string): Promise<v
   } catch {
     throw new Error(`${context}: could not read image metadata (file may be corrupt or unsupported)`)
   }
-  const w = meta.width ?? 0
-  const h = meta.height ?? 0
-  if (w >= MAX_SAFE_INPUT_DIMENSION || h >= MAX_SAFE_INPUT_DIMENSION) {
-    throw new Error(
-      `${context}: image dimensions ${w}x${h} exceed maximum allowed (${MAX_SAFE_INPUT_DIMENSION}px per side)`
-    )
-  }
+  assertDimensions(meta.width ?? 0, meta.height ?? 0, context)
 }
 
 /** Shared return shape for all Sharp encode operations. */
@@ -178,11 +184,21 @@ export type ImageResult = { buffer: Buffer; mimeType: string; extension: string 
 async function resizeToWebP(buffer: Buffer, width: number, quality: number): Promise<ImageResult> {
   assertBufferSize(buffer, 'resizeToWebP')
   await assertInputDimensions(buffer, 'resizeToWebP')
-  const outBuffer = await sharp(buffer)
-    .rotate()
-    .resize({ width, withoutEnlargement: true })
-    .webp({ quality })
-    .toBuffer()
+  let outBuffer: Buffer
+  try {
+    outBuffer = await sharp(buffer)
+      .rotate()
+      .resize({ width, withoutEnlargement: true })
+      .webp({ quality })
+      .toBuffer()
+  } catch (err) {
+    throw new Error(
+      `resizeToWebP: Sharp encode failed — ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
+  if (outBuffer.length === 0) {
+    throw new Error('resizeToWebP: Sharp encode produced empty buffer')
+  }
   return { buffer: outBuffer, mimeType: 'image/webp', extension: 'webp' }
 }
 
@@ -254,11 +270,7 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   }
   const w = meta.width ?? 0
   const h = meta.height ?? 0
-  if (w >= MAX_SAFE_INPUT_DIMENSION || h >= MAX_SAFE_INPUT_DIMENSION) {
-    throw new Error(
-      `compressReferenceImage: image dimensions ${w}x${h} exceed maximum allowed (${MAX_SAFE_INPUT_DIMENSION}px per side)`
-    )
-  }
+  assertDimensions(w, h, 'compressReferenceImage')
 
   const needsResize = w > REF_MAX_DIMENSION || h > REF_MAX_DIMENSION
   const needsCompress = originalSize > REF_MAX_FILE_SIZE
@@ -279,7 +291,17 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   if (needsResize) {
     pipeline.resize({ width: REF_MAX_DIMENSION, height: REF_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
   }
-  const compressed = await pipeline.webp({ quality: 90 }).toBuffer()
+  let compressed: Buffer
+  try {
+    compressed = await pipeline.webp({ quality: 90 }).toBuffer()
+  } catch (err) {
+    throw new Error(
+      `compressReferenceImage: Sharp encode failed — ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
+  if (compressed.length === 0) {
+    throw new Error('compressReferenceImage: Sharp encode produced empty buffer')
+  }
 
   // Only replace the original when the output is actually smaller. Re-encoding
   // an already-optimised file (e.g. a small PNG or a high-quality WebP) can
@@ -346,11 +368,21 @@ export const extractVideoThumbnail = async (
     const frameBuffer = await readFile(tmpFrame)
     assertBufferSize(frameBuffer, 'extractVideoThumbnail:frame')
     await assertInputDimensions(frameBuffer, 'extractVideoThumbnail:frame')
-    const thumb = await sharp(frameBuffer)
-      .rotate()
-      .resize({ width, withoutEnlargement: true })
-      .webp({ quality: 72 })
-      .toBuffer()
+    let thumb: Buffer
+    try {
+      thumb = await sharp(frameBuffer)
+        .rotate()
+        .resize({ width, withoutEnlargement: true })
+        .webp({ quality: 72 })
+        .toBuffer()
+    } catch (err) {
+      throw new Error(
+        `extractVideoThumbnail: Sharp encode failed — ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+    if (thumb.length === 0) {
+      throw new Error('extractVideoThumbnail: Sharp encode produced empty buffer')
+    }
 
     return { buffer: thumb, mimeType: 'image/webp', extension: 'webp' }
   } finally {
