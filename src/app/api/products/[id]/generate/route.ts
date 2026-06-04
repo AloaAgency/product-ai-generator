@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { buildFullPrompt, MAX_STYLE_VALUE_LEN, MAX_SUBJECT_LABEL_LEN, type ReferenceGroup } from '@/lib/prompt-builder'
+import { parseRequestBody } from '@/lib/request-guards'
 import type { Product, Project, ReferenceSet, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
@@ -142,10 +143,9 @@ export async function POST(
   const { id: productId } = await params
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
     const {
       prompt_template_id = null,
       prompt_text,
@@ -319,7 +319,7 @@ export async function POST(
     if (capStyle(overrideColorGrading)) mergedSettings.color_grading = capStyle(overrideColorGrading)
     if (capStyle(overrideStyle)) mergedSettings.style = capStyle(overrideStyle)
 
-    let userPrompt = prompt_text
+    let userPrompt = prompt_text as string
     if (source_image_id) {
       userPrompt = `Using the provided source image as a base, recreate it with the following modifications: ${prompt_text}. Keep the rest of the image as close to the original as possible.`
     }

@@ -6,6 +6,7 @@ import {
   MAX_REFERENCE_IMAGES,
   ALLOWED_REFERENCE_IMAGE_TYPES,
   MAX_REFERENCE_IMAGE_SIZE_BYTES,
+  parseRequestBody,
 } from '@/lib/request-guards'
 
 export const runtime = 'nodejs'
@@ -26,10 +27,9 @@ export async function POST(
   try {
     const { id: productId, setId } = await params
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
     const files = (body?.files || []) as UploadRequestItem[]
 
     if (!Array.isArray(files) || files.length === 0) {

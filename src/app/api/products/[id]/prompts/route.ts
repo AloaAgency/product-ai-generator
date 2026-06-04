@@ -1,30 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import Anthropic from '@anthropic-ai/sdk'
-import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
-import { SCENE_TITLE_SYSTEM_PROMPT, MAX_USER_PROMPT_LEN, safeTextFromContent } from '@/lib/prompt-builder'
-
-const anthropic = new Anthropic()
+import { generateSceneTitle } from '@/lib/prompt-builder'
+import { parseRequestBody } from '@/lib/request-guards'
 
 const MAX_NAME_LENGTH = 500
 const MAX_PROMPT_LENGTH = 10000
-
-async function generateSceneTitle(promptText: string): Promise<string> {
-  try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_FAST_MODEL.name,
-      max_tokens: 50,
-      system: SCENE_TITLE_SYSTEM_PROMPT,
-      // Truncate to MAX_USER_PROMPT_LEN — consistent with /api/ai/scene-title
-      messages: [{ role: 'user', content: promptText.slice(0, MAX_USER_PROMPT_LEN) }],
-    })
-    return safeTextFromContent(response.content).trim()
-  } catch (err) {
-    console.warn('[generateSceneTitle] AI call failed, title will be empty:', err instanceof Error ? err.message : String(err))
-    return ''
-  }
-}
 
 export async function GET(
   request: NextRequest,
@@ -55,10 +36,9 @@ export async function POST(
   try {
     const { id: product_id } = await params
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
     const { name, prompt_text, tags, prompt_type } = body
 
     if (!name || !prompt_text) {
@@ -86,7 +66,7 @@ export async function POST(
     if (error) { console.error('[Prompts POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     // Generate scene title asynchronously then update
-    const sceneTitle = await generateSceneTitle(prompt_text)
+    const sceneTitle = await generateSceneTitle(prompt_text as string)
     if (sceneTitle) {
       const { data: updated } = await supabase
         .from(T.prompt_templates)

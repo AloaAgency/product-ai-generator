@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { normalizeDurationValue } from '@/lib/video-constants'
+import { parseRequestBody } from '@/lib/request-guards'
 
 const MAX_PROMPT_LENGTH = 10000
 const MAX_TITLE_LENGTH = 500
@@ -42,10 +43,9 @@ export async function POST(
   try {
     const { id: productId } = await params
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
 
     if (typeof body.title === 'string' && body.title.length > MAX_TITLE_LENGTH) {
       return NextResponse.json({ error: `title must be ${MAX_TITLE_LENGTH} characters or fewer` }, { status: 400 })
@@ -60,7 +60,7 @@ export async function POST(
       return NextResponse.json({ error: `motion_prompt must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
     }
 
-    const model = body.generation_model || 'veo3'
+    const model = (body.generation_model as string | undefined) || 'veo3'
 
     const insert: Record<string, unknown> = {
       product_id: productId,
@@ -76,7 +76,7 @@ export async function POST(
     if (body.video_resolution !== undefined) insert.video_resolution = body.video_resolution
     if (body.video_aspect_ratio !== undefined) insert.video_aspect_ratio = body.video_aspect_ratio
     if (body.video_duration_seconds !== undefined) {
-      insert.video_duration_seconds = normalizeDurationValue(model, body.video_duration_seconds, body.video_resolution, !!body.start_frame_image_id, !!body.end_frame_image_id)
+      insert.video_duration_seconds = normalizeDurationValue(model, body.video_duration_seconds, body.video_resolution as string | null | undefined, !!body.start_frame_image_id, !!body.end_frame_image_id)
     }
     if (body.video_fps !== undefined) insert.video_fps = body.video_fps
     if (body.video_generate_audio !== undefined) insert.video_generate_audio = body.video_generate_audio

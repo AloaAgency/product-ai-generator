@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { createThumbnail, buildThumbnailPath } from '@/lib/image-utils'
-import { isUuid } from '@/lib/request-guards'
+import { isUuid, parseRequestBody } from '@/lib/request-guards'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -17,11 +17,10 @@ export const dynamic = 'force-dynamic'
  */
 export async function POST(request: NextRequest) {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
-    const imageIds: string[] = body.image_ids
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
+    const imageIds = body.image_ids as string[]
     if (!Array.isArray(imageIds) || imageIds.length === 0) {
       return NextResponse.json({ error: 'image_ids required' }, { status: 400 })
     }
@@ -38,7 +37,11 @@ export async function POST(request: NextRequest) {
       .in('id', imageIds.slice(0, 50))
       .is('thumb_storage_path', null)
 
-    if (error || !images || images.length === 0) {
+    if (error) {
+      console.error('[GenerateThumbs] DB error fetching images:', error)
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    }
+    if (!images || images.length === 0) {
       return NextResponse.json({ processed: 0 })
     }
 

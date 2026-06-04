@@ -5,6 +5,7 @@ import {
   requireUuid,
   sanitizeApprovalStatus,
   sanitizePublicErrorMessage,
+  parseRequestBody,
 } from '@/lib/request-guards'
 
 export async function PATCH(
@@ -14,13 +15,9 @@ export async function PATCH(
   try {
     const { imageId } = await params
     const sanitizedImageId = requireUuid(imageId, 'image id')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
-    }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
 
     const updates: Record<string, unknown> = {}
 

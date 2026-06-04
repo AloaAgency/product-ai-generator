@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { parseRequestBody } from '@/lib/request-guards'
 
 export async function GET(
   _request: NextRequest,
@@ -31,10 +32,9 @@ export async function POST(
   try {
     const { id: productId, boardId } = await params
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
 
     // Determine next scene_order
     const { data: existing } = await supabase

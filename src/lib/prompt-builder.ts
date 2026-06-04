@@ -4,11 +4,15 @@
  */
 
 import type { GlobalStyleSettings } from './types'
+import Anthropic from '@anthropic-ai/sdk'
+import { CLAUDE_FAST_MODEL } from './claude-models'
+
+const anthropic = new Anthropic()
 
 /**
  * Shared system prompt for generating short scene titles from a prompt text.
- * Used by both the dedicated /api/ai/scene-title route and inline title generation
- * in /api/products/[id]/prompts — kept here so both callers stay in sync.
+ * Used by the dedicated /api/ai/scene-title route and inline title generation
+ * in /api/products/[id]/prompts (via generateSceneTitle below).
  */
 export const SCENE_TITLE_SYSTEM_PROMPT =
   'Generate a short (3-6 word) descriptive title for this product photography scene. Output ONLY the title.'
@@ -21,6 +25,26 @@ export const MAX_STYLE_VALUE_LEN = 500
 export const MAX_SUGGESTION_COUNT = 20
 /** Max length for a suggestion name returned by parsePromptSuggestions — matches the DB-layer validation in the prompts route */
 export const MAX_SUGGESTION_NAME_LEN = 500
+
+/**
+ * Generate a short scene title for a prompt using Claude.
+ * Returns an empty string on AI failure so callers can save the prompt without a title.
+ * Used by the /api/products/[id]/prompts routes for inline title generation.
+ */
+export async function generateSceneTitle(promptText: string): Promise<string> {
+  try {
+    const response = await anthropic.messages.create({
+      model: CLAUDE_FAST_MODEL.name,
+      max_tokens: 50,
+      system: SCENE_TITLE_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: promptText.slice(0, MAX_USER_PROMPT_LEN) }],
+    })
+    return safeTextFromContent(response.content).trim()
+  } catch (err) {
+    console.warn('[generateSceneTitle] AI call failed, title will be empty:', err instanceof Error ? err.message : String(err))
+    return ''
+  }
+}
 
 /**
  * Allowlist of GlobalStyleSettings keys that are safe and relevant to include in

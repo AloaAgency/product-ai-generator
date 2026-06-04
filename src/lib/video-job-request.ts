@@ -1,7 +1,11 @@
-import type { createServiceClient } from '@/lib/supabase/server'
+import type { NextRequest } from 'next/server'
+import { NextResponse } from 'next/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { processGenerationJob } from '@/lib/generation-worker'
+import { logError } from '@/lib/error-logger'
 
-type ServiceClient = ReturnType<typeof createServiceClient>
+export type ServiceClient = ReturnType<typeof createServiceClient>
 
 type SceneVideoJobInput = {
   motion_prompt: string | null
@@ -144,4 +148,59 @@ export async function createSceneVideoJob(
 
   if (jobError || !job) return { job: null, error: 'Failed to create video job' }
   return { job: job as Record<string, unknown>, error: null }
+}
+
+/**
+ * Shared POST handler for both scene generate-video routes:
+ *   /api/products/[id]/scenes/[sceneId]/generate-video
+ *   /api/products/[id]/storyboards/[boardId]/scenes/[sceneId]/generate-video
+ *
+ * The only difference between those routes is the errorSource string logged on failure.
+ */
+export async function handleSceneGenerateVideoPost(
+  request: NextRequest,
+  productId: string,
+  sceneId: string,
+  errorSource: string
+): Promise<NextResponse> {
+  try {
+    let body: { model?: string } = {}
+    try {
+      body = await request.json()
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 })
+    }
+
+    const supabase = createServiceClient()
+    const { job, error } = await createSceneVideoJob(supabase, productId, sceneId, body.model)
+
+    if (error === 'Scene not found') return NextResponse.json({ error }, { status: 404 })
+    if (error) return NextResponse.json({ error }, { status: 400 })
+
+    if (shouldRunVideoGenerationInline()) {
+      void processGenerationJob(job!.id as string).catch(async (err) => {
+        const message = err instanceof Error ? err.message : 'Video generation failed'
+        console.error('[GenerateVideo] Inline job failed:', err)
+        await logError({
+          productId,
+          errorMessage: message,
+          errorSource: `${errorSource}:inline`,
+          errorContext: { sceneId, jobId: job!.id as string },
+        })
+      })
+    } else {
+      kickWorkerForJob(job!.id as string, request.url, '[GenerateVideo]')
+    }
+
+    return NextResponse.json({ job }, { status: 201 })
+  } catch (err) {
+    console.error('[GenerateVideo] Error:', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource,
+      errorContext: { sceneId },
+    })
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
 }
