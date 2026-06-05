@@ -64,6 +64,15 @@ const isCurrentOrUntrackedSliceScope = (slice: string, scope: string) => {
   return currentScope === (scope.trim() || '_')
 }
 
+// A product-scoped slice's own scope is intentionally NOT reset when the active
+// product changes (see fetchProduct — resetting it races with sibling page
+// fetches and blanks the page). That leaves a window where a late fetch/create
+// for product A could apply its result while the user is already on product B.
+// Guard the apply step with this: only accept a product-scoped result if the
+// active product is still A (or no product is tracked yet, e.g. in isolation).
+const isActiveProductScope = (productId: string) =>
+  isCurrentOrUntrackedSliceScope('currentProduct', productId)
+
 const clearProductScopedSliceScopes = () => {
   sliceScopes.set('referenceSets', '_')
   sliceScopes.set('promptTemplates', '_')
@@ -737,7 +746,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await getInFlightRequest(requestKey, () =>
         api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets`)
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('referenceSets', scopedProductId)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('referenceSets', scopedProductId) ||
+        !isActiveProductScope(scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
       set({ referenceSets: data })
     } catch (error) {
@@ -767,7 +781,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     invalidateRequestKeys(buildRequestKey('referenceSets', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    if (
+      isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId) &&
+      isActiveProductScope(scopedProductId)
+    ) {
       set((s) => ({ referenceSets: [...s.referenceSets, refSet] }))
     }
     return refSet
@@ -998,7 +1015,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await getInFlightRequest(requestKey, () =>
         api(`/api/products/${buildApiPath(scopedProductId)}/prompts`)
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('promptTemplates', scopedProductId)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('promptTemplates', scopedProductId) ||
+        !isActiveProductScope(scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
       set({ promptTemplates: data })
     } catch (error) {
@@ -1025,7 +1047,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('promptTemplates', scopedProductId)) {
+    if (
+      isCurrentOrUntrackedSliceScope('promptTemplates', scopedProductId) &&
+      isActiveProductScope(scopedProductId)
+    ) {
       set((s) => ({ promptTemplates: [...s.promptTemplates, tmpl] }))
     }
     return tmpl
@@ -1076,7 +1101,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await getInFlightRequest(requestKey, () =>
         api(`/api/products/${buildApiPath(scopedProductId)}/generate`)
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('generationJobs', requestKey)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('generationJobs', requestKey) ||
+        !isActiveProductScope(scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
       set({ generationJobs: data })
     } catch (error) {
@@ -1122,7 +1152,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const job = result.job ?? result
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
-    if (isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey)) {
+    if (
+      isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey) &&
+      isActiveProductScope(scopedProductId)
+    ) {
       set((s) => ({ generationJobs: [job, ...s.generationJobs] }))
     }
     return job
@@ -1139,7 +1172,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await getInFlightRequest(requestKey, () =>
         api(`/api/products/${buildApiPath(scopedProductId)}/generate/${buildApiPath(generationJobId)}`)
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('currentJob', requestKey)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('currentJob', requestKey) ||
+        !isActiveProductScope(scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
       set({ currentJob: { ...data.job, images: data.images } })
     } catch (error) {
@@ -1242,7 +1280,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await getInFlightRequest(requestKey, () =>
         api(`/api/products/${buildApiPath(scopedProductId)}/gallery?${qs}`)
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('gallery', requestKey)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('gallery', requestKey) ||
+        !isActiveProductScope(scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
       set((state) => ({
         galleryImages: mergeGalleryImagesPreservingLoadedUrls(state.galleryImages, data.images ?? data),
@@ -1278,7 +1321,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const qs = getGalleryQueryString(sanitizedFilters, galleryImages.length)
       const data = await api(`/api/products/${buildApiPath(scopedProductId)}/gallery?${qs}`)
-      if (!isCurrentSliceScope('gallery', requestKey) || !isLatestRequest(requestKey, requestVersion)) {
+      if (
+        !isCurrentSliceScope('gallery', requestKey) ||
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isActiveProductScope(scopedProductId)
+      ) {
         return
       }
       const newImages = data.images ?? []
@@ -1374,7 +1421,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await getInFlightRequest(requestKey, () =>
         api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates`)
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('settingsTemplates', requestKey)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('settingsTemplates', requestKey) ||
+        !isActiveProductScope(scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
       set({ settingsTemplates: data })
     } catch (error) {

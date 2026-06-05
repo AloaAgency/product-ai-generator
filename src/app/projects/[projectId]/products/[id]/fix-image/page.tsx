@@ -23,26 +23,20 @@ export default function FixImagePage({
   const searchParams = useSearchParams()
   const sourceImageIdParam = searchParams.get('sourceImageId')
 
-  const {
-    referenceSets,
-    currentJob,
-    currentProduct,
-    fetchReferenceSets,
-    startGeneration,
-    fetchJobStatus,
-    updateImageApproval,
-    deleteImage,
-  } = useAppStore()
+  const referenceSets = useAppStore((s) => s.referenceSets)
+  const currentJob = useAppStore((s) => s.currentJob)
+  const currentProduct = useAppStore((s) => s.currentProduct)
+  const fetchReferenceSets = useAppStore((s) => s.fetchReferenceSets)
+  const startGeneration = useAppStore((s) => s.startGeneration)
+  const fetchJobStatus = useAppStore((s) => s.fetchJobStatus)
+  const updateImageApproval = useAppStore((s) => s.updateImageApproval)
+  const deleteImage = useAppStore((s) => s.deleteImage)
 
   // Source image state
   const [sourceImageId, setSourceImageId] = useState<string | null>(null)
   const [sourceImageUrl, setSourceImageUrl] = useState<string | null>(null)
   const [sourceImageLoading, setSourceImageLoading] = useState(false)
   const [showSourcePicker, setShowSourcePicker] = useState(false)
-
-  // Supplemental reference images
-  const [refImages, setRefImages] = useState<{ id: string; thumbUrl: string | null }[]>([])
-  const [showRefPicker, setShowRefPicker] = useState(false)
 
   // Change description
   const [changeDescription, setChangeDescription] = useState('')
@@ -129,6 +123,8 @@ export default function FixImagePage({
       }
       setGenerating(false)
     }
+    // Only react to status transitions, not every poll update to the job object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentJob?.status])
 
   const parseVariationCount = (value: string) => {

@@ -55,7 +55,7 @@ const secondaryActionClassName = 'inline-flex min-h-11 items-center justify-cent
 const iconButtonClassName = 'inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-current transition-opacity hover:opacity-100'
 
 export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
-  const { fetchGenerationJobs } = useAppStore()
+  const fetchGenerationJobs = useAppStore((s) => s.fetchGenerationJobs)
 
   // Scene form state
   const [title, setTitle] = useState('')

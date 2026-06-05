@@ -22,7 +22,7 @@ describe('galleryContextMenu.helpers', () => {
         viewportWidth: 400,
         viewportHeight: 300,
       })
-    ).toEqual({ x: 150, y: 41 })
+    ).toEqual({ x: 150, y: 32 })
 
     expect(
       getGalleryContextMenuPosition({

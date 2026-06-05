@@ -23,13 +23,11 @@ export default function PromptsPage({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { id } = use(params)
-  const {
-    promptTemplates,
-    fetchPromptTemplates,
-    createPromptTemplate,
-    updatePromptTemplate,
-    deletePromptTemplate,
-  } = useAppStore()
+  const promptTemplates = useAppStore((s) => s.promptTemplates)
+  const fetchPromptTemplates = useAppStore((s) => s.fetchPromptTemplates)
+  const createPromptTemplate = useAppStore((s) => s.createPromptTemplate)
+  const updatePromptTemplate = useAppStore((s) => s.updatePromptTemplate)
+  const deletePromptTemplate = useAppStore((s) => s.deletePromptTemplate)
 
   const [showCreate, setShowCreate] = useState(false)
   const [newName, setNewName] = useState('')
