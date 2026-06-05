@@ -314,11 +314,16 @@ export async function POST(
     // oversized or injected values from the request body reaching the AI prompt unchecked.
     const capStyle = (v: unknown): string | undefined =>
       typeof v === 'string' && v.trim() ? v.slice(0, MAX_STYLE_VALUE_LEN) : undefined
-    if (capStyle(overrideLens)) mergedSettings.lens = capStyle(overrideLens)
-    if (capStyle(overrideCameraHeight)) mergedSettings.camera_height = capStyle(overrideCameraHeight)
-    if (capStyle(overrideLighting)) mergedSettings.lighting = capStyle(overrideLighting)
-    if (capStyle(overrideColorGrading)) mergedSettings.color_grading = capStyle(overrideColorGrading)
-    if (capStyle(overrideStyle)) mergedSettings.style = capStyle(overrideStyle)
+    const cappedLens = capStyle(overrideLens)
+    const cappedCameraHeight = capStyle(overrideCameraHeight)
+    const cappedLighting = capStyle(overrideLighting)
+    const cappedColorGrading = capStyle(overrideColorGrading)
+    const cappedStyle = capStyle(overrideStyle)
+    if (cappedLens) mergedSettings.lens = cappedLens
+    if (cappedCameraHeight) mergedSettings.camera_height = cappedCameraHeight
+    if (cappedLighting) mergedSettings.lighting = cappedLighting
+    if (cappedColorGrading) mergedSettings.color_grading = cappedColorGrading
+    if (cappedStyle) mergedSettings.style = cappedStyle
 
     let userPrompt = prompt_text as string
     if (source_image_id) {
