@@ -49,7 +49,9 @@ export default function StoryboardPage({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { id } = use(params)
-  const { galleryImages, loadingGallery, fetchGallery } = useAppStore()
+  const galleryImages = useAppStore((s) => s.galleryImages)
+  const loadingGallery = useAppStore((s) => s.loadingGallery)
+  const fetchGallery = useAppStore((s) => s.fetchGallery)
   const galleryImageItems = useMemo(
     () => galleryImages.filter((img) => img.media_type !== 'video'),
     [galleryImages]

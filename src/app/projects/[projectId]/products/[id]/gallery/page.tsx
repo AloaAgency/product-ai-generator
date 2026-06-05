@@ -568,6 +568,9 @@ export default function GalleryPage({
     }
 
     const poll = async () => {
+      // Don't poll while the tab is backgrounded — nothing is visible to update
+      // and it wastes network/CPU. We refresh immediately when the tab returns.
+      if (document.visibilityState !== 'visible') return
       await fetchGenerationJobs(id)
       const hasActive = hasActiveJobs()
       const progressSignature = getProgressSignature()
@@ -584,12 +587,17 @@ export default function GalleryPage({
     const interval = setInterval(() => {
       void poll()
     }, 5000)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void poll()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     void poll()
 
     return () => {
       isMounted = false
       clearInterval(interval)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [id, sortOption, fetchGallery, fetchGenerationJobs])
 

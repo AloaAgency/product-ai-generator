@@ -67,7 +67,7 @@ export default function ScenesPage({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { id } = use(params)
-  const { fetchGenerationJobs } = useAppStore()
+  const fetchGenerationJobs = useAppStore((s) => s.fetchGenerationJobs)
 
   const [scenes, setScenes] = useState<StoryboardScene[]>([])
   const [loading, setLoading] = useState(true)
@@ -304,6 +304,8 @@ export default function ScenesPage({
         loadSceneVideos(scene.id)
       }
     })
+    // Runs when the scenes list changes; the per-scene guard above avoids redundant loads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenes])
 
   async function loadSceneVideos(sceneId: string) {

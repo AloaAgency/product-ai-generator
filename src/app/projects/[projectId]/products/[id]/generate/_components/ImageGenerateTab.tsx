@@ -133,26 +133,24 @@ export function ImageGenerateTab({
   initialPrompt,
   initialReferenceSets,
 }: ImageGenerateTabProps) {
-  const {
-    promptTemplates,
-    referenceSets,
-    referenceImages,
-    currentJob,
-    currentProduct,
-    aiLoading,
-    fetchPromptTemplates,
-    createPromptTemplate,
-    updatePromptTemplate,
-    fetchReferenceSets,
-    fetchReferenceImages,
-    startGeneration,
-    fetchJobStatus,
-    retryGenerationJob,
-    buildPrompt,
-    suggestPrompts,
-    updateImageApproval,
-    deleteImage,
-  } = useAppStore()
+  const promptTemplates = useAppStore((s) => s.promptTemplates)
+  const referenceSets = useAppStore((s) => s.referenceSets)
+  const referenceImages = useAppStore((s) => s.referenceImages)
+  const currentJob = useAppStore((s) => s.currentJob)
+  const currentProduct = useAppStore((s) => s.currentProduct)
+  const aiLoading = useAppStore((s) => s.aiLoading)
+  const fetchPromptTemplates = useAppStore((s) => s.fetchPromptTemplates)
+  const createPromptTemplate = useAppStore((s) => s.createPromptTemplate)
+  const updatePromptTemplate = useAppStore((s) => s.updatePromptTemplate)
+  const fetchReferenceSets = useAppStore((s) => s.fetchReferenceSets)
+  const fetchReferenceImages = useAppStore((s) => s.fetchReferenceImages)
+  const startGeneration = useAppStore((s) => s.startGeneration)
+  const fetchJobStatus = useAppStore((s) => s.fetchJobStatus)
+  const retryGenerationJob = useAppStore((s) => s.retryGenerationJob)
+  const buildPrompt = useAppStore((s) => s.buildPrompt)
+  const suggestPrompts = useAppStore((s) => s.suggestPrompts)
+  const updateImageApproval = useAppStore((s) => s.updateImageApproval)
+  const deleteImage = useAppStore((s) => s.deleteImage)
 
   const [prompt, setPrompt] = useState('')
   const [variationCountInput, setVariationCountInput] = useState('15')
@@ -348,6 +346,8 @@ export function ImageGenerateTab({
       }
       setGenerating(false)
     }
+    // Only react to status transitions, not every poll update to the job object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentJob?.status])
 
   const handleRefine = async () => {
