@@ -79,13 +79,17 @@ function sanitizeField(value: string, maxLen: number): string {
  * and non-visual fields are never interpolated into AI prompts.
  */
 export function buildStyleBlock(settings: GlobalStyleSettings): string {
-  return STYLE_PROMPT_KEYS
-    .filter(k => {
-      const v = settings[k]
-      return typeof v === 'string' && (v as string).trim()
-    })
-    .map(k => `• ${k}: ${(settings[k] as string).trim().slice(0, MAX_STYLE_VALUE_LEN)}`)
-    .join('\n')
+  // Single pass: trim each value once and skip empties, instead of trimming in a
+  // filter and again in a map (which also allocated an intermediate filtered array).
+  const lines: string[] = []
+  for (const k of STYLE_PROMPT_KEYS) {
+    const v = settings[k]
+    if (typeof v !== 'string') continue
+    const trimmed = v.trim()
+    if (!trimmed) continue
+    lines.push(`• ${k}: ${trimmed.slice(0, MAX_STYLE_VALUE_LEN)}`)
+  }
+  return lines.join('\n')
 }
 
 /**
@@ -182,17 +186,19 @@ export function buildFullPrompt(
   // Mandatory style requirements block — truncate each value to match the allowlist guard
   // in buildStyleBlock so both prompt-assembly paths enforce identical payload limits.
   const cap = (v: string | undefined) => v?.slice(0, MAX_STYLE_VALUE_LEN) ?? ''
+  // Prefix the bullet here so the block can be joined directly, avoiding a second
+  // map pass over styleLines just to prepend the "• " marker.
   const styleLines: string[] = []
-  if (settings.subject_rule) styleLines.push(`Subject: ${cap(settings.subject_rule)}`)
-  if (settings.lens) styleLines.push(`Lens: ${cap(settings.lens)}`)
-  if (settings.camera_height) styleLines.push(`Camera height: ${cap(settings.camera_height)}`)
-  if (settings.color_grading) styleLines.push(`Color grading: ${cap(settings.color_grading)}`)
-  if (settings.lighting) styleLines.push(`Lighting: ${cap(settings.lighting)}`)
-  if (settings.style) styleLines.push(`Style: ${cap(settings.style)}`)
-  if (settings.constraints) styleLines.push(`Constraints: ${cap(settings.constraints)}`)
+  if (settings.subject_rule) styleLines.push(`• Subject: ${cap(settings.subject_rule)}`)
+  if (settings.lens) styleLines.push(`• Lens: ${cap(settings.lens)}`)
+  if (settings.camera_height) styleLines.push(`• Camera height: ${cap(settings.camera_height)}`)
+  if (settings.color_grading) styleLines.push(`• Color grading: ${cap(settings.color_grading)}`)
+  if (settings.lighting) styleLines.push(`• Lighting: ${cap(settings.lighting)}`)
+  if (settings.style) styleLines.push(`• Style: ${cap(settings.style)}`)
+  if (settings.constraints) styleLines.push(`• Constraints: ${cap(settings.constraints)}`)
 
   if (styleLines.length > 0) {
-    parts.push(`MANDATORY STYLE REQUIREMENTS (you must follow these):\n${styleLines.map(l => `• ${l}`).join('\n')}`)
+    parts.push(`MANDATORY STYLE REQUIREMENTS (you must follow these):\n${styleLines.join('\n')}`)
   }
 
   const refRule = buildReferenceRule(groups, settings.reference_rule)
