@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { buildFullPrompt, MAX_STYLE_VALUE_LEN, MAX_SUBJECT_LABEL_LEN, type ReferenceGroup } from '@/lib/prompt-builder'
 import { parseRequestBody } from '@/lib/request-guards'
-import type { Product, Project, ReferenceSet, ReferenceImage } from '@/lib/types'
+import type { Product, GlobalStyleSettings, ReferenceSet, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
@@ -200,7 +200,11 @@ export async function POST(
     const supabase = createServiceClient()
 
     const [productResult, refSetsResult, refImagesResult, sourceImgResult] = await Promise.all([
-      supabase.from(T.products).select('*').eq('id', productId).single(),
+      supabase
+        .from(T.products)
+        .select(`*, ${T.projects}!fk_products_project(global_style_settings)`)
+        .eq('id', productId)
+        .single(),
       uniqueSetIds.length > 0
         ? supabase
             .from(T.reference_sets)
@@ -298,15 +302,12 @@ export async function POST(
       )
     }
 
-    const typedProduct = productResult.data as Product
-    const projectResult = typedProduct.project_id
-      ? await supabase
-          .from(T.projects)
-          .select('global_style_settings')
-          .eq('id', typedProduct.project_id)
-          .single()
-      : { data: null }
-    const projectStyles = (projectResult.data as Project | null)?.global_style_settings ?? {}
+    // Parent-project styles arrive embedded via the product JOIN above, avoiding a
+    // second sequential round-trip (mirrors the suggest-prompts / build-prompt routes).
+    const typedProduct = productResult.data as Product & {
+      prodai_projects: { global_style_settings: GlobalStyleSettings } | null
+    }
+    const projectStyles = typedProduct.prodai_projects?.global_style_settings ?? {}
     const mergedSettings = mergeStyles(projectStyles, typedProduct.global_style_settings)
 
     // Apply per-generation photographic overrides — cap at MAX_STYLE_VALUE_LEN to prevent
