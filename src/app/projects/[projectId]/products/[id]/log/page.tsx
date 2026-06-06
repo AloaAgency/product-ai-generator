@@ -19,6 +19,7 @@ import {
   Search,
   X,
 } from 'lucide-react'
+import { logger } from '@/lib/logger'
 
 const STATUS_CONFIG: Record<
   GenerationJob['status'],
@@ -89,7 +90,7 @@ export default function LogPage({
       await deleteGenerationJob(productId, jobId)
       if (expandedId === jobId) setExpandedId(null)
     } catch (err) {
-      console.error('Failed to delete job', err)
+      logger.error('Failed to delete job', err)
     } finally {
       setDeletingId(null)
     }
@@ -101,7 +102,7 @@ export default function LogPage({
       await clearGenerationLog(productId)
       setConfirmClear(false)
     } catch (err) {
-      console.error('Failed to clear log', err)
+      logger.error('Failed to clear log', err)
     } finally {
       setClearing(false)
     }

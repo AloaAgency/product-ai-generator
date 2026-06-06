@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { requireUuid } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 
@@ -62,7 +63,7 @@ export async function GET(
       expires_at: Date.now() + SIGNED_URL_TTL_SECONDS * 1000,
     })
   } catch (err) {
-    console.error('[ImageSigned] Error:', err)
+    logger.error('[ImageSigned] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -69,7 +70,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       .createSignedUploadUrl(storagePath, { upsert: true })
 
     if (signError || !signedData?.signedUrl) {
-      console.error('[UploadFrame] sign error', signError)
+      logger.error('[UploadFrame] sign error', signError)
       return NextResponse.json({ error: 'Failed to create upload URL' }, { status: 500 })
     }
 
@@ -91,7 +92,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       .single()
 
     if (insertError || !image) {
-      console.error('[UploadFrame] insert error', insertError)
+      logger.error('[UploadFrame] insert error', insertError)
       return NextResponse.json({ error: 'Failed to create image record' }, { status: 500 })
     }
 
@@ -113,7 +114,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       image,
     }, { status: 201 })
   } catch (err) {
-    console.error('[UploadFrame] Error:', err)
+    logger.error('[UploadFrame] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

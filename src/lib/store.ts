@@ -23,6 +23,7 @@ import {
   sanitizeUuidArray,
   validateReferenceUploadFiles,
 } from './request-guards'
+import { logger } from '@/lib/logger'
 
 const DEFAULT_ERROR_MESSAGE = 'Request failed'
 const MAX_SUGGESTED_PROMPT_COUNT = 10
@@ -205,7 +206,7 @@ const safeParseResponse = async (res: Response) => {
 }
 
 const logStoreError = (scope: string, error: unknown) => {
-  console.error(`[Store:${scope}] ${sanitizePublicErrorMessage(error)}`)
+  logger.error(`[Store:${scope}] ${sanitizePublicErrorMessage(error)}`)
 }
 
 const getInFlightRequest = <T>(key: string, request: () => Promise<T>) => {

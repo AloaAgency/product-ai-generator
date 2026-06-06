@@ -45,6 +45,7 @@ import {
   normalizeDurationValue,
   parsePositiveNumber,
 } from '@/lib/video-constants'
+import { logger } from '@/lib/logger'
 
 const api = async (url: string, options?: RequestInit) => {
   const res = await fetch(url, options)
@@ -484,7 +485,7 @@ export default function ScenesPage({
         ...prev,
         [sceneId]: { type: 'error', message },
       }))
-      console.error('[GenerateVideo] Failed to queue video', err)
+      logger.error('[GenerateVideo] Failed to queue video', err)
     } finally {
       setGeneratingVideo(null)
     }
@@ -515,7 +516,7 @@ export default function ScenesPage({
       document.body.removeChild(link)
       URL.revokeObjectURL(blobUrl)
     } catch (err) {
-      console.error('[DownloadVideo] Failed', err)
+      logger.error('[DownloadVideo] Failed', err)
     }
   }, [])
 

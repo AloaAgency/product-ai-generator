@@ -15,6 +15,7 @@ import type { Product, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { resolveGoogleApiKey } from '@/lib/google-api-keys'
 import { logError } from '@/lib/error-logger'
+import { logger } from '@/lib/logger'
 
 async function generateAndStoreImage(
   supabase: ReturnType<typeof createServiceClient>,
@@ -199,7 +200,7 @@ export async function POST(
         .update({ start_frame_image_id: imageId, updated_at: new Date().toISOString() })
         .eq('id', sceneId)
       if (startFrameUpdateError) {
-        console.error('[Scene Generate] Failed to link start frame to scene:', startFrameUpdateError)
+        logger.error('[Scene Generate] Failed to link start frame to scene:', startFrameUpdateError)
       }
     }
 
@@ -252,7 +253,7 @@ export async function POST(
         .update({ end_frame_image_id: imageId, updated_at: new Date().toISOString() })
         .eq('id', sceneId)
       if (endFrameUpdateError) {
-        console.error('[Scene Generate] Failed to link end frame to scene:', endFrameUpdateError)
+        logger.error('[Scene Generate] Failed to link end frame to scene:', endFrameUpdateError)
       }
     }
 
@@ -265,7 +266,7 @@ export async function POST(
 
     return NextResponse.json(updated)
   } catch (err) {
-    console.error('[Scene Generate] Error:', err)
+    logger.error('[Scene Generate] Error:', err)
     await logError({
       productId,
       errorMessage: err instanceof Error ? err.message : 'Internal server error',

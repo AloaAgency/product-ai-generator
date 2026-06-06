@@ -20,6 +20,7 @@ import {
   Package,
   Trash2,
 } from 'lucide-react'
+import { logger } from '@/lib/logger'
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'request_changes'
 
@@ -121,7 +122,7 @@ export default function ProjectGalleryPage({
         setRequestChangesCount(data.request_changes_count)
       }
     } catch (err) {
-      console.error('[ProjectGallery] Fetch error:', err)
+      logger.error('[ProjectGallery] Fetch error:', err)
       setProductGroups([])
     } finally {
       setLoading(false)
@@ -157,7 +158,7 @@ export default function ProjectGalleryPage({
       setCurrentOffset((prev) => prev + newImageCount)
       setHasMore(data.has_more ?? false)
     } catch (err) {
-      console.error('[ProjectGallery] Fetch more error:', err)
+      logger.error('[ProjectGallery] Fetch more error:', err)
     } finally {
       setLoadingMore(false)
     }
@@ -414,7 +415,7 @@ export default function ProjectGalleryPage({
           document.body.removeChild(link)
           URL.revokeObjectURL(blobUrl)
         } catch (err) {
-          console.error('Download failed for image', imageId, err)
+          logger.error('Download failed for image', imageId, err)
         }
         break
       }

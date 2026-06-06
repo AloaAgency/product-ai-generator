@@ -30,6 +30,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { logger } from '@/lib/logger'
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'request_changes'
 type SortOption = 'newest' | 'oldest' | 'variation'
@@ -164,7 +165,7 @@ export default function GalleryPage({
       // Refresh gallery
       await fetchGallery(id, { sort: sortOption })
     } catch (err) {
-      console.error('[GalleryUpload] Error:', err)
+      logger.error('[GalleryUpload] Error:', err)
     } finally {
       setUploadingGallery(false)
       if (galleryFileInputRef.current) galleryFileInputRef.current.value = ''
@@ -465,7 +466,7 @@ export default function GalleryPage({
           document.body.removeChild(link)
           URL.revokeObjectURL(blobUrl)
         } catch (err) {
-          console.error('Download failed for image', imageId, err)
+          logger.error('Download failed for image', imageId, err)
         }
         break
       }
@@ -544,7 +545,7 @@ export default function GalleryPage({
         URL.revokeObjectURL(blobUrl)
         await new Promise((resolve) => setTimeout(resolve, 300))
       } catch (err) {
-        console.error('Download failed for image', img.id, err)
+        logger.error('Download failed for image', img.id, err)
       }
     }
   }

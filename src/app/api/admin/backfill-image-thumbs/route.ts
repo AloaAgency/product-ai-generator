@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { createThumbnail, buildThumbnailPath } from '@/lib/image-utils'
 import { isAdminAuthorizedNode } from '@/lib/server-secrets'
+import { logger } from '@/lib/logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -32,7 +33,7 @@ export async function POST(request: NextRequest) {
       .limit(limit)
 
     if (error) {
-      console.error('[Admin BackfillImageThumbs]', error)
+      logger.error('[Admin BackfillImageThumbs]', error)
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
@@ -128,7 +129,7 @@ export async function POST(request: NextRequest) {
       results,
     })
   } catch (err) {
-    console.error('[Admin BackfillImageThumbs] Unexpected error:', err)
+    logger.error('[Admin BackfillImageThumbs] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

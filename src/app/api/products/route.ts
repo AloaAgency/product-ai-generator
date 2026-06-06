@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const PLACEHOLDER_USER_ID = '00000000-0000-0000-0000-000000000000'
 
@@ -25,10 +26,10 @@ export async function GET(request: NextRequest) {
 
     const { data, error } = await query
 
-    if (error) { console.error('[Products GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Products GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[Products GET] Unexpected error:', err)
+    logger.error('[Products GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -66,10 +67,10 @@ export async function POST(request: NextRequest) {
       .select()
       .single()
 
-    if (error) { console.error('[Products POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Products POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
   } catch (err) {
-    console.error('[Products POST] Unexpected error:', err)
+    logger.error('[Products POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 export async function GET(
   request: NextRequest,
@@ -17,10 +18,10 @@ export async function GET(
       .eq('product_id', id)
       .order('created_at', { ascending: true })
 
-    if (error) { console.error('[SettingsTemplates GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[SettingsTemplates GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[SettingsTemplates GET] Unexpected error:', err)
+    logger.error('[SettingsTemplates GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -47,7 +48,7 @@ export async function POST(
       .select('*', { count: 'exact', head: true })
       .eq('product_id', product_id)
 
-    if (countError) { console.error('[SettingsTemplates POST count]', countError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (countError) { logger.error('[SettingsTemplates POST count]', countError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     const isFirst = (count ?? 0) === 0
 
@@ -62,7 +63,7 @@ export async function POST(
       .select()
       .single()
 
-    if (error) { console.error('[SettingsTemplates POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[SettingsTemplates POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     // If first template, sync settings to product
     if (isFirst && settings) {
@@ -71,13 +72,13 @@ export async function POST(
         .update({ global_style_settings: settings })
         .eq('id', product_id)
       if (syncError) {
-        console.error('[SettingsTemplates POST] Failed to sync settings to product:', syncError)
+        logger.error('[SettingsTemplates POST] Failed to sync settings to product:', syncError)
       }
     }
 
     return NextResponse.json(data, { status: 201 })
   } catch (err) {
-    console.error('[SettingsTemplates POST] Unexpected error:', err)
+    logger.error('[SettingsTemplates POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

@@ -81,7 +81,7 @@ describe('kickWorkerForJob', () => {
   it('issues an authenticated worker request', async () => {
     const logs: Array<{ message: string; payload: unknown }> = []
     const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 202 }))
-    const logSpy = vi.spyOn(console, 'log').mockImplementation((message?: unknown, payload?: unknown) => {
+    const logSpy = vi.spyOn(console, 'debug').mockImplementation((message?: unknown, payload?: unknown) => {
       logs.push({ message: String(message), payload })
     })
 

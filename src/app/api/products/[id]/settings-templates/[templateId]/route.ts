@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 export async function PATCH(
   request: NextRequest,
@@ -21,7 +22,7 @@ export async function PATCH(
         .update({ is_active: false })
         .eq('product_id', productId)
 
-      if (deactivateError) { console.error('[SettingsTemplate PATCH deactivate]', deactivateError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+      if (deactivateError) { logger.error('[SettingsTemplate PATCH deactivate]', deactivateError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     }
 
     const updates: Record<string, unknown> = {}
@@ -38,7 +39,7 @@ export async function PATCH(
       .select()
       .single()
 
-    if (error) { console.error('[SettingsTemplate PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[SettingsTemplate PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     // When activating, sync settings to product
     if (body.is_active === true) {
@@ -51,7 +52,7 @@ export async function PATCH(
 
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[SettingsTemplate PATCH] Unexpected error:', err)
+    logger.error('[SettingsTemplate PATCH] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -70,10 +71,10 @@ export async function DELETE(
       .eq('id', templateId)
       .eq('product_id', productId)
 
-    if (error) { console.error('[SettingsTemplate DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[SettingsTemplate DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[SettingsTemplate DELETE] Unexpected error:', err)
+    logger.error('[SettingsTemplate DELETE] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
