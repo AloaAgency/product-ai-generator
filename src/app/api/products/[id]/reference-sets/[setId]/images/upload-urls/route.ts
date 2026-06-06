@@ -8,6 +8,7 @@ import {
   MAX_REFERENCE_IMAGE_SIZE_BYTES,
   parseRequestBody,
 } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -111,7 +112,7 @@ export async function POST(
 
     return NextResponse.json(results, { status: 201 })
   } catch (err) {
-    console.error('[ReferenceImages UploadUrls] Unexpected error:', err)
+    logger.error('[ReferenceImages UploadUrls] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

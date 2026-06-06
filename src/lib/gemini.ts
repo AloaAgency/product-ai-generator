@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { logger } from '@/lib/logger'
 
 export type GeminiImageResolution = '2K' | '4K'
 
@@ -138,11 +139,11 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       const delay = RETRY_DELAYS[attempt - 1] || RETRY_DELAYS[RETRY_DELAYS.length - 1]
-      console.log(`[Gemini] Retry attempt ${attempt}/${MAX_RETRIES} after ${delay}ms delay...`)
+      logger.debug(`[Gemini] Retry attempt ${attempt}/${MAX_RETRIES} after ${delay}ms delay...`)
       await new Promise(resolve => setTimeout(resolve, delay))
     }
 
-    console.log(`[Gemini] Calling ${model} for image generation${attempt > 0 ? ` (attempt ${attempt + 1})` : ''}...`)
+    logger.debug(`[Gemini] Calling ${model} for image generation${attempt > 0 ? ` (attempt ${attempt + 1})` : ''}...`)
     const response = await fetch(resolveEndpoint(model), {
       method: 'POST',
       headers: {
@@ -158,7 +159,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
     if (!response.ok) {
       const message = raw?.error?.message || raw?.message || response.statusText
       const errorCode = raw?.error?.code || raw?.error?.status || response.status
-      console.error(`[Gemini] API error (${response.status}):`, message, raw?.error ?? null)
+      logger.error(`[Gemini] API error (${response.status}):`, message, raw?.error ?? null)
 
       if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
         lastError = new Error(response.status === 429
@@ -182,7 +183,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
       throw new Error(message || `Gemini error ${errorCode || response.status}`)
     }
 
-    console.log(`[Gemini] Successfully received response`)
+    logger.debug(`[Gemini] Successfully received response`)
 
     const inline = extractInlineImage(raw)
     if (!inline) {
@@ -192,7 +193,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
         ?.map((p) => p.text)
         ?.join(' ') || ''
       const finishReason = raw?.candidates?.[0]?.finishReason || 'unknown'
-      console.error(
+      logger.error(
         `[Gemini] Response did not include image data. finishReason=${finishReason}, ` +
         `textResponse=${textParts.slice(0, 200)}, ` +
         `candidateCount=${raw?.candidates?.length || 0}, ` +

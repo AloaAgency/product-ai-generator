@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 export async function PATCH(
   request: NextRequest,
@@ -35,7 +36,7 @@ export async function PATCH(
     if (error || !data) return NextResponse.json({ error: 'Storyboard not found' }, { status: 404 })
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[Storyboard PATCH] Unexpected error:', err)
+    logger.error('[Storyboard PATCH] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -54,10 +55,10 @@ export async function DELETE(
       .eq('id', boardId)
       .eq('product_id', productId)
 
-    if (error) { console.error('[Storyboard DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Storyboard DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[Storyboard DELETE] Unexpected error:', err)
+    logger.error('[Storyboard DELETE] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

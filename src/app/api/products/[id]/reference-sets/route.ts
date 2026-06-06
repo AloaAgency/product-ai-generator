@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const MAX_NAME_LENGTH = 500
 const MAX_DESCRIPTION_LENGTH = 5000
@@ -20,10 +21,10 @@ export async function GET(
       .eq('product_id', id)
       .order('display_order', { ascending: true })
 
-    if (error) { console.error('[ReferenceSets GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[ReferenceSets GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[ReferenceSets GET] Unexpected error:', err)
+    logger.error('[ReferenceSets GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -61,7 +62,7 @@ export async function POST(
       .eq('product_id', product_id)
       .eq('type', type)
 
-    if (countError) { console.error('[ReferenceSets POST count]', countError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (countError) { logger.error('[ReferenceSets POST count]', countError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     // Only auto-activate for product sets (not texture sets)
     const isFirst = (count ?? 0) === 0 && type === 'product'
@@ -79,10 +80,10 @@ export async function POST(
       .select()
       .single()
 
-    if (error) { console.error('[ReferenceSets POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[ReferenceSets POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
   } catch (err) {
-    console.error('[ReferenceSets POST] Unexpected error:', err)
+    logger.error('[ReferenceSets POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

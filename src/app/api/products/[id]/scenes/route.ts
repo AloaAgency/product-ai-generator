@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { normalizeDurationValue } from '@/lib/video-constants'
 import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const MAX_PROMPT_LENGTH = 10000
 const MAX_TITLE_LENGTH = 500
@@ -28,10 +29,10 @@ export async function GET(
     }
 
     const { data, error } = await query
-    if (error) { console.error('[Scenes GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Scenes GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[Scenes GET] Unexpected error:', err)
+    logger.error('[Scenes GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -93,10 +94,10 @@ export async function POST(
       .select()
       .single()
 
-    if (error) { console.error('[Scenes POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Scenes POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
   } catch (err) {
-    console.error('[Scenes POST] Unexpected error:', err)
+    logger.error('[Scenes POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

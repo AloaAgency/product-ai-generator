@@ -7,6 +7,7 @@ import {
   sanitizePublicErrorMessage,
   parseRequestBody,
 } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 export async function PATCH(
   request: NextRequest,
@@ -54,7 +55,7 @@ export async function PATCH(
 
     return NextResponse.json({ image })
   } catch (err) {
-    console.error(`[ImagePatch] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[ImagePatch] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -91,7 +92,7 @@ export async function DELETE(
       if (storageError) {
         // Log but continue — the DB record must still be deleted to prevent stale data.
         // Orphaned storage files can be cleaned up via the backfill admin route.
-        console.error('[ImageDelete] Storage deletion failed, orphaned files may remain:', storageError)
+        logger.error('[ImageDelete] Storage deletion failed, orphaned files may remain:', storageError)
       }
     }
 
@@ -107,7 +108,7 @@ export async function DELETE(
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error(`[ImageDelete] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[ImageDelete] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

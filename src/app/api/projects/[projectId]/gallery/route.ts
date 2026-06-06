@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { optionalUuid, requireUuid } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const DEFAULT_PAGE_SIZE = 48
@@ -213,10 +214,10 @@ export async function GET(
     ])
 
     if (signedImageResult.error) {
-      console.error('[ProjectGallery] Failed to sign image URLs:', signedImageResult.error.message)
+      logger.error('[ProjectGallery] Failed to sign image URLs:', signedImageResult.error.message)
     }
     if (signedVideoResult.error) {
-      console.error('[ProjectGallery] Failed to sign video URLs:', signedVideoResult.error.message)
+      logger.error('[ProjectGallery] Failed to sign video URLs:', signedVideoResult.error.message)
     }
 
     const signedImageBucket = new Map<string, string>(
@@ -281,7 +282,7 @@ export async function GET(
       request_changes_count: changesResult.count ?? 0,
     })
   } catch (err) {
-    console.error('[ProjectGallery] Error:', err)
+    logger.error('[ProjectGallery] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

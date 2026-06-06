@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { AUTH_COOKIE_NAME, deriveAuthToken } from '@/lib/auth-constants'
 import { secretsEqual } from '@/lib/server-secrets'
+import { logger } from '@/lib/logger'
 
 // Hard cap on input sizes accepted by the login endpoint.
 // A legitimate password will never approach these limits; rejecting early
@@ -30,7 +31,7 @@ export async function POST(request: NextRequest) {
   // than falling back to a well-known hardcoded credential.
   const PASSWORD = process.env.SITE_PASSWORD
   if (!PASSWORD) {
-    console.error('[Login] SITE_PASSWORD is not set — all logins denied')
+    logger.error('[Login] SITE_PASSWORD is not set — all logins denied')
     return new NextResponse(null, { status: 503 })
   }
 

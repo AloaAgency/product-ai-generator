@@ -9,6 +9,7 @@ import {
   MAX_REFERENCE_IMAGE_SIZE_BYTES,
   parseRequestBody,
 } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -188,7 +189,7 @@ export async function POST(
 
     return NextResponse.json(results, { status: 201 })
   } catch (err) {
-    console.error('[ReferenceImages POST] Unexpected error:', err)
+    logger.error('[ReferenceImages POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -207,7 +208,7 @@ export async function GET(
       .eq('reference_set_id', setId)
       .order('display_order', { ascending: true })
 
-    if (error) { console.error('[ReferenceImages GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[ReferenceImages GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     const paths = (data || [])
       .map((img) => img.storage_path)
@@ -234,7 +235,7 @@ export async function GET(
 
     return NextResponse.json(images)
   } catch (err) {
-    console.error('[ReferenceImages GET] Unexpected error:', err)
+    logger.error('[ReferenceImages GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { requireUuid, sanitizePublicErrorMessage } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 async function resolveProject(supabase: ReturnType<typeof createServiceClient>, projectId: string) {
   const { data } = await supabase
@@ -38,7 +39,7 @@ export async function GET(req: NextRequest) {
     if (error) throw error
     return NextResponse.json(data)
   } catch (err) {
-    console.error(`[ErrorLogs GET] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[ErrorLogs GET] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -67,7 +68,7 @@ export async function DELETE(req: NextRequest) {
     if (error) throw error
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error(`[ErrorLogs DELETE] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[ErrorLogs DELETE] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

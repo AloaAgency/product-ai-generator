@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { generateSceneTitle } from '@/lib/prompt-builder'
 import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 // Must match the limits enforced by the POST route on the same table
 const MAX_NAME_LENGTH = 500
@@ -55,10 +56,10 @@ export async function PATCH(
       .select()
       .single()
 
-    if (error) { console.error('[Prompt PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Prompt PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[Prompt PATCH] Unexpected error:', err instanceof Error ? err.message : String(err))
+    logger.error('[Prompt PATCH] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -77,10 +78,10 @@ export async function DELETE(
       .eq('id', promptId)
       .eq('product_id', productId)
 
-    if (error) { console.error('[Prompt DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Prompt DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[Prompt DELETE] Unexpected error:', err instanceof Error ? err.message : String(err))
+    logger.error('[Prompt DELETE] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

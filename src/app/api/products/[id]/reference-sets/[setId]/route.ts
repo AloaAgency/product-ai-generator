@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 export async function PATCH(
   request: NextRequest,
@@ -37,7 +38,7 @@ export async function PATCH(
         .eq('product_id', productId)
         .eq('type', 'product')
 
-      if (deactivateError) { console.error('[ReferenceSet PATCH deactivate]', deactivateError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+      if (deactivateError) { logger.error('[ReferenceSet PATCH deactivate]', deactivateError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     }
 
     const updates: Record<string, unknown> = {}
@@ -53,10 +54,10 @@ export async function PATCH(
       .select()
       .single()
 
-    if (error) { console.error('[ReferenceSet PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[ReferenceSet PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[ReferenceSet PATCH] Unexpected error:', err)
+    logger.error('[ReferenceSet PATCH] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -75,10 +76,10 @@ export async function DELETE(
       .eq('id', setId)
       .eq('product_id', productId)
 
-    if (error) { console.error('[ReferenceSet DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[ReferenceSet DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[ReferenceSet DELETE] Unexpected error:', err)
+    logger.error('[ReferenceSet DELETE] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

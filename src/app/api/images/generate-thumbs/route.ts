@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { createThumbnail, buildThumbnailPath } from '@/lib/image-utils'
 import { isUuid, parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -38,7 +39,7 @@ export async function POST(request: NextRequest) {
       .is('thumb_storage_path', null)
 
     if (error) {
-      console.error('[GenerateThumbs] DB error fetching images:', error)
+      logger.error('[GenerateThumbs] DB error fetching images:', error)
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
     if (!images || images.length === 0) {
@@ -72,13 +73,13 @@ export async function POST(request: NextRequest) {
 
         success++
       } catch (err) {
-        console.warn('[GenerateThumbs] Skipping image', img.id, ':', err)
+        logger.warn('[GenerateThumbs] Skipping image', img.id, ':', err)
       }
     }
 
     return NextResponse.json({ processed: success })
   } catch (err) {
-    console.error('[GenerateThumbs] Unexpected error:', err)
+    logger.error('[GenerateThumbs] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

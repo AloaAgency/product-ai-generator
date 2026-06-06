@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { normalizeDurationValue } from '@/lib/video-constants'
 import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 type Params = { params: Promise<{ id: string; sceneId: string }> }
 
@@ -68,7 +69,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     if (error || !data) return NextResponse.json({ error: 'Scene not found' }, { status: 404 })
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[Scene PATCH] Unexpected error:', err)
+    logger.error('[Scene PATCH] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -83,10 +84,10 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
       .delete()
       .eq('id', sceneId)
 
-    if (error) { console.error('[Scene DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Scene DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[Scene DELETE] Unexpected error:', err)
+    logger.error('[Scene DELETE] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

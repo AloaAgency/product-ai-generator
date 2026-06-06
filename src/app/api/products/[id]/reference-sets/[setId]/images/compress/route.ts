@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processReferenceImageCompression } from '@/lib/reference-image-compression'
 import { isAdminAuthorizedNode } from '@/lib/server-secrets'
+import { logger } from '@/lib/logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -27,7 +28,7 @@ export async function POST(
       .order('display_order', { ascending: true })
 
     if (error) {
-      console.error('[ReferenceImagesCompress GET]', error)
+      logger.error('[ReferenceImagesCompress GET]', error)
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
@@ -61,7 +62,7 @@ export async function POST(
       results,
     })
   } catch (err) {
-    console.error('[ReferenceImagesCompress] Unexpected error:', err)
+    logger.error('[ReferenceImagesCompress] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

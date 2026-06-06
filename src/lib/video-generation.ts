@@ -4,6 +4,7 @@ import { slugify, extractVideoThumbnail, buildThumbnailPath } from '@/lib/image-
 import { resolveGoogleApiKey } from '@/lib/google-api-keys'
 import type { GlobalStyleSettings } from '@/lib/types'
 import { isLtxModel, normalizeDurationValue, parsePositiveNumber } from '@/lib/video-constants'
+import { logger } from '@/lib/logger'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const MAX_PROMPT_LENGTH = 4_000
@@ -423,7 +424,7 @@ export async function buildVeoRequestParts(
 
   if (frameRefs.end?.url) {
     if (!frameRefs.start?.url) {
-      console.warn('[Veo] Ignoring end frame because no start frame was provided.')
+      logger.warn('[Veo] Ignoring end frame because no start frame was provided.')
     }
   }
 
@@ -468,7 +469,7 @@ export async function buildVeoRequestParts(
 function logVeoParameters(config: VeoConfig, parameters: Record<string, unknown>) {
   if (!config.shouldLog) return
 
-  console.log('[Veo] parameters', {
+  logger.debug('[Veo] parameters', {
     model: config.model,
     durationSeconds: parameters.durationSeconds,
     resolution: parameters.resolution,
@@ -686,13 +687,13 @@ async function uploadVideoThumbnail(
       .upload(thumbStoragePath, thumb.buffer, { contentType: thumb.mimeType })
 
     if (thumbUploadErr) {
-      console.warn(`Video thumbnail upload failed: ${thumbUploadErr.message}`)
+      logger.warn(`Video thumbnail upload failed: ${thumbUploadErr.message}`)
       return null
     }
 
     return thumbStoragePath
   } catch (err) {
-    console.warn('Video thumbnail extraction failed:', err)
+    logger.warn('Video thumbnail extraction failed:', err)
     return null
   }
 }
@@ -741,10 +742,10 @@ async function cleanupUploadedVideoAssets(
       .remove(paths)
 
     if (error) {
-      console.warn('Failed to clean up uploaded video assets:', error.message)
+      logger.warn('Failed to clean up uploaded video assets:', error.message)
     }
   } catch (error) {
-    console.warn('Failed to clean up uploaded video assets:', error)
+    logger.warn('Failed to clean up uploaded video assets:', error)
   }
 }
 

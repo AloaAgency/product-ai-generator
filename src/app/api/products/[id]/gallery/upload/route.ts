@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -117,7 +118,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     // The client must call POST /api/images/generate-thumbs after uploading files.
     return NextResponse.json(results, { status: 201 })
   } catch (err) {
-    console.error('[GalleryUpload] Error:', err)
+    logger.error('[GalleryUpload] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

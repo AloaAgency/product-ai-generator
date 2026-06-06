@@ -6,11 +6,14 @@ import type { Product, GlobalStyleSettings, ReferenceSet, ReferenceImage } from 
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
+import { createLogger } from '@/lib/logger'
 import { processGenerationJob } from '@/lib/generation-worker'
 import { kickWorkerForJob } from '@/lib/video-job-request'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
+
+const log = createLogger('Generate')
 
 const MAX_PROMPT_LENGTH = 10000
 const DEFAULT_JOBS_LIMIT = 50
@@ -126,7 +129,7 @@ export async function GET(
     }
     return NextResponse.json(data || [])
   } catch (err) {
-    console.error('[Generate GET]', err)
+    log.error('GET', err)
     await logError({
       productId,
       errorMessage: err instanceof Error ? err.message : 'Internal server error',
@@ -400,7 +403,7 @@ export async function POST(
       const finalBudget = Number.isFinite(overrideBudget) && overrideBudget > 0 ? overrideBudget : timeBudgetMs
       void processGenerationJob(job.id, { batchSize: finalBatch, parallelism: finalParallel, timeBudgetMs: finalBudget }).catch(async (err) => {
         const message = err instanceof Error ? err.message : 'Inline generation job failed'
-        console.error('[Generate] Inline job failed:', err)
+        log.error('Inline job failed:', err)
         await logError({
           productId,
           errorMessage: message,
@@ -418,7 +421,7 @@ export async function POST(
 
     return NextResponse.json({ job }, { status: 201 })
   } catch (err) {
-    console.error('[Generate] Error:', err)
+    log.error('Error:', err)
     await logError({
       productId,
       errorMessage: err instanceof Error ? err.message : 'Internal server error',
@@ -459,7 +462,7 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        console.error('[Generate DELETE cancel]', error)
+        log.error('DELETE cancel', error)
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       cancelled = data?.length || 0
@@ -474,7 +477,7 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        console.error('[Generate DELETE failed]', error)
+        log.error('DELETE failed', error)
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       clearedFailed = data?.length || 0
@@ -490,7 +493,7 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        console.error('[Generate DELETE log]', error)
+        log.error('DELETE log', error)
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       clearedLog = data?.length || 0
@@ -498,7 +501,7 @@ export async function DELETE(
 
     return NextResponse.json({ cancelled, cleared_failed: clearedFailed, cleared_log: clearedLog })
   } catch (err) {
-    console.error('[Generate DELETE]', err)
+    log.error('DELETE', err)
     await logError({
       productId,
       errorMessage: err instanceof Error ? err.message : 'Internal server error',

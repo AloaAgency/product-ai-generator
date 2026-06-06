@@ -6,6 +6,7 @@
 import type { GlobalStyleSettings } from './types'
 import Anthropic from '@anthropic-ai/sdk'
 import { CLAUDE_FAST_MODEL } from './claude-models'
+import { logger } from '@/lib/logger'
 
 const anthropic = new Anthropic()
 
@@ -41,7 +42,7 @@ export async function generateSceneTitle(promptText: string): Promise<string> {
     })
     return safeTextFromContent(response.content).trim()
   } catch (err) {
-    console.warn('[generateSceneTitle] AI call failed, title will be empty:', err instanceof Error ? err.message : String(err))
+    logger.warn('[generateSceneTitle] AI call failed, title will be empty:', err instanceof Error ? err.message : String(err))
     return ''
   }
 }
@@ -324,7 +325,7 @@ export function parsePromptSuggestions(raw: string): { name: string; prompt_text
       .filter((p: { name: string; prompt_text: string }) => p.prompt_text.length > 0)
   }
 
-  console.warn(
+  logger.warn(
     '[parsePromptSuggestions] No valid JSON found in response:',
     `${candidates.length} candidate(s) tried, raw length ${raw.length}`,
     '— raw snippet:',

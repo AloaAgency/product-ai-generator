@@ -8,6 +8,7 @@ import {
   sanitizeApprovalStatus,
   sanitizePublicErrorMessage,
 } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const DEFAULT_PAGE_SIZE = 48
@@ -217,10 +218,10 @@ export async function GET(
     ])
 
     if (signedImageResult.error) {
-      console.error('[Gallery] Failed to sign image URLs:', signedImageResult.error.message)
+      logger.error('[Gallery] Failed to sign image URLs:', signedImageResult.error.message)
     }
     if (signedVideoResult.error) {
-      console.error('[Gallery] Failed to sign video URLs:', signedVideoResult.error.message)
+      logger.error('[Gallery] Failed to sign video URLs:', signedVideoResult.error.message)
     }
 
     const signedImageBucket = new Map<string, string>(
@@ -258,7 +259,7 @@ export async function GET(
       has_more: offset + signedImages.length < (totalCount ?? signedImages.length),
     })
   } catch (err) {
-    console.error(`[Gallery] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[Gallery] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

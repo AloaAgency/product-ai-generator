@@ -4,6 +4,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processGenerationJob } from '@/lib/generation-worker'
 import { logError } from '@/lib/error-logger'
+import { logger } from '@/lib/logger'
 
 export type ServiceClient = ReturnType<typeof createServiceClient>
 
@@ -86,9 +87,9 @@ export function kickWorkerForJob(
         headers: { Authorization: `Bearer ${cronSecret}` },
         signal: controller.signal,
       })
-      console.log(`${label} Worker kick`, { jobId, status: res.status })
+      logger.debug(`${label} Worker kick`, { jobId, status: res.status })
     } catch (err) {
-      console.warn(`${label} Worker kick failed`, {
+      logger.warn(`${label} Worker kick failed`, {
         jobId,
         error: err instanceof Error ? err.message : String(err),
       })
@@ -180,7 +181,7 @@ export async function handleSceneGenerateVideoPost(
     if (shouldRunVideoGenerationInline()) {
       void processGenerationJob(job!.id as string).catch(async (err) => {
         const message = err instanceof Error ? err.message : 'Video generation failed'
-        console.error('[GenerateVideo] Inline job failed:', err)
+        logger.error('[GenerateVideo] Inline job failed:', err)
         await logError({
           productId,
           errorMessage: message,
@@ -194,7 +195,7 @@ export async function handleSceneGenerateVideoPost(
 
     return NextResponse.json({ job }, { status: 201 })
   } catch (err) {
-    console.error('[GenerateVideo] Error:', err)
+    logger.error('[GenerateVideo] Error:', err)
     await logError({
       productId,
       errorMessage: err instanceof Error ? err.message : 'Internal server error',

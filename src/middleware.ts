@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { AUTH_COOKIE_NAME, deriveAuthToken, timingResistantEqual } from '@/lib/auth-constants'
 import { applySecurityHeaders } from '@/lib/security-headers'
+import { logger } from '@/lib/logger'
 
 // Static parts of the login page HTML, split so the form (which varies per request)
 // can be inserted between them without re-declaring the surrounding boilerplate.
@@ -160,7 +161,7 @@ export async function middleware(request: NextRequest) {
     // runtime fault unrelated to auth), return a structured error response
     // instead of letting the middleware throw an unhandled exception, which
     // would surface as an opaque 500 with no useful headers.
-    console.error('[Middleware] Unexpected error', err instanceof Error ? err.message : String(err))
+    logger.error('[Middleware] Unexpected error', err instanceof Error ? err.message : String(err))
     if (pathname.startsWith('/api/')) {
       return withSecurityHeaders(
         NextResponse.json(

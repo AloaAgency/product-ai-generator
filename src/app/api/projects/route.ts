@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const PLACEHOLDER_USER_ID = '00000000-0000-0000-0000-000000000000'
 
@@ -16,10 +17,10 @@ export async function GET() {
       .select('*')
       .order('created_at', { ascending: false })
 
-    if (error) { console.error('[Projects GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Projects GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[Projects GET] Unexpected error:', err)
+    logger.error('[Projects GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -53,10 +54,10 @@ export async function POST(request: NextRequest) {
       .select()
       .single()
 
-    if (error) { console.error('[Projects POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Projects POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
   } catch (err) {
-    console.error('[Projects POST] Unexpected error:', err)
+    logger.error('[Projects POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

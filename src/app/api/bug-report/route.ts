@@ -9,6 +9,7 @@ import {
   normalizeBugReportMultiline,
   normalizeBugReportSingleLine,
 } from '@/components/bugReportWidget.helpers'
+import { logger } from '@/lib/logger'
 
 const BFT_API_KEY = process.env.BFT_API_KEY?.replace(/"/g, '') || ''
 const BFT_BASE_URL = process.env.BFT_BASE_URL?.replace(/"/g, '') || ''
@@ -59,13 +60,13 @@ async function uploadImageToTracker(itemId: string, image: ImageUpload): Promise
 
     if (!response.ok) {
       const raw = await response.text()
-      console.error(`[BugReport] Upload failed (${response.status}): ${redactSensitiveText(raw)}`)
+      logger.error(`[BugReport] Upload failed (${response.status}): ${redactSensitiveText(raw)}`)
       return false
     }
 
     return true
   } catch (error) {
-    console.error('[BugReport] Upload exception:', getSafeBugReportError(error))
+    logger.error('[BugReport] Upload exception:', getSafeBugReportError(error))
     return false
   }
 }
@@ -156,10 +157,10 @@ export async function POST(request: NextRequest) {
         const data = await response.json()
         itemId = data?.data?.id
       } else {
-        console.error('Bug tracker API error:', redactSensitiveText(await response.text()))
+        logger.error('Bug tracker API error:', redactSensitiveText(await response.text()))
       }
     } catch (trackerError) {
-      console.error('Bug tracker API request failed:', getSafeBugReportError(trackerError))
+      logger.error('Bug tracker API request failed:', getSafeBugReportError(trackerError))
     }
 
     let imagesUploaded = 0
@@ -187,7 +188,7 @@ export async function POST(request: NextRequest) {
       { status: trackerResponseOk ? 200 : 202 }
     )
   } catch (error) {
-    console.error('Error submitting bug report:', getSafeBugReportError(error))
+    logger.error('Error submitting bug report:', getSafeBugReportError(error))
     return NextResponse.json(
       { success: false, message: 'Failed to submit report.' },
       { status: 500 }

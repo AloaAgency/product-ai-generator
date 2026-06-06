@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { sanitizePublicErrorMessage, sanitizeUuidArray, parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const MAX_BULK_DELETE = 200
 
@@ -54,7 +55,7 @@ export async function POST(request: NextRequest) {
     if (imagePaths.length > 0) {
       const { error: storageError } = await supabase.storage.from('generated-images').remove(imagePaths)
       if (storageError) {
-        console.error('[BulkDelete] Storage deletion failed, orphaned files may remain:', storageError)
+        logger.error('[BulkDelete] Storage deletion failed, orphaned files may remain:', storageError)
       }
     }
 
@@ -70,7 +71,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ deleted: images.length })
   } catch (err) {
-    console.error(`[BulkDelete] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[BulkDelete] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

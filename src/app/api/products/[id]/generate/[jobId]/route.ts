@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { logger } from '@/lib/logger'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 
@@ -85,7 +86,7 @@ export async function GET(
 
     return NextResponse.json({ job, images: signedImages })
   } catch (err) {
-    console.error('[JobStatus] Error:', err)
+    logger.error('[JobStatus] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -125,13 +126,13 @@ export async function DELETE(
       .eq('id', jobId)
 
     if (deleteError) {
-      console.error('[Job DELETE]', deleteError)
+      logger.error('[Job DELETE]', deleteError)
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
     return NextResponse.json({ deleted: jobId })
   } catch (err) {
-    console.error('[Job DELETE]', err)
+    logger.error('[Job DELETE]', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

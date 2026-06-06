@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { logger } from '@/lib/logger'
 
 const SIGNED_URL_TTL = 6 * 60 * 60
 
@@ -20,7 +21,7 @@ export async function GET(
       .order('created_at', { ascending: false })
 
     if (error) {
-      console.error('[StoryboardSceneVideos GET]', error)
+      logger.error('[StoryboardSceneVideos GET]', error)
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
@@ -45,7 +46,7 @@ export async function GET(
 
     return NextResponse.json({ videos: result })
   } catch (err) {
-    console.error('[StoryboardSceneVideos] Error:', err)
+    logger.error('[StoryboardSceneVideos] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
