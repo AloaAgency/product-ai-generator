@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { buildFullPrompt, MAX_STYLE_VALUE_LEN, MAX_SUBJECT_LABEL_LEN, type ReferenceGroup } from '@/lib/prompt-builder'
+import { buildFullPrompt, type ReferenceGroup } from '@/lib/prompt-builder'
 import { parseRequestBody } from '@/lib/request-guards'
 import type { Product, GlobalStyleSettings, ReferenceSet, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
@@ -9,96 +9,21 @@ import { logError } from '@/lib/error-logger'
 import { createLogger } from '@/lib/logger'
 import { processGenerationJob } from '@/lib/generation-worker'
 import { kickWorkerForJob } from '@/lib/video-job-request'
+import {
+  MAX_PROMPT_LENGTH,
+  type ReferenceSetSelection,
+  parseReferenceSetsInput,
+  resolveReferenceImageSelection,
+  clampJobsPagination,
+  validateVariationCount,
+  capStyleValue,
+  isValidDeleteScope,
+} from '@/lib/generate-route-helpers'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
 
 const log = createLogger('Generate')
-
-const MAX_PROMPT_LENGTH = 10000
-const DEFAULT_JOBS_LIMIT = 50
-const MAX_JOBS_LIMIT = 200
-const MAX_TOTAL_REFERENCE_IMAGES = 14
-
-type ReferenceSetSelection = {
-  reference_set_id: string
-  role: 'subject' | 'texture'
-  image_count: number | null
-  image_ids: string[] | null
-  subject_label: string | null
-}
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-function parseReferenceSetsInput(input: unknown): { sets: ReferenceSetSelection[] } | { error: string } {
-  if (!Array.isArray(input) || input.length === 0) {
-    return { error: 'reference_sets must be a non-empty array' }
-  }
-  const sets: ReferenceSetSelection[] = []
-  for (let i = 0; i < input.length; i += 1) {
-    const item = input[i]
-    if (!item || typeof item !== 'object') {
-      return { error: `reference_sets[${i}] must be an object` }
-    }
-    const r = item as Record<string, unknown>
-    const refId = typeof r.reference_set_id === 'string' && r.reference_set_id.trim()
-      ? r.reference_set_id
-      : null
-    if (!refId) return { error: `reference_sets[${i}].reference_set_id is required` }
-    if (r.role !== 'subject' && r.role !== 'texture') {
-      return { error: `reference_sets[${i}].role must be "subject" or "texture"` }
-    }
-    let imageIds: string[] | null = null
-    if (r.image_ids != null) {
-      if (!Array.isArray(r.image_ids)) {
-        return { error: `reference_sets[${i}].image_ids must be an array of UUIDs` }
-      }
-      const ids: string[] = []
-      const seen = new Set<string>()
-      for (const v of r.image_ids) {
-        if (typeof v !== 'string' || !UUID_RE.test(v)) {
-          return { error: `reference_sets[${i}].image_ids must contain UUID strings` }
-        }
-        if (seen.has(v)) {
-          return { error: `reference_sets[${i}].image_ids must not contain duplicates` }
-        }
-        seen.add(v)
-        ids.push(v)
-      }
-      if (ids.length > 0) imageIds = ids
-    }
-    let imageCount: number | null = null
-    if (r.image_count != null) {
-      const n = Number(r.image_count)
-      if (!Number.isInteger(n) || n < 0) {
-        return { error: `reference_sets[${i}].image_count must be a non-negative integer` }
-      }
-      imageCount = n
-    }
-    let subjectLabel: string | null = null
-    if (r.subject_label != null) {
-      if (typeof r.subject_label !== 'string') {
-        return { error: `reference_sets[${i}].subject_label must be a string` }
-      }
-      const trimmed = r.subject_label.trim().slice(0, MAX_SUBJECT_LABEL_LEN)
-      if (trimmed) subjectLabel = trimmed
-    }
-    if (r.role === 'texture' && subjectLabel) {
-      return { error: `reference_sets[${i}].subject_label only applies to subject sets` }
-    }
-    sets.push({
-      reference_set_id: refId,
-      role: r.role,
-      image_count: imageCount,
-      image_ids: imageIds,
-      subject_label: subjectLabel,
-    })
-  }
-  if (!sets.some(s => s.role === 'subject')) {
-    return { error: 'reference_sets must include at least one subject set' }
-  }
-  return { sets }
-}
 
 export async function GET(
   request: NextRequest,
@@ -107,8 +32,7 @@ export async function GET(
   const { id: productId } = await params
   try {
     const { searchParams } = new URL(request.url)
-    const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_JOBS_LIMIT, 1), MAX_JOBS_LIMIT)
-    const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
+    const { limit, offset } = clampJobsPagination(searchParams.get('limit'), searchParams.get('offset'))
     const status = searchParams.get('status') // optional filter
 
     const supabase = createServiceClient()
@@ -174,19 +98,13 @@ export async function POST(
       return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
     }
 
-    const parsedVariationCount = Number(variation_count)
-    if (
-      !Number.isInteger(parsedVariationCount) ||
-      parsedVariationCount < 1 ||
-      parsedVariationCount > 100
-    ) {
+    const sanitizedVariationCount = validateVariationCount(variation_count)
+    if (sanitizedVariationCount === null) {
       return NextResponse.json(
         { error: 'variation_count must be an integer between 1 and 100' },
         { status: 400 }
       )
     }
-
-    const sanitizedVariationCount = parsedVariationCount
 
     const isFixImage = Boolean(source_image_id)
     const refSetsProvided = Array.isArray(referenceSetsInput) && referenceSetsInput.length > 0
@@ -264,46 +182,11 @@ export async function POST(
       imagesBySetId.set(img.reference_set_id, arr)
     }
 
-    const finalCounts: number[] = []
-    const finalSelectedIds: (string[] | null)[] = []
-    let totalImages = 0
-    for (let i = 0; i < parsedRefSets.length; i += 1) {
-      const ps = parsedRefSets[i]
-      const setImages = imagesBySetId.get(ps.reference_set_id) ?? []
-      const available = setImages.length
-      if (ps.image_ids && ps.image_ids.length > 0) {
-        const validIds = new Set(setImages.map(img => img.id))
-        for (const imgId of ps.image_ids) {
-          if (!validIds.has(imgId)) {
-            return NextResponse.json(
-              { error: `reference_sets[${i}].image_ids contains "${imgId}" which is not in the set` },
-              { status: 400 }
-            )
-          }
-        }
-        finalSelectedIds.push([...ps.image_ids])
-        finalCounts.push(ps.image_ids.length)
-        totalImages += ps.image_ids.length
-      } else {
-        const requested = ps.image_count ?? available
-        const final = Math.max(0, Math.min(requested, available))
-        if (final === 0) {
-          return NextResponse.json(
-            { error: `reference_sets[${i}] has no available images` },
-            { status: 400 }
-          )
-        }
-        finalSelectedIds.push(null)
-        finalCounts.push(final)
-        totalImages += final
-      }
+    const selection = resolveReferenceImageSelection(parsedRefSets, imagesBySetId)
+    if ('error' in selection) {
+      return NextResponse.json({ error: selection.error }, { status: 400 })
     }
-    if (totalImages > MAX_TOTAL_REFERENCE_IMAGES) {
-      return NextResponse.json(
-        { error: `Total image count (${totalImages}) exceeds maximum of ${MAX_TOTAL_REFERENCE_IMAGES}` },
-        { status: 400 }
-      )
-    }
+    const { finalCounts, finalSelectedIds } = selection
 
     // Parent-project styles arrive embedded via the product JOIN above, avoiding a
     // second sequential round-trip (mirrors the suggest-prompts / build-prompt routes).
@@ -315,13 +198,11 @@ export async function POST(
 
     // Apply per-generation photographic overrides — cap at MAX_STYLE_VALUE_LEN to prevent
     // oversized or injected values from the request body reaching the AI prompt unchecked.
-    const capStyle = (v: unknown): string | undefined =>
-      typeof v === 'string' && v.trim() ? v.slice(0, MAX_STYLE_VALUE_LEN) : undefined
-    const cappedLens = capStyle(overrideLens)
-    const cappedCameraHeight = capStyle(overrideCameraHeight)
-    const cappedLighting = capStyle(overrideLighting)
-    const cappedColorGrading = capStyle(overrideColorGrading)
-    const cappedStyle = capStyle(overrideStyle)
+    const cappedLens = capStyleValue(overrideLens)
+    const cappedCameraHeight = capStyleValue(overrideCameraHeight)
+    const cappedLighting = capStyleValue(overrideLighting)
+    const cappedColorGrading = capStyleValue(overrideColorGrading)
+    const cappedStyle = capStyleValue(overrideStyle)
     if (cappedLens) mergedSettings.lens = cappedLens
     if (cappedCameraHeight) mergedSettings.camera_height = cappedCameraHeight
     if (cappedLighting) mergedSettings.lighting = cappedLighting
@@ -439,7 +320,7 @@ export async function DELETE(
   try {
     const scope = new URL(request.url).searchParams.get('scope') || 'active'
 
-    if (!['active', 'failed', 'all', 'log'].includes(scope)) {
+    if (!isValidDeleteScope(scope)) {
       return NextResponse.json({ error: 'Invalid scope. Use "active", "failed", "all", or "log".' }, { status: 400 })
     }
 
