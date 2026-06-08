@@ -28,6 +28,23 @@ export const MAX_SUGGESTION_COUNT = 20
 export const MAX_SUGGESTION_NAME_LEN = 500
 
 /**
+ * Validate a requested suggestion count from the client. Returns the floored
+ * integer when the value is a finite number in [1, MAX_SUGGESTION_COUNT],
+ * otherwise null (the route turns null into a 400).
+ *
+ * Rejecting non-finite input here is important: a NaN slipping through would
+ * reach the system prompt as "exactly NaN unique…", silently corrupting the
+ * request instead of failing fast.
+ */
+export function validateSuggestionCount(raw: unknown): number | null {
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > MAX_SUGGESTION_COUNT) {
+    return null
+  }
+  return Math.floor(parsed)
+}
+
+/**
  * Generate a short scene title for a prompt using Claude.
  * Returns an empty string on AI failure so callers can save the prompt without a title.
  * Used by the /api/products/[id]/prompts routes for inline title generation.

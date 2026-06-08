@@ -6,6 +6,7 @@ import {
   buildPromptSuggestionSystemPrompt,
   parsePromptSuggestions,
   safeTextFromContent,
+  validateSuggestionCount,
   MAX_SUGGESTION_COUNT,
 } from '@/lib/prompt-builder'
 import type { GlobalStyleSettings } from '@/lib/types'
@@ -30,17 +31,15 @@ export async function POST(request: NextRequest) {
     product_id = body.product_id
 
     // Validate count: must be a finite integer in [1, MAX_SUGGESTION_COUNT].
-    // Passing a non-numeric value (NaN, string, undefined) would cause Math.floor(NaN)
-    // to propagate as NaN into the system prompt, producing "exactly NaN unique…".
-    const rawCount = body.count ?? 5
-    const parsedCount = Number(rawCount)
-    if (!Number.isFinite(parsedCount) || parsedCount < 1 || parsedCount > MAX_SUGGESTION_COUNT) {
+    // Passing a non-numeric value (NaN, string, undefined) would otherwise
+    // propagate as NaN into the system prompt, producing "exactly NaN unique…".
+    const count = validateSuggestionCount(body.count ?? 5)
+    if (count === null) {
       return NextResponse.json(
         { error: `count must be an integer between 1 and ${MAX_SUGGESTION_COUNT}` },
         { status: 400 }
       )
     }
-    const count = Math.floor(parsedCount)
 
     if (!product_id) {
       return NextResponse.json(

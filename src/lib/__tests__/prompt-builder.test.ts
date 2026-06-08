@@ -13,6 +13,7 @@ import {
   MAX_USER_PROMPT_LEN,
   parsePromptSuggestions,
   SCENE_TITLE_SYSTEM_PROMPT,
+  validateSuggestionCount,
 } from '../prompt-builder'
 
 // ---------------------------------------------------------------------------
@@ -539,5 +540,52 @@ describe('buildRefinedPromptUserMessage — newline injection prevention', () =>
     const msg = buildRefinedPromptUserMessage('Bottle', 'Line one\nLine two', {}, 'Shot')
     expect(msg).not.toContain('Line one\nLine two')
     expect(msg).toContain('Line one Line two')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// validateSuggestionCount
+// ---------------------------------------------------------------------------
+
+describe('validateSuggestionCount', () => {
+  it('accepts the lower bound of 1', () => {
+    expect(validateSuggestionCount(1)).toBe(1)
+  })
+
+  it('accepts the upper bound', () => {
+    expect(validateSuggestionCount(MAX_SUGGESTION_COUNT)).toBe(MAX_SUGGESTION_COUNT)
+  })
+
+  it('floors a fractional value that is in range', () => {
+    expect(validateSuggestionCount(4.9)).toBe(4)
+  })
+
+  it('rejects 0 and negatives', () => {
+    expect(validateSuggestionCount(0)).toBeNull()
+    expect(validateSuggestionCount(-1)).toBeNull()
+  })
+
+  it('rejects values above the maximum', () => {
+    expect(validateSuggestionCount(MAX_SUGGESTION_COUNT + 1)).toBeNull()
+  })
+
+  it('rejects a value that floors into range but starts above it', () => {
+    // 20.9 must be rejected (not floored to 20) — the bound check runs pre-floor.
+    expect(validateSuggestionCount(MAX_SUGGESTION_COUNT + 0.9)).toBeNull()
+  })
+
+  it('coerces a whole-number numeric string', () => {
+    expect(validateSuggestionCount('5')).toBe(5)
+  })
+
+  it('rejects non-numeric strings (guards against NaN reaching the prompt)', () => {
+    expect(validateSuggestionCount('five')).toBeNull()
+  })
+
+  it('rejects NaN, Infinity, null and undefined', () => {
+    expect(validateSuggestionCount(NaN)).toBeNull()
+    expect(validateSuggestionCount(Infinity)).toBeNull()
+    expect(validateSuggestionCount(null)).toBeNull()
+    expect(validateSuggestionCount(undefined)).toBeNull()
   })
 })
