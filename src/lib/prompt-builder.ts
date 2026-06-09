@@ -3,9 +3,9 @@
  * Uses Claude to refine user prompts with global product style settings
  */
 
-import type { GlobalStyleSettings } from './types'
 import Anthropic from '@anthropic-ai/sdk'
-import { CLAUDE_FAST_MODEL } from './claude-models'
+import type { GlobalStyleSettings } from '@/lib/types'
+import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import { logger } from '@/lib/logger'
 
 const anthropic = new Anthropic()
@@ -281,12 +281,18 @@ export function safeTextFromContent(content: ReadonlyArray<{ type: string; text?
   return first?.type === 'text' ? (first.text ?? '') : ''
 }
 
+/** A single parsed prompt suggestion — the shape returned by parsePromptSuggestions. */
+export type PromptSuggestion = {
+  name: string
+  prompt_text: string
+}
+
 /**
  * Parse Claude's prompt suggestion response.
  * Tries each code fence block before falling back to raw text, so a response that
  * includes explanatory text in one fence and the JSON in another is handled correctly.
  */
-export function parsePromptSuggestions(raw: string): { name: string; prompt_text: string }[] {
+export function parsePromptSuggestions(raw: string): PromptSuggestion[] {
   if (!raw) return []
 
   // Collect JSON candidates in priority order:
@@ -339,7 +345,7 @@ export function parsePromptSuggestions(raw: string): { name: string; prompt_text
         name: String(p.name || p.title || '').trim().slice(0, MAX_SUGGESTION_NAME_LEN),
         prompt_text: String(p.prompt_text || p.promptText || p.prompt || '').trim().slice(0, MAX_USER_PROMPT_LEN),
       }))
-      .filter((p: { name: string; prompt_text: string }) => p.prompt_text.length > 0)
+      .filter((p: PromptSuggestion) => p.prompt_text.length > 0)
   }
 
   logger.warn(
