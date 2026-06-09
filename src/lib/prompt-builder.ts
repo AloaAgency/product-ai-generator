@@ -3,9 +3,9 @@
  * Uses Claude to refine user prompts with global product style settings
  */
 
-import type { GlobalStyleSettings } from './types'
 import Anthropic from '@anthropic-ai/sdk'
-import { CLAUDE_FAST_MODEL } from './claude-models'
+import type { GlobalStyleSettings } from '@/lib/types'
+import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import { logger } from '@/lib/logger'
 
 const anthropic = new Anthropic()
