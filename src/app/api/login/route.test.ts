@@ -187,6 +187,48 @@ describe('POST /api/login — open-redirect prevention', () => {
     expect(locationPathname(res)).toBe('/')
   })
 
+  it('sanitises a backslash path (/\\evil.com) to / — URL parser treats \\ as / making it protocol-relative', async () => {
+    const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/\\evil.com' })
+    const res = await POST(req)
+    const loc = res.headers.get('location') ?? ''
+    expect(loc).not.toContain('evil.com')
+    expect(locationPathname(res)).toBe('/')
+  })
+
+  it('sanitises a tab-smuggled path (/\\t/evil.com) to / — URL parser strips tabs making it protocol-relative', async () => {
+    const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/\t/evil.com' })
+    const res = await POST(req)
+    const loc = res.headers.get('location') ?? ''
+    expect(loc).not.toContain('evil.com')
+    expect(locationPathname(res)).toBe('/')
+  })
+
+  it('sanitises a newline-smuggled path (/\\n/evil.com) to /', async () => {
+    const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/\n/evil.com' })
+    const res = await POST(req)
+    const loc = res.headers.get('location') ?? ''
+    expect(loc).not.toContain('evil.com')
+    expect(locationPathname(res)).toBe('/')
+  })
+
+  it('sanitises a double-backslash path (/\\\\evil.com) to /', async () => {
+    const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/\\\\evil.com' })
+    const res = await POST(req)
+    const loc = res.headers.get('location') ?? ''
+    expect(loc).not.toContain('evil.com')
+    expect(locationPathname(res)).toBe('/')
+  })
+
+  it('preserves the query string of a safe relative redirect', async () => {
+    const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/products/123?view=grid&page=2' })
+    const res = await POST(req)
+    const loc = res.headers.get('location') ?? ''
+    const url = loc.startsWith('http') ? new URL(loc) : new URL(loc, 'http://localhost')
+    expect(url.pathname).toBe('/products/123')
+    expect(url.searchParams.get('view')).toBe('grid')
+    expect(url.searchParams.get('page')).toBe('2')
+  })
+
   it('preserves a safe relative path starting with /', async () => {
     const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/products/abc/gallery' })
     const res = await POST(req)
