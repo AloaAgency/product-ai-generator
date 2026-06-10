@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { NextRequest } from 'next/server'
 import { AUTH_COOKIE_NAME, deriveAuthToken } from '@/lib/auth-constants'
-import { POST } from '@/app/api/login/route'
+import { GET, POST } from '@/app/api/login/route'
 
 const TEST_PASSWORD = 'login-route-test-password'
 
@@ -22,6 +22,27 @@ function buildLoginRequest(fields: Record<string, string | File>, baseUrl = 'htt
     body: formData,
   })
 }
+
+// ---------------------------------------------------------------------------
+// GET — direct browser navigation redirects home instead of 405
+// ---------------------------------------------------------------------------
+
+describe('GET /api/login — direct navigation', () => {
+  it('redirects to / with 303 instead of returning 405', () => {
+    const req = new NextRequest('http://localhost/api/login')
+    const res = GET(req)
+    expect(res.status).toBe(303)
+    const location = res.headers.get('location') ?? ''
+    const pathname = location.startsWith('http') ? new URL(location).pathname : location
+    expect(pathname).toBe('/')
+  })
+
+  it('does not set an auth cookie', () => {
+    const req = new NextRequest('http://localhost/api/login')
+    const res = GET(req)
+    expect(res.headers.get('set-cookie')).toBeNull()
+  })
+})
 
 // ---------------------------------------------------------------------------
 // Fail-closed — SITE_PASSWORD not configured

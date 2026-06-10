@@ -48,6 +48,16 @@ function sanitizeRedirectPath(rawRedirect: string, requestUrl: string): string {
   }
 }
 
+/**
+ * Direct browser navigation to /api/login (bookmark, typed URL, back/forward
+ * history) previously got a bare 405 — the form only ever POSTs here. Redirect
+ * to the app root instead: authenticated users land on the app, everyone else
+ * gets the login gate rendered by the middleware.
+ */
+export function GET(request: NextRequest) {
+  return NextResponse.redirect(new URL('/', request.url), 303)
+}
+
 export async function POST(request: NextRequest) {
   // Fail closed: if SITE_PASSWORD is not configured, deny all logins rather
   // than falling back to a well-known hardcoded credential.
