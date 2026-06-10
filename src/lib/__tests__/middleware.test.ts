@@ -123,6 +123,43 @@ describe('middleware — unauthenticated requests', () => {
     expect(html).toContain('/products/123/gallery')
   })
 
+  it('preserves the query string in the hidden redirect field', async () => {
+    const req = new NextRequest('http://localhost/products/123?view=grid')
+    const res = await middleware(req)
+    const html = await res.text()
+    const match = html.match(/name="redirect" value="([^"]*)"/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toBe('/products/123?view=grid')
+  })
+
+  it('HTML-escapes & between multiple preserved query params', async () => {
+    const req = new NextRequest('http://localhost/products/123?view=grid&page=2')
+    const res = await middleware(req)
+    const html = await res.text()
+    const match = html.match(/name="redirect" value="([^"]*)"/)
+    expect(match).not.toBeNull()
+    // Raw attribute value uses the HTML entity; it decodes back to a literal &
+    expect(match![1]).toBe('/products/123?view=grid&amp;page=2')
+  })
+
+  it('strips the flow-internal error param from the redirect field but keeps other params', async () => {
+    const req = new NextRequest('http://localhost/dashboard?error=1&view=list')
+    const res = await middleware(req)
+    const html = await res.text()
+    const match = html.match(/name="redirect" value="([^"]*)"/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toBe('/dashboard?view=list')
+  })
+
+  it('omits the ? entirely when error was the only query param', async () => {
+    const req = new NextRequest('http://localhost/dashboard?error=1')
+    const res = await middleware(req)
+    const html = await res.text()
+    const match = html.match(/name="redirect" value="([^"]*)"/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toBe('/dashboard')
+  })
+
   it('shows error message on login page when ?error query param is present', async () => {
     const req = new NextRequest('http://localhost/dashboard?error=1')
     const res = await middleware(req)

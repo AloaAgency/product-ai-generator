@@ -26,6 +26,38 @@ if (process.env.SITE_PASSWORD) {
   void getCachedToken(process.env.SITE_PASSWORD)
 }
 
+/**
+ * Validate the user-supplied redirect path, returning '/' for anything unsafe.
+ *
+ * A prefix check alone (`startsWith('/') && !startsWith('//')`) is NOT enough:
+ * the WHATWG URL parser treats backslashes as slashes and strips tab/newline
+ * characters in http(s) URLs, so values like "/\evil.com" or "/\t/evil.com"
+ * pass the prefix check yet resolve to a foreign origin — an open redirect.
+ * Defend by resolving the candidate against the request URL and verifying the
+ * origin is unchanged, then re-emit the normalized pathname + search.
+ */
+function sanitizeRedirectPath(rawRedirect: string, requestUrl: string): string {
+  const trimmed = rawRedirect.slice(0, MAX_REDIRECT_LENGTH)
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return '/'
+  try {
+    const resolved = new URL(trimmed, requestUrl)
+    if (resolved.origin !== new URL(requestUrl).origin) return '/'
+    return resolved.pathname + resolved.search
+  } catch {
+    return '/'
+  }
+}
+
+/**
+ * Direct browser navigation to /api/login (bookmark, typed URL, back/forward
+ * history) previously got a bare 405 — the form only ever POSTs here. Redirect
+ * to the app root instead: authenticated users land on the app, everyone else
+ * gets the login gate rendered by the middleware.
+ */
+export function GET(request: NextRequest) {
+  return NextResponse.redirect(new URL('/', request.url), 303)
+}
+
 export async function POST(request: NextRequest) {
   // Fail closed: if SITE_PASSWORD is not configured, deny all logins rather
   // than falling back to a well-known hardcoded credential.
@@ -56,14 +88,7 @@ export async function POST(request: NextRequest) {
     return new NextResponse(null, { status: 400 })
   }
 
-  // Validate redirect path: must be a simple relative path starting with /
-  // and NOT a protocol-relative URL (//host) to prevent open-redirect attacks.
-  // Also cap length to avoid storing/reflecting arbitrarily long strings.
-  const trimmedRedirect = redirectPath.slice(0, MAX_REDIRECT_LENGTH)
-  const safeRedirect =
-    trimmedRedirect.startsWith('/') && !trimmedRedirect.startsWith('//')
-      ? trimmedRedirect
-      : '/'
+  const safeRedirect = sanitizeRedirectPath(redirectPath, request.url)
 
   if (secretsEqual(password, PASSWORD)) {
     const response = NextResponse.redirect(new URL(safeRedirect, request.url), 303)

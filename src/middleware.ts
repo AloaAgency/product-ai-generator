@@ -142,13 +142,20 @@ export async function middleware(request: NextRequest) {
       )
     }
 
-    // Show login page, preserving the intended destination. Return 200 so the
-    // browser renders the gate as a normal document instead of a failed request.
+    // Show login page, preserving the intended destination (path AND query —
+    // the login route validates and forwards both). Return 200 so the browser
+    // renders the gate as a normal document instead of a failed request.
     // cache-control: no-store prevents CDNs or proxies from caching the login
     // gate and serving it to users who subsequently authenticate.
-    const showError = request.nextUrl.searchParams.has('error')
+    const params = new URLSearchParams(request.nextUrl.search)
+    const showError = params.has('error')
+    // `error` is internal to the login flow (appended by a failed POST) — strip
+    // it so a successful login doesn't carry it into the destination URL.
+    params.delete('error')
+    const query = params.toString()
+    const destination = pathname + (query ? `?${query}` : '')
     return withSecurityHeaders(
-      new NextResponse(loginPage(showError, pathname), {
+      new NextResponse(loginPage(showError, destination), {
         status: 200,
         headers: {
           'content-type': 'text/html; charset=utf-8',
