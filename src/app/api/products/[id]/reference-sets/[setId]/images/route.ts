@@ -9,6 +9,7 @@ import {
   MAX_REFERENCE_IMAGE_SIZE_BYTES,
   MAX_LIST_ROWS,
   parseRequestBody,
+  sanitizeStorageFileExtension,
 } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
@@ -150,9 +151,7 @@ export async function POST(
     for (const file of files) {
       const arrayBuffer = await file.arrayBuffer()
       const buffer = Buffer.from(arrayBuffer)
-      const extension = file.name.includes('.')
-        ? `.${file.name.split('.').pop()?.toLowerCase()}`
-        : ''
+      const extension = sanitizeStorageFileExtension(file.name)
       const storageFileName = `${Date.now()}-${randomUUID()}${extension}`
       const storagePath = `products/${productId}/refs/${setId}/${storageFileName}`
 
