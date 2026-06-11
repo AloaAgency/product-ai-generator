@@ -93,6 +93,10 @@ type SourceImageRecord = {
   mime_type: string
 }
 
+type RecordedVariationRow = {
+  variation_number: number | null
+}
+
 type LoadedImageJobResources = {
   geminiApiKey?: string
   referenceImages: Base64ReferenceImage[]
@@ -430,7 +434,8 @@ async function fetchReferenceImagesForSets(
 
 async function fetchSourceImage(
   supabase: WorkerSupabase,
-  sourceImageId: string | null | undefined
+  sourceImageId: string | null | undefined,
+  productId: string
 ): Promise<SourceImageRecord | null> {
   if (!sourceImageId) return null
 
@@ -438,13 +443,19 @@ async function fetchSourceImage(
     .from(T.generated_images)
     .select('storage_path, mime_type')
     .eq('id', sourceImageId)
+    .eq('product_id', productId)
+    .eq('media_type', 'image')
     .maybeSingle()
 
   if (error) {
     throw new Error(`Failed to load source image: ${error.message}`)
   }
 
-  return (data as SourceImageRecord | null) ?? null
+  if (!data) {
+    throw new Error('Source image not found for generation job')
+  }
+
+  return data as SourceImageRecord
 }
 
 async function resolveGeminiApiKeyForJob(
@@ -599,7 +610,7 @@ async function loadImageJobResources(
   const [product, refImages, sourceImage] = await Promise.all([
     fetchProductRecord(supabase, job.product_id),
     fetchReferenceImagesForSets(supabase, uniqueSetIds),
-    fetchSourceImage(supabase, job.source_image_id),
+    fetchSourceImage(supabase, job.source_image_id, job.product_id),
   ])
 
   const imagesBySet = new Map<string, WorkerReferenceImage[]>()
@@ -645,6 +656,38 @@ function createVariationPlan(job: GenerationJobRecord, batchSize: number): Varia
       (_, index) => counts.completed + counts.failed + index + 1
     ),
   }
+}
+
+async function fetchRecordedImageVariationNumbers(
+  supabase: WorkerSupabase,
+  job: Pick<GenerationJobRecord, 'id' | 'product_id'>,
+  variationNumbers: number[]
+): Promise<Set<number>> {
+  if (variationNumbers.length === 0) return new Set()
+
+  const requested = new Set(variationNumbers)
+  const { data, error } = await supabase
+    .from(T.generated_images)
+    .select('variation_number')
+    .eq('job_id', job.id)
+    .eq('product_id', job.product_id)
+    .eq('media_type', 'image')
+    .in('variation_number', variationNumbers)
+    .order('variation_number', { ascending: true })
+
+  if (error) {
+    throw new Error(`Failed to load recorded generated variations: ${error.message}`)
+  }
+
+  const recorded = new Set<number>()
+  for (const row of (data || []) as RecordedVariationRow[]) {
+    const variationNumber = Number(row.variation_number)
+    if (Number.isSafeInteger(variationNumber) && requested.has(variationNumber)) {
+      recorded.add(variationNumber)
+    }
+  }
+
+  return recorded
 }
 
 function sleep(ms: number) {
@@ -866,6 +909,7 @@ async function processVariations(
   supabase: WorkerSupabase,
   job: GenerationJobRecord,
   plan: VariationPlan,
+  recordedVariationNumbers: Set<number>,
   resources: LoadedImageJobResources,
   config: WorkerConfig
 ): Promise<VariationProcessingResult> {
@@ -895,7 +939,9 @@ async function processVariations(
       nextIndex += 1
 
       try {
-        await runVariationWithRetry(supabase, job, variationNumber, plan.promptSlug, resources, config)
+        if (!recordedVariationNumbers.has(variationNumber)) {
+          await runVariationWithRetry(supabase, job, variationNumber, plan.promptSlug, resources, config)
+        }
         progress.successCount += 1
       } catch (err) {
         progress.failCount += 1
@@ -1014,8 +1060,25 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
       })
     }
 
-    const resources = await loadImageJobResources(supabase, claimedJob)
-    const variationResult = await processVariations(supabase, claimedJob, plan, resources, config)
+    const recordedVariationNumbers = await fetchRecordedImageVariationNumbers(
+      supabase,
+      claimedJob,
+      plan.variationNumbers
+    )
+    const hasUnrecordedVariations = plan.variationNumbers.some(
+      (variationNumber) => !recordedVariationNumbers.has(variationNumber)
+    )
+    const resources = hasUnrecordedVariations
+      ? await loadImageJobResources(supabase, claimedJob)
+      : { referenceImages: [] }
+    const variationResult = await processVariations(
+      supabase,
+      claimedJob,
+      plan,
+      recordedVariationNumbers,
+      resources,
+      config
+    )
     return persistFinalImageJobState(supabase, claimedJob, variationResult)
   } catch (err) {
     const safeMessage = sanitizeWorkerErrorMessage(err, 'Generation job failed')

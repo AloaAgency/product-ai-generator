@@ -44,7 +44,11 @@ export function sanitizeWorkerErrorMessage(error: unknown, fallback = 'Worker er
     .replace(/\s+/g, ' ')
     .replace(/(Bearer\s+)[^\s,;]+/gi, '$1[redacted]')
     .replace(/([?&](?:access_token|api[_-]?key|authorization|signature|sig|token|x-amz-[^=]+|x-goog-[^=]+)=)[^&\s]+/gi, '$1[redacted]')
-    .replace(/((?:api[_-]?key|authorization|secret|signature|token)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+    .replace(/((?:"?(?:[a-z0-9_-]*api[_-]?key|authorization|secret|signature|token|password|cookie|set-cookie)"?\s*:\s*"))[^"]+(")/gi, '$1[redacted]$2')
+    .replace(/((?:'?(?:[a-z0-9_-]*api[_-]?key|authorization|secret|signature|token|password|cookie|set-cookie)'?\s*:\s*'))[^']+(')/gi, '$1[redacted]$2')
+    .replace(/((?:[a-z0-9_-]*api[_-]?key|authorization|secret|signature|token|password|cookie|set-cookie)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[redacted]')
+    .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, '[redacted]')
     .trim()
 
   if (!normalized) return fallback
