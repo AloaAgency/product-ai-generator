@@ -109,6 +109,14 @@ function jobRefSetsRow(referenceSetId = 'refs-1', overrides: Record<string, unkn
   }
 }
 
+function recordedVariationRows(data: Array<{ variation_number: number | null }> = []): QueryResponse {
+  return {
+    table: 'prodai_generated_images',
+    type: 'select-order',
+    data,
+  }
+}
+
 function createDownloadPayload(contents: string) {
   return {
     arrayBuffer: async () => Buffer.from(contents),
@@ -297,6 +305,7 @@ describe('processGenerationJob', () => {
         type: 'update-maybeSingle',
         data: createImageJobRecord(jobId),
       },
+      recordedVariationRows(),
       {
         table: 'prodai_generation_job_reference_sets',
         type: 'select-order',
@@ -334,6 +343,7 @@ describe('processGenerationJob', () => {
           source_image_id: 'foreign-source-image',
         }),
       },
+      recordedVariationRows(),
       {
         table: 'prodai_generation_job_reference_sets',
         type: 'select-order',
@@ -380,6 +390,7 @@ describe('processGenerationJob', () => {
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId),
         },
+        recordedVariationRows(),
         {
           table: 'prodai_generation_job_reference_sets',
           type: 'select-order',
@@ -477,6 +488,7 @@ describe('processGenerationJob', () => {
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId),
         },
+        recordedVariationRows(),
         {
           table: 'prodai_generation_job_reference_sets',
           type: 'select-order',
@@ -588,6 +600,50 @@ describe('processGenerationJob', () => {
     expect(serviceClientState.current?.updates).toHaveLength(2)
   })
 
+  it('counts already-recorded image variations without regenerating them', async () => {
+    const jobId = '15151515-1515-4515-8515-151515151515'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId),
+      },
+      recordedVariationRows([{ variation_number: 1 }]),
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'running' },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 1,
+      failed: 0,
+      status: 'completed',
+    })
+    expect(generateGeminiImage).not.toHaveBeenCalled()
+    expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
+      status: 'completed',
+      completed_count: 1,
+      failed_count: 0,
+    })
+  })
+
   it('retries retriable image generation errors and completes the job after a later success', async () => {
     const jobId = '44444444-4444-4444-8444-444444444444'
     process.env.GENERATION_VARIATION_RETRIES = '1'
@@ -601,6 +657,7 @@ describe('processGenerationJob', () => {
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId),
         },
+        recordedVariationRows(),
         {
           table: 'prodai_generation_job_reference_sets',
           type: 'select-order',
@@ -680,6 +737,7 @@ describe('processGenerationJob', () => {
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId, { error_message: 'Previous tick failed' }),
         },
+        recordedVariationRows(),
         {
           table: 'prodai_generation_job_reference_sets',
           type: 'select-order',
@@ -760,6 +818,7 @@ describe('processGenerationJob', () => {
             source_image_id: 'source-1',
           }),
         },
+        recordedVariationRows(),
         {
           table: 'prodai_generation_job_reference_sets',
           type: 'select-order',
@@ -858,6 +917,7 @@ describe('processGenerationJob', () => {
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId),
         },
+        recordedVariationRows(),
         {
           table: 'prodai_generation_job_reference_sets',
           type: 'select-order',
@@ -949,6 +1009,7 @@ describe('processGenerationJob', () => {
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId, { variation_count: 2 }),
         },
+        recordedVariationRows(),
         {
           table: 'prodai_generation_job_reference_sets',
           type: 'select-order',
@@ -1033,6 +1094,7 @@ describe('processGenerationJob', () => {
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId, { variation_count: 2 }),
         },
+        recordedVariationRows(),
         {
           table: 'prodai_generation_job_reference_sets',
           type: 'select-order',
@@ -1109,6 +1171,7 @@ describe('processGenerationJob', () => {
           type: 'update-maybeSingle',
           data: createImageJobRecord(jobId, { variation_count: 3 }),
         },
+        recordedVariationRows(),
         {
           table: 'prodai_generation_job_reference_sets',
           type: 'select-order',
@@ -1189,6 +1252,7 @@ describe('processGenerationJob', () => {
             error_message: 'Previous tick failed',
           }),
         },
+        recordedVariationRows(),
         {
           table: 'prodai_generation_job_reference_sets',
           type: 'select-order',
