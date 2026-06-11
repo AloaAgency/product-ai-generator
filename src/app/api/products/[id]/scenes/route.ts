@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { normalizeDurationValue } from '@/lib/video-constants'
-import { parseRequestBody } from '@/lib/request-guards'
+import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
 const MAX_PROMPT_LENGTH = 10000
@@ -23,6 +23,7 @@ export async function GET(
       .select('*')
       .eq('product_id', productId)
       .order('created_at', { ascending: false })
+      .limit(MAX_LIST_ROWS)
 
     if (storyboardId) {
       query = query.eq('storyboard_id', storyboardId)

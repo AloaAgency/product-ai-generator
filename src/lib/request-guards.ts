@@ -6,6 +6,10 @@ const UUID_PATTERN =
 const DEFAULT_MAX_ERROR_MESSAGE_LENGTH = 200
 
 export const MAX_PROMPT_TEXT_LENGTH = 10_000
+// Upper bound for unpaginated collection queries — prevents unbounded result
+// sets from exhausting memory/bandwidth as tenant data grows.
+export const MAX_LIST_ROWS = 500
+export const MAX_FILE_NAME_LENGTH = 255
 export const MAX_REFERENCE_IMAGES = 14
 export const MAX_REFERENCE_IMAGE_SIZE_BYTES = 50 * 1024 * 1024
 export const ALLOWED_REFERENCE_IMAGE_TYPES = new Set([
@@ -139,6 +143,18 @@ export function validateReferenceUploadFiles(files: File[]): File[] {
   }
 
   return files
+}
+
+/**
+ * Derive a safe file extension for use in storage paths.
+ * `name.split('.').pop()` alone is unsafe: a client-supplied name like
+ * "photo.png/../../evil" yields an "extension" containing path separators
+ * that gets concatenated into the storage object key.
+ */
+export function sanitizeStorageFileExtension(fileName: string): string {
+  if (typeof fileName !== 'string' || !fileName.includes('.')) return ''
+  const candidate = fileName.split('.').pop()?.toLowerCase() ?? ''
+  return /^[a-z0-9]{1,10}$/.test(candidate) ? `.${candidate}` : ''
 }
 
 /**

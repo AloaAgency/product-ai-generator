@@ -7,7 +7,10 @@ import {
   MAX_REFERENCE_IMAGES,
   ALLOWED_REFERENCE_IMAGE_TYPES,
   MAX_REFERENCE_IMAGE_SIZE_BYTES,
+  MAX_LIST_ROWS,
+  MAX_FILE_NAME_LENGTH,
   parseRequestBody,
+  sanitizeStorageFileExtension,
 } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
@@ -74,6 +77,12 @@ export async function POST(
             { status: 400 }
           )
         }
+        if (typeof upload.file_name === 'string' && upload.file_name.length > MAX_FILE_NAME_LENGTH) {
+          return NextResponse.json(
+            { error: `file_name must be ${MAX_FILE_NAME_LENGTH} characters or fewer` },
+            { status: 400 }
+          )
+        }
       }
 
       let nextOrder = (existing?.[0]?.display_order ?? -1) + 1
@@ -88,7 +97,10 @@ export async function POST(
             file_name: upload.file_name,
             mime_type: upload.mime_type,
             file_size: upload.file_size,
-            display_order: Number.isFinite(upload.display_order) ? upload.display_order : nextOrder++,
+            display_order:
+              typeof upload.display_order === 'number' && Number.isFinite(upload.display_order) && upload.display_order >= 0
+                ? upload.display_order
+                : nextOrder++,
           })
           .select()
           .single()
@@ -149,9 +161,7 @@ export async function POST(
     for (const file of files) {
       const arrayBuffer = await file.arrayBuffer()
       const buffer = Buffer.from(arrayBuffer)
-      const extension = file.name.includes('.')
-        ? `.${file.name.split('.').pop()?.toLowerCase()}`
-        : ''
+      const extension = sanitizeStorageFileExtension(file.name)
       const storageFileName = `${Date.now()}-${randomUUID()}${extension}`
       const storagePath = `products/${productId}/refs/${setId}/${storageFileName}`
 
@@ -207,6 +217,7 @@ export async function GET(
       .select('*')
       .eq('reference_set_id', setId)
       .order('display_order', { ascending: true })
+      .limit(MAX_LIST_ROWS)
 
     if (error) { logger.error('[ReferenceImages GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 

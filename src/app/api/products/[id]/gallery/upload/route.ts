@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { parseRequestBody } from '@/lib/request-guards'
+import { parseRequestBody, sanitizeStorageFileExtension } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
 export const runtime = 'nodejs'
@@ -75,9 +75,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     }
 
     const results = await Promise.all(files.map(async (file) => {
-      const extension = file.file_name.includes('.')
-        ? `.${file.file_name.split('.').pop()?.toLowerCase()}`
-        : ''
+      const extension = sanitizeStorageFileExtension(file.file_name)
       const storageFileName = `${Date.now()}-${randomUUID()}${extension}`
       const storagePath = `products/${productId}/uploads/${storageFileName}`
 

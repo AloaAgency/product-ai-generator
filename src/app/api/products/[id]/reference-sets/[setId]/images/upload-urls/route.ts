@@ -7,6 +7,7 @@ import {
   ALLOWED_REFERENCE_IMAGE_TYPES,
   MAX_REFERENCE_IMAGE_SIZE_BYTES,
   parseRequestBody,
+  sanitizeStorageFileExtension,
 } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
@@ -85,9 +86,7 @@ export async function POST(
     const nextOrderBase = (existing?.[0]?.display_order ?? -1) + 1
 
     const results = await Promise.all(files.map(async (file, index) => {
-      const extension = file.name.includes('.')
-        ? `.${file.name.split('.').pop()?.toLowerCase()}`
-        : ''
+      const extension = sanitizeStorageFileExtension(file.name)
       const storageFileName = `${Date.now()}-${randomUUID()}${extension}`
       const storagePath = `products/${productId}/refs/${setId}/${storageFileName}`
 

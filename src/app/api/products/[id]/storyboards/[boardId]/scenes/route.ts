@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { parseRequestBody } from '@/lib/request-guards'
+import { parseRequestBody, MAX_LIST_ROWS, MAX_PROMPT_TEXT_LENGTH } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
+
+const MAX_TITLE_LENGTH = 500
 
 export async function GET(
   _request: NextRequest,
@@ -17,6 +19,7 @@ export async function GET(
       .select('*')
       .eq('storyboard_id', boardId)
       .order('scene_order', { ascending: true })
+      .limit(MAX_LIST_ROWS)
 
     if (error) { logger.error('[StoryboardScenes GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data || [])
@@ -36,6 +39,16 @@ export async function POST(
     const parsed = await parseRequestBody(request)
     if (!parsed.ok) return parsed.response
     const body = parsed.body
+
+    if (typeof body.title === 'string' && body.title.length > MAX_TITLE_LENGTH) {
+      return NextResponse.json({ error: `title must be ${MAX_TITLE_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (typeof body.prompt_text === 'string' && body.prompt_text.length > MAX_PROMPT_TEXT_LENGTH) {
+      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_TEXT_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (typeof body.end_frame_prompt === 'string' && body.end_frame_prompt.length > MAX_PROMPT_TEXT_LENGTH) {
+      return NextResponse.json({ error: `end_frame_prompt must be ${MAX_PROMPT_TEXT_LENGTH} characters or fewer` }, { status: 400 })
+    }
 
     // Determine next scene_order
     const { data: existing } = await supabase
