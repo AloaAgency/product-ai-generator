@@ -324,6 +324,53 @@ describe('processGenerationJob', () => {
     })
   })
 
+  it('fails source-image jobs when the source image is not scoped to the product', async () => {
+    const jobId = '14141414-1414-4414-8414-141414141414'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId, {
+          source_image_id: 'foreign-source-image',
+        }),
+      },
+      {
+        table: 'prodai_generation_job_reference_sets',
+        type: 'select-order',
+        data: [],
+      },
+      {
+        table: 'prodai_products',
+        type: 'select-single',
+        data: { global_style_settings: null, prodai_projects: [] },
+      },
+      {
+        table: 'prodai_generated_images',
+        type: 'select-maybeSingle',
+        data: null,
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-maybeSingle',
+        data: { completed_count: 0, failed_count: 0 },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).rejects.toThrow('Source image not found for generation job')
+    expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: 'Source image not found for generation job',
+    })
+  })
+
   it('fails the job when generated image uploads do not persist successfully', async () => {
     const jobId = '22222222-2222-4222-8222-222222222222'
     serviceClientState.current = createMockSupabase(

@@ -430,7 +430,8 @@ async function fetchReferenceImagesForSets(
 
 async function fetchSourceImage(
   supabase: WorkerSupabase,
-  sourceImageId: string | null | undefined
+  sourceImageId: string | null | undefined,
+  productId: string
 ): Promise<SourceImageRecord | null> {
   if (!sourceImageId) return null
 
@@ -438,13 +439,19 @@ async function fetchSourceImage(
     .from(T.generated_images)
     .select('storage_path, mime_type')
     .eq('id', sourceImageId)
+    .eq('product_id', productId)
+    .eq('media_type', 'image')
     .maybeSingle()
 
   if (error) {
     throw new Error(`Failed to load source image: ${error.message}`)
   }
 
-  return (data as SourceImageRecord | null) ?? null
+  if (!data) {
+    throw new Error('Source image not found for generation job')
+  }
+
+  return data as SourceImageRecord
 }
 
 async function resolveGeminiApiKeyForJob(
@@ -599,7 +606,7 @@ async function loadImageJobResources(
   const [product, refImages, sourceImage] = await Promise.all([
     fetchProductRecord(supabase, job.product_id),
     fetchReferenceImagesForSets(supabase, uniqueSetIds),
-    fetchSourceImage(supabase, job.source_image_id),
+    fetchSourceImage(supabase, job.source_image_id, job.product_id),
   ])
 
   const imagesBySet = new Map<string, WorkerReferenceImage[]>()
