@@ -7,6 +7,7 @@ import {
   MAX_REFERENCE_IMAGES,
   ALLOWED_REFERENCE_IMAGE_TYPES,
   MAX_REFERENCE_IMAGE_SIZE_BYTES,
+  MAX_LIST_ROWS,
   parseRequestBody,
 } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
@@ -207,6 +208,7 @@ export async function GET(
       .select('*')
       .eq('reference_set_id', setId)
       .order('display_order', { ascending: true })
+      .limit(MAX_LIST_ROWS)
 
     if (error) { logger.error('[ReferenceImages GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 

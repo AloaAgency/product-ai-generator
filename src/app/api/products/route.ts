@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { parseRequestBody } from '@/lib/request-guards'
+import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
 const PLACEHOLDER_USER_ID = '00000000-0000-0000-0000-000000000000'
@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
       .from(T.products)
       .select('*')
       .order('created_at', { ascending: false })
+      .limit(MAX_LIST_ROWS)
 
     if (projectId) {
       query = query.eq('project_id', projectId)

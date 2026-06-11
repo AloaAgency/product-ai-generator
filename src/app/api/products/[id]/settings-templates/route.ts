@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { parseRequestBody } from '@/lib/request-guards'
+import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
 export async function GET(
@@ -17,6 +17,7 @@ export async function GET(
       .select('*')
       .eq('product_id', id)
       .order('created_at', { ascending: true })
+      .limit(MAX_LIST_ROWS)
 
     if (error) { logger.error('[SettingsTemplates GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)

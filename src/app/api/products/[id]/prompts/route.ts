@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { generateSceneTitle } from '@/lib/prompt-builder'
-import { parseRequestBody } from '@/lib/request-guards'
+import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
 const MAX_NAME_LENGTH = 500
@@ -21,6 +21,7 @@ export async function GET(
       .select('*')
       .eq('product_id', id)
       .order('created_at', { ascending: false })
+      .limit(MAX_LIST_ROWS)
 
     if (error) { logger.error('[Prompts GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
