@@ -50,10 +50,24 @@ export default function PromptsPage({
   const [batchResult, setBatchResult] = useState<{ total: number; created: number } | null>(null)
   const [promptTypeFilter, setPromptTypeFilter] = useState<'all' | 'image' | 'video'>('all')
   const [newPromptType, setNewPromptType] = useState<'image' | 'video'>('image')
+  const [imageCounts, setImageCounts] = useState<Record<string, number> | null>(null)
 
   useEffect(() => {
     fetchPromptTemplates(id)
   }, [id, fetchPromptTemplates])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/products/${id}/prompts/usage`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.counts) setImageCounts(data.counts as Record<string, number>)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [id])
 
   function parseBatchMarkdown(content: string): { name: string; prompt_text: string; tags?: string[] }[] {
     // Strip leading comment lines (lines starting with #)
@@ -364,6 +378,9 @@ export default function PromptsPage({
                       <h3 className="text-sm font-semibold text-zinc-100 truncate">
                         {t.name}
                       </h3>
+                      {t.scene_title && t.scene_title !== t.name && (
+                        <p className="mt-0.5 text-xs text-zinc-500 truncate">{t.scene_title}</p>
+                      )}
                       <p className="mt-1 text-xs text-zinc-400 line-clamp-2">
                         {t.prompt_text}
                       </p>
@@ -416,7 +433,7 @@ export default function PromptsPage({
                       )}
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
                       t.prompt_type === 'video'
                         ? 'bg-purple-600/20 text-purple-400'
@@ -432,6 +449,22 @@ export default function PromptsPage({
                         {tag}
                       </span>
                     ))}
+                    {(t.prompt_type || 'image') === 'image' && imageCounts && (
+                      (imageCounts[t.id] ?? 0) > 0 ? (
+                        <Link
+                          href={`/projects/${projectId}/products/${id}/gallery?group=scene`}
+                          className="ml-auto inline-flex items-center gap-1 rounded-full bg-blue-600/15 px-2.5 py-0.5 text-xs text-blue-400 hover:bg-blue-600/25 transition-colors"
+                          title="View in gallery grouped by scene"
+                        >
+                          <ImageIcon className="h-3 w-3" />
+                          {imageCounts[t.id]} {imageCounts[t.id] === 1 ? 'image' : 'images'}
+                        </Link>
+                      ) : (
+                        <span className="ml-auto px-2.5 py-0.5 text-xs text-zinc-600">
+                          No images yet
+                        </span>
+                      )
+                    )}
                   </div>
                 </>
               )}
