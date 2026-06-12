@@ -29,7 +29,7 @@ import {
   Check,
 } from 'lucide-react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { logger } from '@/lib/logger'
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'request_changes'
@@ -58,6 +58,7 @@ export default function GalleryPage({
 }) {
   const { projectId, id } = use(params)
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   const products = useAppStore((state) => state.products)
   const fetchProducts = useAppStore((state) => state.fetchProducts)
@@ -77,7 +78,7 @@ export default function GalleryPage({
   const [mediaFilter, setMediaFilter] = useState<'all' | 'image' | 'video'>('all')
   const [jobFilter, setJobFilter] = useState<string>('all')
   const [sortOption, setSortOption] = useState<SortOption>('newest')
-  const [groupByScene, setGroupByScene] = useState(false)
+  const [groupByScene, setGroupByScene] = useState(searchParams.get('group') === 'scene')
   const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null)
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)

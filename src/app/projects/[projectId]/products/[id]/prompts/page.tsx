@@ -1,6 +1,7 @@
 'use client'
 
 import { use, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useAppStore } from '@/lib/store'
 import { PromptTemplate } from '@/lib/types'
 import {
@@ -15,6 +16,7 @@ import {
   Download,
   Image as ImageIcon,
   Video,
+  Sparkles,
 } from 'lucide-react'
 
 export default function PromptsPage({
@@ -22,7 +24,7 @@ export default function PromptsPage({
 }: {
   params: Promise<{ projectId: string; id: string }>
 }) {
-  const { id } = use(params)
+  const { projectId, id } = use(params)
   const promptTemplates = useAppStore((s) => s.promptTemplates)
   const fetchPromptTemplates = useAppStore((s) => s.fetchPromptTemplates)
   const createPromptTemplate = useAppStore((s) => s.createPromptTemplate)
@@ -48,10 +50,24 @@ export default function PromptsPage({
   const [batchResult, setBatchResult] = useState<{ total: number; created: number } | null>(null)
   const [promptTypeFilter, setPromptTypeFilter] = useState<'all' | 'image' | 'video'>('all')
   const [newPromptType, setNewPromptType] = useState<'image' | 'video'>('image')
+  const [imageCounts, setImageCounts] = useState<Record<string, number> | null>(null)
 
   useEffect(() => {
     fetchPromptTemplates(id)
   }, [id, fetchPromptTemplates])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/products/${id}/prompts/usage`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.counts) setImageCounts(data.counts as Record<string, number>)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [id])
 
   function parseBatchMarkdown(content: string): { name: string; prompt_text: string; tags?: string[] }[] {
     // Strip leading comment lines (lines starting with #)
@@ -362,11 +378,23 @@ export default function PromptsPage({
                       <h3 className="text-sm font-semibold text-zinc-100 truncate">
                         {t.name}
                       </h3>
+                      {t.scene_title && t.scene_title !== t.name && (
+                        <p className="mt-0.5 text-xs text-zinc-500 truncate">{t.scene_title}</p>
+                      )}
                       <p className="mt-1 text-xs text-zinc-400 line-clamp-2">
                         {t.prompt_text}
                       </p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
+                      {(t.prompt_type || 'image') === 'image' && (
+                        <Link
+                          href={`/projects/${projectId}/products/${id}/generate?prompt=${encodeURIComponent(t.prompt_text)}&template=${t.id}`}
+                          className="rounded p-2.5 text-zinc-500 hover:text-blue-400 hover:bg-zinc-700 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
+                          title="Generate with this prompt"
+                        >
+                          <Sparkles className="h-4 w-4" />
+                        </Link>
+                      )}
                       <button
                         onClick={() => startEdit(t)}
                         className="rounded p-2.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
@@ -405,7 +433,7 @@ export default function PromptsPage({
                       )}
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
                       t.prompt_type === 'video'
                         ? 'bg-purple-600/20 text-purple-400'
@@ -421,6 +449,22 @@ export default function PromptsPage({
                         {tag}
                       </span>
                     ))}
+                    {(t.prompt_type || 'image') === 'image' && imageCounts && (
+                      (imageCounts[t.id] ?? 0) > 0 ? (
+                        <Link
+                          href={`/projects/${projectId}/products/${id}/gallery?group=scene`}
+                          className="ml-auto inline-flex items-center gap-1 rounded-full bg-blue-600/15 px-2.5 py-0.5 text-xs text-blue-400 hover:bg-blue-600/25 transition-colors"
+                          title="View in gallery grouped by scene"
+                        >
+                          <ImageIcon className="h-3 w-3" />
+                          {imageCounts[t.id]} {imageCounts[t.id] === 1 ? 'image' : 'images'}
+                        </Link>
+                      ) : (
+                        <span className="ml-auto px-2.5 py-0.5 text-xs text-zinc-600">
+                          No images yet
+                        </span>
+                      )
+                    )}
                   </div>
                 </>
               )}
