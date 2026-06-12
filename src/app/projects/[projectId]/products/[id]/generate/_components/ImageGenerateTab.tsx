@@ -50,6 +50,7 @@ export type InitialReferenceSetSelection = {
 interface ImageGenerateTabProps {
   productId: string
   initialPrompt?: string
+  initialTemplateId?: string
   initialReferenceSets?: InitialReferenceSetSelection[]
 }
 
@@ -131,6 +132,7 @@ const distributeBudget = (
 export function ImageGenerateTab({
   productId,
   initialPrompt,
+  initialTemplateId,
   initialReferenceSets,
 }: ImageGenerateTabProps) {
   const promptTemplates = useAppStore((s) => s.promptTemplates)
@@ -208,10 +210,11 @@ export function ImageGenerateTab({
     fetchReferenceSets(productId)
   }, [productId, fetchPromptTemplates, fetchReferenceSets])
 
-  // Pre-fill prompt from query param
+  // Pre-fill prompt (and originating template) from query params
   useEffect(() => {
     if (initialPrompt && !prompt) {
       setPrompt(initialPrompt)
+      if (initialTemplateId) setLoadedTemplateId(initialTemplateId)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPrompt])
@@ -412,6 +415,9 @@ export function ImageGenerateTab({
     try {
       const job = await startGeneration(productId, {
         prompt_text: finalPrompt,
+        // Validated against fetched templates so a stale deep-link id can't
+        // reach the API and violate the FK on insert.
+        prompt_template_id: loadedTemplate?.id,
         variation_count: variationCountValue,
         resolution,
         aspect_ratio: aspectRatio,

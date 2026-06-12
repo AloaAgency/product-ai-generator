@@ -388,7 +388,7 @@ export default function PromptsPage({
                     <div className="flex items-center gap-1 shrink-0">
                       {(t.prompt_type || 'image') === 'image' && (
                         <Link
-                          href={`/projects/${projectId}/products/${id}/generate?prompt=${encodeURIComponent(t.prompt_text)}`}
+                          href={`/projects/${projectId}/products/${id}/generate?prompt=${encodeURIComponent(t.prompt_text)}&template=${t.id}`}
                           className="rounded p-2.5 text-zinc-500 hover:text-blue-400 hover:bg-zinc-700 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
                           title="Generate with this prompt"
                         >
