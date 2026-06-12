@@ -48,13 +48,16 @@ export async function POST(
         return NextResponse.json({ error: 'No uploads provided' }, { status: 400 })
       }
 
-      const { data: existing } = await supabase
+      // One round trip: exact count is computed server-side; only the
+      // max-display_order row is transferred instead of every row in the set.
+      const { data: existing, count: existingCount0 } = await supabase
         .from(T.reference_images)
-        .select('display_order')
+        .select('display_order', { count: 'exact' })
         .eq('reference_set_id', setId)
         .order('display_order', { ascending: false })
+        .limit(1)
 
-      const existingCount = existing?.length ?? 0
+      const existingCount = existingCount0 ?? 0
 
       if (existingCount + uploads.length > MAX_REFERENCE_IMAGES) {
         return NextResponse.json(
@@ -142,14 +145,16 @@ export async function POST(
       }
     }
 
-    // Get current image count and max display_order
-    const { data: existing } = await supabase
+    // Get current image count and max display_order in one round trip:
+    // exact count is computed server-side; only the top row is transferred.
+    const { data: existing, count: existingCount0 } = await supabase
       .from(T.reference_images)
-      .select('display_order')
+      .select('display_order', { count: 'exact' })
       .eq('reference_set_id', setId)
       .order('display_order', { ascending: false })
+      .limit(1)
 
-    const existingCount = existing?.length ?? 0
+    const existingCount = existingCount0 ?? 0
 
     if (existingCount + files.length > MAX_REFERENCE_IMAGES) {
       return NextResponse.json(
