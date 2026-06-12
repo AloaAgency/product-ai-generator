@@ -1,6 +1,7 @@
 'use client'
 
 import { use, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useAppStore } from '@/lib/store'
 import { PromptTemplate } from '@/lib/types'
 import {
@@ -15,6 +16,7 @@ import {
   Download,
   Image as ImageIcon,
   Video,
+  Sparkles,
 } from 'lucide-react'
 
 export default function PromptsPage({
@@ -22,7 +24,7 @@ export default function PromptsPage({
 }: {
   params: Promise<{ projectId: string; id: string }>
 }) {
-  const { id } = use(params)
+  const { projectId, id } = use(params)
   const promptTemplates = useAppStore((s) => s.promptTemplates)
   const fetchPromptTemplates = useAppStore((s) => s.fetchPromptTemplates)
   const createPromptTemplate = useAppStore((s) => s.createPromptTemplate)
@@ -367,6 +369,15 @@ export default function PromptsPage({
                       </p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
+                      {(t.prompt_type || 'image') === 'image' && (
+                        <Link
+                          href={`/projects/${projectId}/products/${id}/generate?prompt=${encodeURIComponent(t.prompt_text)}`}
+                          className="rounded p-2.5 text-zinc-500 hover:text-blue-400 hover:bg-zinc-700 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
+                          title="Generate with this prompt"
+                        >
+                          <Sparkles className="h-4 w-4" />
+                        </Link>
+                      )}
                       <button
                         onClick={() => startEdit(t)}
                         className="rounded p-2.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
