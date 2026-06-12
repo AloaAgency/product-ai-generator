@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processReferenceImageCompression } from '@/lib/reference-image-compression'
+import { mapWithConcurrency } from '@/lib/concurrency'
 import {
   MAX_REFERENCE_IMAGES,
   ALLOWED_REFERENCE_IMAGE_TYPES,
@@ -19,6 +20,8 @@ export const maxDuration = 60
 export const dynamic = 'force-dynamic'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
+// Bounded: each upload holds a full-size image in memory during Sharp re-encode.
+const UPLOAD_CONCURRENCY = 3
 
 export async function POST(
   request: NextRequest,
@@ -45,13 +48,16 @@ export async function POST(
         return NextResponse.json({ error: 'No uploads provided' }, { status: 400 })
       }
 
-      const { data: existing } = await supabase
+      // One round trip: exact count is computed server-side; only the
+      // max-display_order row is transferred instead of every row in the set.
+      const { data: existing, count: existingCount0 } = await supabase
         .from(T.reference_images)
-        .select('display_order')
+        .select('display_order', { count: 'exact' })
         .eq('reference_set_id', setId)
         .order('display_order', { ascending: false })
+        .limit(1)
 
-      const existingCount = existing?.length ?? 0
+      const existingCount = existingCount0 ?? 0
 
       if (existingCount + uploads.length > MAX_REFERENCE_IMAGES) {
         return NextResponse.json(
@@ -85,10 +91,15 @@ export async function POST(
         }
       }
 
+      // Precompute display orders so parallel workers don't race on a shared counter.
       let nextOrder = (existing?.[0]?.display_order ?? -1) + 1
-      const results = []
+      const displayOrders = uploads.map((upload) =>
+        typeof upload.display_order === 'number' && Number.isFinite(upload.display_order) && upload.display_order >= 0
+          ? upload.display_order
+          : nextOrder++
+      )
 
-      for (const upload of uploads) {
+      const results = await mapWithConcurrency(uploads, UPLOAD_CONCURRENCY, async (upload, index) => {
         const { data: record, error: dbError } = await supabase
           .from(T.reference_images)
           .insert({
@@ -97,27 +108,23 @@ export async function POST(
             file_name: upload.file_name,
             mime_type: upload.mime_type,
             file_size: upload.file_size,
-            display_order:
-              typeof upload.display_order === 'number' && Number.isFinite(upload.display_order) && upload.display_order >= 0
-                ? upload.display_order
-                : nextOrder++,
+            display_order: displayOrders[index],
           })
           .select()
           .single()
 
         if (dbError) {
-          results.push({ file: upload.file_name, error: dbError.message })
-        } else {
-          // Compress in background — merge updated metadata into the response
-          const compression = await processReferenceImageCompression(record.id, record.storage_path)
-          if (compression.wasCompressed && compression.newStoragePath && !compression.error) {
-            record.storage_path = compression.newStoragePath
-            record.mime_type = 'image/webp'
-            record.file_size = compression.compressedSize
-          }
-          results.push(record)
+          return { file: upload.file_name, error: dbError.message }
         }
-      }
+        // Compress before responding — merge updated metadata into the response
+        const compression = await processReferenceImageCompression(record.id, record.storage_path)
+        if (compression.wasCompressed && compression.newStoragePath && !compression.error) {
+          record.storage_path = compression.newStoragePath
+          record.mime_type = 'image/webp'
+          record.file_size = compression.compressedSize
+        }
+        return record
+      })
 
       return NextResponse.json(results, { status: 201 })
     }
@@ -138,14 +145,16 @@ export async function POST(
       }
     }
 
-    // Get current image count and max display_order
-    const { data: existing } = await supabase
+    // Get current image count and max display_order in one round trip:
+    // exact count is computed server-side; only the top row is transferred.
+    const { data: existing, count: existingCount0 } = await supabase
       .from(T.reference_images)
-      .select('display_order')
+      .select('display_order', { count: 'exact' })
       .eq('reference_set_id', setId)
       .order('display_order', { ascending: false })
+      .limit(1)
 
-    const existingCount = existing?.length ?? 0
+    const existingCount = existingCount0 ?? 0
 
     if (existingCount + files.length > MAX_REFERENCE_IMAGES) {
       return NextResponse.json(
@@ -154,11 +163,9 @@ export async function POST(
       )
     }
 
-    let nextOrder = (existing?.[0]?.display_order ?? -1) + 1
+    const firstOrder = (existing?.[0]?.display_order ?? -1) + 1
 
-    const results = []
-
-    for (const file of files) {
+    const results = await mapWithConcurrency(files, UPLOAD_CONCURRENCY, async (file, index) => {
       const arrayBuffer = await file.arrayBuffer()
       const buffer = Buffer.from(arrayBuffer)
       const extension = sanitizeStorageFileExtension(file.name)
@@ -173,8 +180,7 @@ export async function POST(
         })
 
       if (uploadError) {
-        results.push({ file: file.name, error: uploadError.message })
-        continue
+        return { file: file.name, error: uploadError.message }
       }
 
       const { data: record, error: dbError } = await supabase
@@ -185,17 +191,16 @@ export async function POST(
           file_name: file.name,
           mime_type: file.type,
           file_size: file.size,
-          display_order: nextOrder++,
+          display_order: firstOrder + index,
         })
         .select()
         .single()
 
       if (dbError) {
-        results.push({ file: file.name, error: dbError.message })
-      } else {
-        results.push(record)
+        return { file: file.name, error: dbError.message }
       }
-    }
+      return record
+    })
 
     return NextResponse.json(results, { status: 201 })
   } catch (err) {

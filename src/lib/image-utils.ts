@@ -180,10 +180,21 @@ async function assertInputDimensions(buffer: Buffer, context: string): Promise<v
 /** Shared return shape for all Sharp encode operations. */
 export type ImageResult = { buffer: Buffer; mimeType: string; extension: string }
 
-/** Resize an image buffer to a WebP of the given width and quality. */
-async function resizeToWebP(buffer: Buffer, width: number, quality: number): Promise<ImageResult> {
-  assertBufferSize(buffer, 'resizeToWebP')
-  await assertInputDimensions(buffer, 'resizeToWebP')
+const THUMB_WIDTH = 480
+const THUMB_QUALITY = 72
+const PREVIEW_WIDTH = 1600
+const PREVIEW_QUALITY = 82
+
+// Encode-only Sharp pipeline. Callers MUST run assertBufferSize +
+// assertInputDimensions on the source first — this is split out so functions
+// producing multiple outputs from one buffer can validate it once instead of
+// paying a metadata decode per output.
+async function encodeWebP(
+  buffer: Buffer,
+  width: number,
+  quality: number,
+  context: string
+): Promise<ImageResult> {
   let outBuffer: Buffer
   try {
     outBuffer = await sharp(buffer)
@@ -193,34 +204,49 @@ async function resizeToWebP(buffer: Buffer, width: number, quality: number): Pro
       .toBuffer()
   } catch (err) {
     throw new Error(
-      `resizeToWebP: Sharp encode failed — ${err instanceof Error ? err.message : String(err)}`
+      `${context}: Sharp encode failed — ${err instanceof Error ? err.message : String(err)}`
     )
   }
   if (outBuffer.length === 0) {
-    throw new Error('resizeToWebP: Sharp encode produced empty buffer')
+    throw new Error(`${context}: Sharp encode produced empty buffer`)
   }
   return { buffer: outBuffer, mimeType: 'image/webp', extension: 'webp' }
+}
+
+/** Resize an image buffer to a WebP of the given width and quality. */
+async function resizeToWebP(buffer: Buffer, width: number, quality: number): Promise<ImageResult> {
+  assertBufferSize(buffer, 'resizeToWebP')
+  await assertInputDimensions(buffer, 'resizeToWebP')
+  return encodeWebP(buffer, width, quality, 'resizeToWebP')
 }
 
 /**
  * Generate a resized thumbnail buffer (480px WebP)
  */
-export const createThumbnail = (buffer: Buffer, width = 480): Promise<ImageResult> =>
-  resizeToWebP(buffer, width, 72)
+export const createThumbnail = (buffer: Buffer, width = THUMB_WIDTH): Promise<ImageResult> =>
+  resizeToWebP(buffer, width, THUMB_QUALITY)
 
 /**
  * Generate a resized preview buffer (1600px WebP)
  */
-export const createPreview = (buffer: Buffer, width = 1600): Promise<ImageResult> =>
-  resizeToWebP(buffer, width, 82)
+export const createPreview = (buffer: Buffer, width = PREVIEW_WIDTH): Promise<ImageResult> =>
+  resizeToWebP(buffer, width, PREVIEW_QUALITY)
 
 /**
  * Generate thumbnail and preview in parallel from the same source buffer.
- * Equivalent to calling createThumbnail + createPreview concurrently —
- * cuts Sharp processing time roughly in half vs sequential calls.
+ * Validates the shared source once (one metadata decode instead of two),
+ * then runs both encodes concurrently.
  */
-export const createThumbnailAndPreview = (buffer: Buffer): Promise<[ImageResult, ImageResult]> =>
-  Promise.all([createThumbnail(buffer), createPreview(buffer)])
+export const createThumbnailAndPreview = async (
+  buffer: Buffer
+): Promise<[ImageResult, ImageResult]> => {
+  assertBufferSize(buffer, 'createThumbnailAndPreview')
+  await assertInputDimensions(buffer, 'createThumbnailAndPreview')
+  return Promise.all([
+    encodeWebP(buffer, THUMB_WIDTH, THUMB_QUALITY, 'createThumbnailAndPreview'),
+    encodeWebP(buffer, PREVIEW_WIDTH, PREVIEW_QUALITY, 'createThumbnailAndPreview'),
+  ])
+}
 
 /** Thresholds for reference image compression */
 const REF_MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
@@ -368,25 +394,11 @@ export const extractVideoThumbnail = async (
     const frameBuffer = await readFile(tmpFrame)
     assertBufferSize(frameBuffer, 'extractVideoThumbnail:frame')
     await assertInputDimensions(frameBuffer, 'extractVideoThumbnail:frame')
-    let thumb: Buffer
-    try {
-      thumb = await sharp(frameBuffer)
-        .rotate()
-        .resize({ width, withoutEnlargement: true })
-        .webp({ quality: 72 })
-        .toBuffer()
-    } catch (err) {
-      throw new Error(
-        `extractVideoThumbnail: Sharp encode failed — ${err instanceof Error ? err.message : String(err)}`
-      )
-    }
-    if (thumb.length === 0) {
-      throw new Error('extractVideoThumbnail: Sharp encode produced empty buffer')
-    }
-
-    return { buffer: thumb, mimeType: 'image/webp', extension: 'webp' }
+    return await encodeWebP(frameBuffer, width, THUMB_QUALITY, 'extractVideoThumbnail')
   } finally {
-    await unlink(tmpVideo).catch(() => {})
-    await unlink(tmpFrame).catch(() => {})
+    await Promise.all([
+      unlink(tmpVideo).catch(() => {}),
+      unlink(tmpFrame).catch(() => {}),
+    ])
   }
 }
