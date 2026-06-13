@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { getSafeErrorMessage } from './errorDisplay.helpers'
 import {
   VEO_RESOLUTIONS,
   VEO_ASPECT_RATIOS,
@@ -60,6 +61,7 @@ export function CreateVideoModal({
   const createPromptTemplate = useAppStore((s) => s.createPromptTemplate)
   const updatePromptTemplate = useAppStore((s) => s.updatePromptTemplate)
   const promptTemplates = useAppStore((s) => s.promptTemplates)
+  const dialogTitleId = useId()
 
   const [motionPrompt, setMotionPrompt] = useState('')
   const [resolution, setResolution] = useState(DEFAULT_VEO.resolution)
@@ -132,7 +134,7 @@ export function CreateVideoModal({
       onQueued('Video generation queued — it will appear in the gallery once ready.')
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to queue video generation')
+      setError(getSafeErrorMessage(err instanceof Error ? err.message : null, 'Failed to queue video generation'))
     } finally {
       setCreating(false)
     }
@@ -171,7 +173,7 @@ export function CreateVideoModal({
       }
       setShowSaveTemplate(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save prompt')
+      setError(getSafeErrorMessage(err instanceof Error ? err.message : null, 'Failed to save prompt'))
     } finally {
       setSavingTemplate(false)
     }
@@ -181,6 +183,9 @@ export function CreateVideoModal({
     <div
       className="fixed inset-0 z-[110] flex items-end justify-center bg-black/80 p-3 sm:items-center sm:p-4"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={dialogTitleId}
     >
       <div
         className="relative flex max-h-[calc(100vh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 sm:max-h-[88vh]"
@@ -190,12 +195,13 @@ export function CreateVideoModal({
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-5 py-4">
           <div className="flex items-center gap-2">
             <Video className="h-5 w-5 text-purple-400" />
-            <h2 className="text-sm font-semibold text-zinc-100">Turn image into video</h2>
+            <h2 id={dialogTitleId} className="text-sm font-semibold text-zinc-100">Turn image into video</h2>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
-            aria-label="Close"
+            aria-label="Close video creation dialog"
           >
             <X className="h-5 w-5" />
           </button>
