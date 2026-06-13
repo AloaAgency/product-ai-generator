@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useId } from 'react'
-import { X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { X, ChevronLeft, ChevronRight, ImageOff } from 'lucide-react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { getDownloadImageUrl } from './imageLightbox.helpers'
 
@@ -126,7 +126,15 @@ export default function ReferenceLightbox({
               className="max-h-full max-w-full object-contain"
             />
           ) : (
-            <div className="text-sm text-zinc-500">No image available</div>
+            <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-800 bg-zinc-900/40 px-6 py-8 text-center">
+              <div className="rounded-full bg-zinc-900 p-3">
+                <ImageOff className="h-6 w-6 text-zinc-500" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-zinc-300">No image available</p>
+                <p className="mt-1 text-xs text-zinc-500">This reference image does not have a renderable preview.</p>
+              </div>
+            </div>
           )}
         </div>
       </div>
