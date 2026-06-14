@@ -176,6 +176,62 @@ describe('middleware — unauthenticated requests', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Cache-control on auth-gate responses — CDN/proxy poisoning prevention
+//
+// The 401 JSON and the login HTML gate must carry `cache-control: no-store`
+// (middleware.ts). Without it a CDN or shared proxy could cache the
+// unauthorized/login response keyed only on the URL and then serve that stale
+// gate to a user who has since authenticated — or, worse, cache and replay an
+// authenticated-looking page to an anonymous visitor. These tests lock the
+// documented no-store invariant so it cannot be silently dropped.
+// ---------------------------------------------------------------------------
+
+describe('middleware — cache-control on auth-gate responses', () => {
+  let middleware: MiddlewareFn
+
+  beforeEach(async () => {
+    vi.resetModules()
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+    middleware = await importMiddleware()
+  })
+
+  afterEach(() => {
+    delete process.env.SITE_PASSWORD
+  })
+
+  it('sets cache-control: no-store on the 401 JSON for unauthenticated API requests', async () => {
+    const req = new NextRequest('http://localhost/api/products')
+    const res = await middleware(req)
+    expect(res.status).toBe(401)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('sets cache-control: no-store on the login page served to unauthenticated page requests', async () => {
+    const req = new NextRequest('http://localhost/dashboard')
+    const res = await middleware(req)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('sets cache-control: no-store on the login page even when an ?error param is present', async () => {
+    const req = new NextRequest('http://localhost/dashboard?error=1')
+    const res = await middleware(req)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('sets cache-control: no-store on the 401 when SITE_PASSWORD is not configured (fail-closed path)', async () => {
+    vi.resetModules()
+    delete process.env.SITE_PASSWORD
+    const failClosed = await importMiddleware()
+    const req = new NextRequest('http://localhost/api/products')
+    const res = await failClosed(req)
+    expect(res.status).toBe(401)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // XSS prevention — redirect path escaping
 // ---------------------------------------------------------------------------
 
