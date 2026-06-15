@@ -5,6 +5,7 @@ import { resolveGoogleApiKey } from '@/lib/google-api-keys'
 import type { GlobalStyleSettings } from '@/lib/types'
 import { isLtxModel, normalizeDurationValue, parsePositiveNumber } from '@/lib/video-constants'
 import { logger } from '@/lib/logger'
+import { redactSensitiveText } from '@/lib/redact-secrets'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const MAX_PROMPT_LENGTH = 4_000
@@ -109,12 +110,7 @@ function sanitizeExternalErrorMessage(
   fallback: string,
   maxLength = 240
 ) {
-  const normalized = value
-    .replace(/\s+/g, ' ')
-    .replace(/(Bearer\s+)[^\s,;]+/gi, '$1[redacted]')
-    .replace(/([?&](?:access_token|api[_-]?key|authorization|signature|sig|token|x-amz-[^=]+|x-goog-[^=]+)=)[^&\s]+/gi, '$1[redacted]')
-    .replace(/((?:api[_-]?key|authorization|secret|signature|token)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
-    .trim()
+  const normalized = redactSensitiveText(value)
 
   if (!normalized) return fallback
   if (normalized.length <= maxLength) return normalized
