@@ -1,3 +1,5 @@
+import { redactSensitiveText } from './redact-secrets'
+
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -40,16 +42,7 @@ export function sanitizeWorkerErrorMessage(error: unknown, fallback = 'Worker er
     return String(error)
   })()
 
-  const normalized = rawMessage
-    .replace(/\s+/g, ' ')
-    .replace(/(Bearer\s+)[^\s,;]+/gi, '$1[redacted]')
-    .replace(/([?&](?:access_token|api[_-]?key|authorization|signature|sig|token|x-amz-[^=]+|x-goog-[^=]+)=)[^&\s]+/gi, '$1[redacted]')
-    .replace(/((?:"?(?:[a-z0-9_-]*api[_-]?key|authorization|secret|signature|token|password|cookie|set-cookie)"?\s*:\s*"))[^"]+(")/gi, '$1[redacted]$2')
-    .replace(/((?:'?(?:[a-z0-9_-]*api[_-]?key|authorization|secret|signature|token|password|cookie|set-cookie)'?\s*:\s*'))[^']+(')/gi, '$1[redacted]$2')
-    .replace(/((?:[a-z0-9_-]*api[_-]?key|authorization|secret|signature|token|password|cookie|set-cookie)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
-    .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[redacted]')
-    .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, '[redacted]')
-    .trim()
+  const normalized = redactSensitiveText(rawMessage)
 
   if (!normalized) return fallback
   if (normalized.length <= MAX_ERROR_MESSAGE_LENGTH) return normalized
