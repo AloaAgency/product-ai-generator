@@ -13,6 +13,10 @@ export const SECURITY_HEADERS: readonly SecurityHeader[] = [
   },
   { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
   { key: 'X-DNS-Prefetch-Control', value: 'off' },
+  // Disables legacy Adobe Flash/Acrobat cross-domain data access (crossdomain.xml).
+  // This app serves no such policy file, so 'none' is a pure-hardening no-op for
+  // real clients while removing a header that external scanners routinely flag.
+  { key: 'X-Permitted-Cross-Domain-Policies', value: 'none' },
   { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
   // Prevents other origins from reading this app's responses (Spectre mitigation,
   // pairs with COOP: same-origin). Safe for this private tool — no cross-origin consumers.
