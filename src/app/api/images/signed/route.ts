@@ -58,12 +58,12 @@ export async function POST(request: NextRequest) {
     const signedImages = new Map<string, string>(
       (signedImageResult.data || [])
         .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+        .map((item) => [item.path!, item.signedUrl!])
     )
     const signedVideos = new Map<string, string>(
       (signedVideoResult.data || [])
         .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+        .map((item) => [item.path!, item.signedUrl!])
     )
 
     const expiresAt = Date.now() + SIGNED_URL_TTL_SECONDS * 1000

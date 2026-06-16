@@ -34,7 +34,7 @@ export async function GET(
         .createSignedUrls(paths, SIGNED_URL_TTL)
       if (signed) {
         signedMap = new Map(
-          signed.filter((s) => s?.signedUrl && s?.path).map((s) => [s.path!, s.signedUrl])
+          signed.filter((s) => s?.signedUrl && s?.path).map((s) => [s.path!, s.signedUrl!])
         )
       }
     }

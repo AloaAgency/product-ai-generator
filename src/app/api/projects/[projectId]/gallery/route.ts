@@ -223,12 +223,12 @@ export async function GET(
     const signedImageBucket = new Map<string, string>(
       (signedImageResult.data || [])
         .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+        .map((item) => [item.path!, item.signedUrl!])
     )
     const signedVideos = new Map<string, string>(
       (signedVideoResult.data || [])
         .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+        .map((item) => [item.path!, item.signedUrl!])
     )
 
     const productImageMap = new Map<string, Array<GalleryImageRecord & {
