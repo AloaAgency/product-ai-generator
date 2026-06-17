@@ -239,7 +239,7 @@ export async function GET(
         signedMap = new Map(
           signed
             .filter((item) => item?.signedUrl && item?.path)
-            .map((item) => [item.path!, item.signedUrl])
+            .map((item) => [item.path!, item.signedUrl!])
         )
       }
     }

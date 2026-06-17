@@ -61,12 +61,12 @@ export async function GET(
     const signedImagesMap = new Map<string, string>(
       (signedImagesResult.data || [])
         .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+        .map((item) => [item.path!, item.signedUrl!])
     )
     const signedVideosMap = new Map<string, string>(
       (signedVideosResult.data || [])
         .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+        .map((item) => [item.path!, item.signedUrl!])
     )
 
     const signedImages = (images || []).map((img) => ({
