@@ -396,10 +396,10 @@ export function ImageLightbox({
         case 'requestChanges':
           void handleRequestChanges()
           break
+        case 'copyPrompt':
+          void handleCopyPrompt()
+          break
         case 'none':
-          if (e.key === 'p' || e.key === 'P') {
-            void handleCopyPrompt()
-          }
           break
       }
     }

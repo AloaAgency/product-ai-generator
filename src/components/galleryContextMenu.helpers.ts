@@ -41,6 +41,12 @@ export const MENU_MIN_WIDTH_PX = 200
 export const MENU_ITEM_HEIGHT_PX = 34
 export const MENU_SEPARATOR_HEIGHT_PX = 9
 
+// Actions that render a separator immediately above them. Used by the menu to
+// draw dividers and by the position estimate to reserve their vertical space.
+export const MENU_DIVIDER_ACTIONS: ContextMenuAction[] = ['create_video', 'approve', 'download', 'delete']
+
+export const hasMenuDividerBefore = (action: ContextMenuAction) => MENU_DIVIDER_ACTIONS.includes(action)
+
 export const getVisibleMenuItems = (approvalStatus: string | null, mediaType: ContextMenuMediaType = null) =>
   MENU_ITEMS.filter((item) => !item.condition || item.condition(approvalStatus, mediaType))
 
@@ -57,7 +63,8 @@ export const getGalleryContextMenuPosition = ({
   viewportWidth: number
   viewportHeight: number
 }) => {
-  const estimatedHeight = itemCount * MENU_ITEM_HEIGHT_PX + 4 * MENU_SEPARATOR_HEIGHT_PX + 8
+  const estimatedHeight =
+    itemCount * MENU_ITEM_HEIGHT_PX + MENU_DIVIDER_ACTIONS.length * MENU_SEPARATOR_HEIGHT_PX + 8
   const adjustedX = x + MENU_MIN_WIDTH_PX > viewportWidth ? x - MENU_MIN_WIDTH_PX : x
   const adjustedY = y + estimatedHeight > viewportHeight ? y - estimatedHeight : y
 

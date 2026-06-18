@@ -21,8 +21,6 @@ import {
   MAX_BUG_REPORT_CAPTION_LENGTH,
   MAX_BUG_REPORT_DESCRIPTION_LENGTH,
   MAX_BUG_REPORT_TITLE_LENGTH,
-  normalizeBugReportMultiline,
-  normalizeBugReportSingleLine,
   parseBugReportResponse,
   releaseBugReportImagePreviews,
   stripBugReportControlChars,
@@ -115,12 +113,12 @@ export function BugReportWidget() {
 
     setIsSubmitting(true)
     try {
-      const normalizedTitle = normalizeBugReportSingleLine(title, MAX_BUG_REPORT_TITLE_LENGTH)
-      const normalizedDescription = normalizeBugReportMultiline(description, MAX_BUG_REPORT_DESCRIPTION_LENGTH)
+      // createBugReportFormData normalizes the title/description itself, so the
+      // raw field values are passed straight through here.
       const formData = createBugReportFormData({
         type,
-        title: normalizedTitle,
-        description: normalizedDescription,
+        title,
+        description,
         images,
       })
 

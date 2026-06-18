@@ -91,6 +91,22 @@ test('keyboard navigation prevents scroll and supports first/last shortcuts', ()
   )
 })
 
+test('keyboard copy-prompt shortcut maps to a dedicated action without preventing default', () => {
+  assert.deepEqual(
+    getKeyboardAction({ key: 'p', isNotesFocused: false, isRejected: false, hasDelete: false }),
+    { action: 'copyPrompt', preventDefault: false }
+  )
+  assert.deepEqual(
+    getKeyboardAction({ key: 'P', isNotesFocused: false, isRejected: false, hasDelete: false }),
+    { action: 'copyPrompt', preventDefault: false }
+  )
+  // While typing a note, "p" must remain a normal character, not a copy shortcut.
+  assert.deepEqual(
+    getKeyboardAction({ key: 'p', isNotesFocused: true, isRejected: false, hasDelete: false }),
+    { action: 'none', preventDefault: false }
+  )
+})
+
 test('keyboard handling stops modal shortcuts while the notes field is focused', () => {
   assert.deepEqual(
     getKeyboardAction({ key: 'Enter', isNotesFocused: true, isRejected: true, hasDelete: true }),
