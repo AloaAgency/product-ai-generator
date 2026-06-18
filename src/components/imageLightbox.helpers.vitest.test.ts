@@ -3,6 +3,7 @@ import type { LightboxImage } from './ImageLightbox'
 import {
   buildRegenerateUrl,
   getDownloadImageUrl,
+  getKeyboardAction,
   shouldRequestSignedUrls,
 } from './imageLightbox.helpers'
 
@@ -50,6 +51,13 @@ describe('imageLightbox.helpers', () => {
         public_url: 'https://example.com/public.png',
       })
     )).toBe('https://example.com/signed.png')
+  })
+
+  it('routes the prompt-copy shortcut through the keyboard action map', () => {
+    expect(getKeyboardAction({ key: 'p', isNotesFocused: false, isRejected: false, hasDelete: false }))
+      .toEqual({ action: 'copyPrompt', preventDefault: false })
+    expect(getKeyboardAction({ key: 'p', isNotesFocused: true, isRejected: false, hasDelete: false }))
+      .toEqual({ action: 'none', preventDefault: false })
   })
 
   it('only requests fresh signed urls when no renderable full image exists', () => {

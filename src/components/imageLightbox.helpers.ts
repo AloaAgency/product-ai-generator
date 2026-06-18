@@ -145,6 +145,7 @@ export type LightboxKeyboardAction =
   | 'reject'
   | 'download'
   | 'requestChanges'
+  | 'copyPrompt'
   | 'delete'
   | 'blurNotes'
   | 'none'
@@ -198,6 +199,9 @@ export const getKeyboardAction = ({
     case 'c':
     case 'C':
       return { action: 'requestChanges', preventDefault: false }
+    case 'p':
+    case 'P':
+      return { action: 'copyPrompt', preventDefault: false }
     default:
       return { action: 'none', preventDefault: false }
   }
