@@ -306,7 +306,8 @@ const getGalleryQueryString = (
     scene_id?: string
     sort?: string
   },
-  offset = 0
+  offset = 0,
+  limit = GALLERY_PAGE_SIZE
 ) => {
   const params = new URLSearchParams()
   if (filters?.job_id) params.set('job_id', filters.job_id.trim())
@@ -314,7 +315,7 @@ const getGalleryQueryString = (
   if (filters?.media_type) params.set('media_type', filters.media_type.trim())
   if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
   if (filters?.sort) params.set('sort', filters.sort.trim())
-  params.set('limit', String(GALLERY_PAGE_SIZE))
+  params.set('limit', String(clampInteger(limit, 1, 200, GALLERY_PAGE_SIZE)))
   params.set('offset', String(offset))
   return params.toString()
 }
@@ -1270,12 +1271,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     const scopedProductId = requireUuid(productId, 'product id')
     const sanitizedFilters = sanitizeGalleryFilters(filters)
     const requestKey = getGalleryRequestKey(scopedProductId, sanitizedFilters)
-    const qs = getGalleryQueryString(sanitizedFilters)
     if (updateSliceScope('gallery', requestKey)) {
       set({ galleryImages: [], galleryTotal: 0, galleryHasMore: false, loadingGallery: false, loadingGalleryMore: false })
     }
     const requestVersion = beginTrackedRequest(requestKey)
-    const shouldShowLoading = get().galleryImages.length === 0
+    const loadedCount = get().galleryImages.length
+    const shouldShowLoading = loadedCount === 0
+    const qs = getGalleryQueryString(sanitizedFilters, 0, Math.max(GALLERY_PAGE_SIZE, loadedCount))
     if (shouldShowLoading) set({ loadingGallery: true })
     try {
       const data = await getInFlightRequest(requestKey, () =>

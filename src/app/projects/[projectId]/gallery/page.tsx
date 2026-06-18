@@ -7,7 +7,7 @@ import { ProjectHeader } from '@/components/ProjectHeader'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
 import { GalleryContextMenu, type ContextMenuAction, type ContextMenuMediaType } from '@/components/GalleryContextMenu'
 import { CreateVideoModal } from '@/components/CreateVideoModal'
-import { SquareGrid } from '@/components/SquareGrid'
+import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
 import { FallbackImage } from '@/components/FallbackImage'
 import type { GeneratedImage } from '@/lib/types'
 import {
@@ -429,6 +429,18 @@ export default function ProjectGalleryPage({
     }
   }, [allImageOnly, imageIndexById, handleApprovalChange, ensureSignedUrls, handleDelete])
 
+  const handlePlayVideo = useCallback(async (imageId: string, fallbackUrl: string | null) => {
+    if (fallbackUrl) {
+      setPlayingVideoUrl(fallbackUrl)
+      return
+    }
+
+    const signed = await ensureSignedUrls(imageId)
+    if (signed?.signed_url) {
+      setPlayingVideoUrl(signed.signed_url)
+    }
+  }, [ensureSignedUrls])
+
   const handleNameSave = async (name: string) => {
     await updateProject(projectId, { name })
   }
@@ -609,7 +621,7 @@ export default function ProjectGalleryPage({
                   {group.images.length}
                 </span>
               </div>
-              <SquareGrid
+              <VirtualizedSquareGrid
                 items={group.images}
                 getItemKey={(img) => img.id}
                 renderItem={(img) => {
@@ -621,8 +633,8 @@ export default function ProjectGalleryPage({
                     <button
                       key={img.id}
                       onClick={() => {
-                        if (isVideo && img.public_url) {
-                          setPlayingVideoUrl(img.public_url)
+                        if (isVideo) {
+                          void handlePlayVideo(img.id, img.public_url)
                         } else if (globalIndex !== -1) {
                           setLightboxIndex(globalIndex)
                         }
@@ -638,7 +650,7 @@ export default function ProjectGalleryPage({
                       onFocus={() => {
                         if (!isVideo) warmLightboxAssets(img.id)
                       }}
-                      className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
+                      className={`group relative h-full w-full overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
                         isRejected
                           ? 'border-red-600/60 hover:border-red-500'
                           : isChanges
@@ -648,36 +660,18 @@ export default function ProjectGalleryPage({
                     >
                       {isVideo ? (
                         <>
-                          {img.thumb_public_url ? (
-                            <FallbackImage
-                              sources={[img.thumb_public_url]}
-                              alt="Video thumbnail"
-                              loading="lazy"
-                              decoding="async"
-                              className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                              fallback={img.public_url ? (
-                                <video
-                                  src={`${img.public_url}#t=0.1`}
-                                  preload="metadata"
-                                  muted
-                                  playsInline
-                                  className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                                />
-                              ) : (
-                                <div className="flex h-full w-full items-center justify-center">
-                                  <Video className="h-8 w-8 text-zinc-600" />
-                                </div>
-                              )}
-                            />
-                          ) : (
-                            <video
-                              src={`${img.public_url}#t=0.1`}
-                              preload="metadata"
-                              muted
-                              playsInline
-                              className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                            />
-                          )}
+                          <FallbackImage
+                            sources={[img.thumb_public_url]}
+                            alt="Video thumbnail"
+                            loading="lazy"
+                            decoding="async"
+                            className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                            fallback={(
+                              <div className="flex h-full w-full items-center justify-center">
+                                <Video className="h-8 w-8 text-zinc-600" />
+                              </div>
+                            )}
+                          />
                           <div className="absolute inset-0 flex items-center justify-center">
                             <div className="rounded-full bg-black/50 p-3">
                               <Play className="h-6 w-6 text-white fill-white" />
