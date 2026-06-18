@@ -7,6 +7,7 @@ import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/compon
 import { GalleryContextMenu, type ContextMenuAction, type ContextMenuMediaType } from '@/components/GalleryContextMenu'
 import { CreateVideoModal } from '@/components/CreateVideoModal'
 import { SquareGrid } from '@/components/SquareGrid'
+import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
 import { FallbackImage } from '@/components/FallbackImage'
 import type { PromptTemplate } from '@/lib/types'
 import {
@@ -551,6 +552,18 @@ export default function GalleryPage({
     }
   }
 
+  const handlePlayVideo = useCallback(async (imageId: string, fallbackUrl: string | null) => {
+    if (fallbackUrl) {
+      setPlayingVideoUrl(fallbackUrl)
+      return
+    }
+
+    const signed = await ensureSignedUrls(imageId)
+    if (signed?.signed_url) {
+      setPlayingVideoUrl(signed.signed_url)
+    }
+  }, [ensureSignedUrls])
+
   useEffect(() => {
     let isMounted = true
     let prevHadActive = false
@@ -910,7 +923,7 @@ export default function GalleryPage({
                         }}
                         onMouseEnter={() => warmLightboxAssets(img.id)}
                         onFocus={() => warmLightboxAssets(img.id)}
-                        className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
+                        className={`group relative h-full w-full overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
                           isSelected
                             ? 'border-blue-500 ring-2 ring-blue-500'
                             : isRejected
@@ -963,7 +976,7 @@ export default function GalleryPage({
           </div>
         ) : (
           <div className="px-4 py-6 sm:px-6">
-            <SquareGrid
+            <VirtualizedSquareGrid
               items={filteredImages}
               getItemKey={(img) => img.id}
               renderItem={(img) => {
@@ -978,8 +991,8 @@ export default function GalleryPage({
                     onClick={() => {
                       if (selectMode) {
                         toggleImageSelection(img.id)
-                      } else if (isVideo && img.public_url) {
-                        setPlayingVideoUrl(img.public_url)
+                      } else if (isVideo) {
+                        void handlePlayVideo(img.id, img.public_url)
                       } else {
                         if (imageIndex !== -1) setLightboxIndex(imageIndex)
                       }
@@ -995,7 +1008,7 @@ export default function GalleryPage({
                     onFocus={() => {
                       if (!isVideo) warmLightboxAssets(img.id)
                     }}
-                    className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
+                    className={`group relative h-full w-full overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
                       isSelected
                         ? 'border-blue-500 ring-2 ring-blue-500'
                         : isRejected
@@ -1007,36 +1020,18 @@ export default function GalleryPage({
                   >
                     {isVideo ? (
                       <>
-                        {img.thumb_public_url ? (
-                          <FallbackImage
-                            sources={[img.thumb_public_url]}
-                            alt="Video thumbnail"
-                            loading="lazy"
-                            decoding="async"
-                            className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                            fallback={img.public_url ? (
-                              <video
-                                src={`${img.public_url}#t=0.1`}
-                                preload="metadata"
-                                muted
-                                playsInline
-                                className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                              />
-                            ) : (
-                              <div className="flex h-full w-full items-center justify-center">
-                                <Video className="h-8 w-8 text-zinc-600" />
-                              </div>
-                            )}
-                          />
-                        ) : (
-                          <video
-                            src={`${img.public_url}#t=0.1`}
-                            preload="metadata"
-                            muted
-                            playsInline
-                            className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                          />
-                        )}
+                        <FallbackImage
+                          sources={[img.thumb_public_url]}
+                          alt="Video thumbnail"
+                          loading="lazy"
+                          decoding="async"
+                          className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                          fallback={(
+                            <div className="flex h-full w-full items-center justify-center">
+                              <Video className="h-8 w-8 text-zinc-600" />
+                            </div>
+                          )}
+                        />
                         <div className="absolute inset-0 flex items-center justify-center">
                           <div className="rounded-full bg-black/50 p-3">
                             <Play className="h-6 w-6 text-white fill-white" />

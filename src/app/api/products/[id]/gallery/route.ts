@@ -194,19 +194,17 @@ export async function GET(
     const previewPaths = imageItems
       .map((img) => img.preview_storage_path)
       .filter(Boolean) as string[]
-    const originalPaths = imageItems
+    const fallbackOriginalPaths = imageItems
+      .filter((img) => !img.thumb_storage_path && !img.preview_storage_path)
       .map((img) => img.storage_path)
       .filter(Boolean) as string[]
-    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...previewPaths, ...originalPaths]))
+    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...previewPaths, ...fallbackOriginalPaths]))
 
     const videoItems = (images || []).filter((img) => img.media_type === 'video')
-    const videoPaths = videoItems
-      .map((video) => video.storage_path)
-      .filter(Boolean) as string[]
     const videoThumbPaths = videoItems
       .map((video) => video.thumb_storage_path)
       .filter(Boolean) as string[]
-    const allVideoBucketPaths = Array.from(new Set([...videoPaths, ...videoThumbPaths]))
+    const allVideoBucketPaths = Array.from(new Set(videoThumbPaths))
 
     const [signedImageResult, signedVideoResult] = await Promise.all([
       allImageBucketPaths.length > 0
@@ -225,20 +223,24 @@ export async function GET(
     }
 
     const signedImageBucket = new Map<string, string>(
-      (signedImageResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl!])
+      (signedImageResult.data || []).flatMap((item) => (
+        typeof item?.signedUrl === 'string' && typeof item?.path === 'string'
+          ? [[item.path, item.signedUrl] as const]
+          : []
+      ))
     )
     const signedVideos = new Map<string, string>(
-      (signedVideoResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl!])
+      (signedVideoResult.data || []).flatMap((item) => (
+        typeof item?.signedUrl === 'string' && typeof item?.path === 'string'
+          ? [[item.path, item.signedUrl] as const]
+          : []
+      ))
     )
 
     const signedImages = (images || []).map((img) => ({
       ...img,
       public_url: img.media_type === 'video'
-        ? (img.storage_path ? (signedVideos.get(img.storage_path) ?? null) : null)
+        ? null
         : (img.storage_path ? (signedImageBucket.get(img.storage_path) ?? null) : null),
       preview_public_url: img.media_type === 'video'
         ? null
