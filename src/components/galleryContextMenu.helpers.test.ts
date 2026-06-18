@@ -3,6 +3,7 @@ import {
   getGalleryContextMenuPosition,
   getNextMenuFocusIndex,
   getVisibleMenuItems,
+  hasMenuDividerBefore,
   isCurrentMenuStatus,
 } from './galleryContextMenu.helpers'
 
@@ -43,6 +44,16 @@ describe('galleryContextMenu.helpers', () => {
     expect(getNextMenuFocusIndex({ key: 'Tab', currentIndex: 0, itemCount: 5, shiftKey: true })).toBe(4)
     expect(getNextMenuFocusIndex({ key: 'Tab', currentIndex: -1, itemCount: 5, shiftKey: false })).toBe(0)
     expect(getNextMenuFocusIndex({ key: 'Enter', currentIndex: 0, itemCount: 5, shiftKey: false })).toBeNull()
+  })
+
+  it('draws a leading divider only for the grouped section actions', () => {
+    expect(hasMenuDividerBefore('create_video')).toBe(true)
+    expect(hasMenuDividerBefore('approve')).toBe(true)
+    expect(hasMenuDividerBefore('download')).toBe(true)
+    expect(hasMenuDividerBefore('delete')).toBe(true)
+    expect(hasMenuDividerBefore('open')).toBe(false)
+    expect(hasMenuDividerBefore('reject')).toBe(false)
+    expect(hasMenuDividerBefore('request_changes')).toBe(false)
   })
 
   it('marks only the active approval action as current', () => {

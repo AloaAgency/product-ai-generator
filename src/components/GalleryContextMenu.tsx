@@ -5,6 +5,7 @@ import {
   getGalleryContextMenuPosition,
   getNextMenuFocusIndex,
   getVisibleMenuItems,
+  hasMenuDividerBefore,
   isCurrentMenuStatus,
   type ContextMenuAction,
   type ContextMenuMediaType,
@@ -96,10 +97,7 @@ export function GalleryContextMenu({ x, y, imageId, approvalStatus, mediaType = 
     >
       {visibleItems.map((item, i) => (
         <div key={item.action}>
-          {item.action === 'create_video' && <div className="my-1 border-t border-zinc-700" />}
-          {item.action === 'approve' && <div className="my-1 border-t border-zinc-700" />}
-          {item.action === 'download' && <div className="my-1 border-t border-zinc-700" />}
-          {item.action === 'delete' && <div className="my-1 border-t border-zinc-700" />}
+          {hasMenuDividerBefore(item.action) && <div className="my-1 border-t border-zinc-700" />}
           <button
             ref={(element) => {
               itemRefs.current[i] = element
