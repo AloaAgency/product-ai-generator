@@ -1414,4 +1414,109 @@ describe('processGenerationJob', () => {
       'Failed to load latest generation job state: read timeout'
     )
   })
+
+  it('tolerates a transient status-refresh read error instead of aborting a progressing job', async () => {
+    const jobId = '79797979-7979-4797-8797-797979797979'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId),
+        },
+        recordedVariationRows(),
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: null, global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          error: { message: 'transient read failure' },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockResolvedValue({
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-transient-status',
+      raw: {},
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 1,
+      failed: 0,
+      status: 'completed',
+    })
+  })
+
+  it('does not let a failed-state persistence error mask the original generation error', async () => {
+    const jobId = '80808080-8080-4808-8808-808080808080'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId),
+      },
+      recordedVariationRows(),
+      {
+        table: 'prodai_generation_job_reference_sets',
+        type: 'select-order',
+        data: [],
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-maybeSingle',
+        data: { completed_count: 0, failed_count: 0 },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        error: { message: 'db unavailable' },
+      },
+    ])
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).rejects.toThrow(
+      'Image generation job has no reference sets attached'
+    )
+  })
 })
