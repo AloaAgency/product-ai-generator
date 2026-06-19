@@ -1049,7 +1049,10 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
 
   try {
     if (normalizeJobType(claimedJob) === 'video') {
-      return processVideoJob(claimedJob, supabase)
+      // Await inside the try so any unexpected throw (e.g. a status-conflict
+      // during the completion update) routes through the failure handler
+      // below instead of escaping uncaught.
+      return await processVideoJob(claimedJob, supabase)
     }
 
     const plan = createVariationPlan(claimedJob, config.batchSize)
