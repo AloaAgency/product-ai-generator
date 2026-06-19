@@ -1082,7 +1082,13 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     return persistFinalImageJobState(supabase, claimedJob, variationResult)
   } catch (err) {
     const safeMessage = sanitizeWorkerErrorMessage(err, 'Generation job failed')
-    await markClaimedJobFailed(supabase, claimedJob, safeMessage)
+    try {
+      await markClaimedJobFailed(supabase, claimedJob, safeMessage)
+    } catch {
+      // Persisting the failed state is best-effort. If it fails (e.g. a
+      // transient DB error or a concurrent status change), never let that
+      // mask the original generation error the caller needs for logging.
+    }
     throw err
   }
 }
