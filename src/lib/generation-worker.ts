@@ -892,7 +892,10 @@ function createShouldStopChecker(
       .single()
 
     if (error) {
-      throw new Error(`Failed to refresh generation job status: ${error.message}`)
+      // A transient status read must not abort a job that is otherwise making
+      // progress. Keep the last known cancellation state and re-check on the
+      // next interval; the overall time budget still bounds total runtime.
+      return cancelled
     }
 
     cancelled = data?.status === 'cancelled'
@@ -1046,7 +1049,10 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
 
   try {
     if (normalizeJobType(claimedJob) === 'video') {
-      return processVideoJob(claimedJob, supabase)
+      // Await inside the try so any unexpected throw (e.g. a status-conflict
+      // during the completion update) routes through the failure handler
+      // below instead of escaping uncaught.
+      return await processVideoJob(claimedJob, supabase)
     }
 
     const plan = createVariationPlan(claimedJob, config.batchSize)
@@ -1082,7 +1088,13 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     return persistFinalImageJobState(supabase, claimedJob, variationResult)
   } catch (err) {
     const safeMessage = sanitizeWorkerErrorMessage(err, 'Generation job failed')
-    await markClaimedJobFailed(supabase, claimedJob, safeMessage)
+    try {
+      await markClaimedJobFailed(supabase, claimedJob, safeMessage)
+    } catch {
+      // Persisting the failed state is best-effort. If it fails (e.g. a
+      // transient DB error or a concurrent status change), never let that
+      // mask the original generation error the caller needs for logging.
+    }
     throw err
   }
 }
