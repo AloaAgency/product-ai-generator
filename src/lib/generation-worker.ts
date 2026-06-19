@@ -892,7 +892,10 @@ function createShouldStopChecker(
       .single()
 
     if (error) {
-      throw new Error(`Failed to refresh generation job status: ${error.message}`)
+      // A transient status read must not abort a job that is otherwise making
+      // progress. Keep the last known cancellation state and re-check on the
+      // next interval; the overall time budget still bounds total runtime.
+      return cancelled
     }
 
     cancelled = data?.status === 'cancelled'
