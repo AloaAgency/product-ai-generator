@@ -517,7 +517,7 @@ export function ImageLightbox({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white sm:min-h-0 sm:min-w-0"
             title="Close (Esc)"
             aria-label="Close lightbox"
           >
@@ -541,7 +541,7 @@ export function ImageLightbox({
               <button
                 type="button"
                 onClick={handleCopyPrompt}
-                className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white sm:min-h-0 sm:min-w-0"
                 title="Copy Prompt (P)"
                 aria-label="Copy prompt"
               >
@@ -550,7 +550,7 @@ export function ImageLightbox({
               {projectId && currentImage.productId && (
                 <a
                   href={buildRegenerateUrl({ projectId, image: currentImage })}
-                  className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white sm:min-h-0 sm:min-w-0"
                   title="Regenerate with this prompt"
                 >
                   <ExternalLink className="w-4 h-4" />
@@ -566,7 +566,7 @@ export function ImageLightbox({
             <button
               type="button"
               onClick={handlePrev}
-              className="absolute left-2 z-10 rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:left-4 sm:p-3"
+              className="absolute left-2 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:left-4 sm:p-3"
               aria-label="Previous image"
             >
               <ChevronLeft className="w-5 h-5 sm:w-6 sm:h-6" />
@@ -576,7 +576,7 @@ export function ImageLightbox({
             <button
               type="button"
               onClick={handleNext}
-              className="absolute right-2 z-10 rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:right-4 sm:p-3"
+              className="absolute right-2 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:right-4 sm:p-3"
               aria-label="Next image"
             >
               <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6" />
@@ -683,7 +683,7 @@ export function ImageLightbox({
         {/* Footer toolbar */}
         <div className="flex flex-col items-stretch justify-between gap-2 rounded-b-xl bg-zinc-900/80 px-3 py-2 sm:flex-row sm:items-center sm:px-4 sm:py-3">
           {/* Thumbnail strip */}
-          <div className="flex max-w-full items-center gap-2 overflow-x-auto pb-1 sm:max-w-[50%]">
+          <div className="flex max-w-full items-center gap-2 overflow-x-auto scrollbar-hide pb-1 sm:max-w-[50%]">
             {thumbnailItems.map((item) => (
               <LightboxThumbnailButton
                 key={item.id}
@@ -697,13 +697,13 @@ export function ImageLightbox({
             ))}
           </div>
 
-          {/* Action buttons */}
-          <div className="flex items-center justify-end gap-2">
+          {/* Action buttons – scroll horizontally on narrow screens instead of wrapping/overflowing */}
+          <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide sm:justify-end">
             <button
               type="button"
               onClick={handleApprove}
               disabled={isUpdating}
-              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2 ${
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2 ${
                 isApproved
                   ? 'bg-emerald-600 text-white hover:bg-emerald-500'
                   : 'bg-zinc-700 text-zinc-200 hover:bg-emerald-600 hover:text-white'
@@ -717,7 +717,7 @@ export function ImageLightbox({
               type="button"
               onClick={handleReject}
               disabled={isUpdating}
-              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2 ${
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2 ${
                 isRejected
                   ? 'bg-red-600 text-white hover:bg-red-700'
                   : 'bg-zinc-700 text-zinc-200 hover:bg-red-600 hover:text-white'
@@ -731,7 +731,7 @@ export function ImageLightbox({
               type="button"
               onClick={handleRequestChanges}
               disabled={isUpdating}
-              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2 ${
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2 ${
                 isRequestChanges
                   ? 'bg-amber-600 text-white hover:bg-amber-500'
                   : 'bg-zinc-700 text-zinc-200 hover:bg-amber-600 hover:text-white'
@@ -746,7 +746,7 @@ export function ImageLightbox({
                 type="button"
                 onClick={handlePermanentDelete}
                 disabled={isUpdating}
-                className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-red-800 hover:text-white sm:gap-2 sm:px-4 sm:py-2"
+                className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-red-800 hover:text-white shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2"
                 title="Permanently Delete (Delete/Backspace)"
               >
                 {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
@@ -756,7 +756,7 @@ export function ImageLightbox({
             {projectId && currentImage.productId && currentImage.prompt && (
               <a
                 href={buildRegenerateUrl({ projectId, image: currentImage })}
-                className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-blue-600 hover:text-white sm:gap-2 sm:px-4 sm:py-2"
+                className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-blue-600 hover:text-white shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2"
                 title="Regenerate with this prompt"
               >
                 <RefreshCw className="w-4 h-4" />
@@ -766,7 +766,7 @@ export function ImageLightbox({
             <button
               type="button"
               onClick={handleDownload}
-              className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-blue-600 hover:text-white sm:gap-2 sm:px-4 sm:py-2"
+              className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-blue-600 hover:text-white shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2"
               title="Download (D)"
             >
               <Download className="w-4 h-4" />
