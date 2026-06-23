@@ -65,7 +65,7 @@ export default function ReferenceLightbox({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby={dialogTitleId}
@@ -87,7 +87,7 @@ export default function ReferenceLightbox({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white sm:min-h-0 sm:min-w-0"
             title="Close (Esc)"
             aria-label="Close lightbox"
           >
@@ -100,7 +100,7 @@ export default function ReferenceLightbox({
             <button
               type="button"
               onClick={handlePrev}
-              className="absolute left-4 z-10 rounded-full bg-black/50 p-3 text-white transition-colors hover:bg-black/70"
+              className="absolute left-4 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-black/50 p-3 text-white transition-colors hover:bg-black/70"
               title="Previous (←)"
               aria-label="Previous reference image"
             >
@@ -111,7 +111,7 @@ export default function ReferenceLightbox({
             <button
               type="button"
               onClick={handleNext}
-              className="absolute right-4 z-10 rounded-full bg-black/50 p-3 text-white transition-colors hover:bg-black/70"
+              className="absolute right-4 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-black/50 p-3 text-white transition-colors hover:bg-black/70"
               title="Next (→)"
               aria-label="Next reference image"
             >
