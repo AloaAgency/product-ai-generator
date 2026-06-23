@@ -517,7 +517,7 @@ export function ImageLightbox({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white sm:min-h-0 sm:min-w-0"
             title="Close (Esc)"
             aria-label="Close lightbox"
           >
@@ -541,7 +541,7 @@ export function ImageLightbox({
               <button
                 type="button"
                 onClick={handleCopyPrompt}
-                className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white sm:min-h-0 sm:min-w-0"
                 title="Copy Prompt (P)"
                 aria-label="Copy prompt"
               >
@@ -550,7 +550,7 @@ export function ImageLightbox({
               {projectId && currentImage.productId && (
                 <a
                   href={buildRegenerateUrl({ projectId, image: currentImage })}
-                  className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white sm:min-h-0 sm:min-w-0"
                   title="Regenerate with this prompt"
                 >
                   <ExternalLink className="w-4 h-4" />
@@ -566,7 +566,7 @@ export function ImageLightbox({
             <button
               type="button"
               onClick={handlePrev}
-              className="absolute left-2 z-10 rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:left-4 sm:p-3"
+              className="absolute left-2 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:left-4 sm:p-3"
               aria-label="Previous image"
             >
               <ChevronLeft className="w-5 h-5 sm:w-6 sm:h-6" />
@@ -576,7 +576,7 @@ export function ImageLightbox({
             <button
               type="button"
               onClick={handleNext}
-              className="absolute right-2 z-10 rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:right-4 sm:p-3"
+              className="absolute right-2 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:right-4 sm:p-3"
               aria-label="Next image"
             >
               <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6" />
