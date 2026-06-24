@@ -1,7 +1,8 @@
 import { createServiceClient } from '@/lib/supabase/server'
-import { compressReferenceImage, CompressResult } from '@/lib/image-utils'
+import { compressReferenceImage, type CompressResult } from '@/lib/image-utils'
 import { T } from '@/lib/db-tables'
 import { sanitizePublicErrorMessage } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const BUCKET = 'reference-images'
 
@@ -131,9 +132,17 @@ export async function processReferenceImageCompression(
   }
 
   // Best-effort cleanup: remove old file if the extension changed.
-  // A failure here only orphans a file in storage — the DB is already correct.
+  // A failure here only orphans a file in storage — the DB is already correct,
+  // so we log and continue rather than surfacing an error to the caller.
   if (newStoragePath !== storagePath) {
-    await supabase.storage.from(BUCKET).remove([storagePath])
+    try {
+      const { error: removeError } = await supabase.storage.from(BUCKET).remove([storagePath])
+      if (removeError) {
+        logger.warn(`Failed to remove old reference image '${storagePath}':`, removeError.message)
+      }
+    } catch (err) {
+      logger.warn(`Failed to remove old reference image '${storagePath}':`, err)
+    }
   }
 
   return {
