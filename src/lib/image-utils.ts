@@ -9,6 +9,7 @@ import { tmpdir } from 'os'
 import { join, dirname, basename } from 'path'
 import { randomUUID } from 'crypto'
 import { writeFile, readFile, unlink, access } from 'fs/promises'
+import { logger } from '@/lib/logger'
 
 // Resolve ffmpeg path: try ffmpeg-static first (checking the file exists),
 // then fall back to system ffmpeg
@@ -396,9 +397,17 @@ export const extractVideoThumbnail = async (
     await assertInputDimensions(frameBuffer, 'extractVideoThumbnail:frame')
     return await encodeWebP(frameBuffer, width, THUMB_QUALITY, 'extractVideoThumbnail')
   } finally {
+    // Best-effort temp cleanup. A missing file (ENOENT) is expected when the
+    // frame was never written (e.g. ffmpeg failed before producing output), so
+    // we ignore it; any other failure leaks a file in /tmp and is worth a warn.
     await Promise.all([
-      unlink(tmpVideo).catch(() => {}),
-      unlink(tmpFrame).catch(() => {}),
+      unlink(tmpVideo).catch(reportTempCleanupFailure),
+      unlink(tmpFrame).catch(reportTempCleanupFailure),
     ])
   }
+}
+
+function reportTempCleanupFailure(err: NodeJS.ErrnoException): void {
+  if (err?.code === 'ENOENT') return
+  logger.warn('extractVideoThumbnail: failed to remove temp file:', err)
 }
