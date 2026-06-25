@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { parseRequestBody } from '@/lib/request-guards'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import { MAX_USER_PROMPT_LEN, SCENE_TITLE_SYSTEM_PROMPT, safeTextFromContent } from '@/lib/prompt-builder'
+import { logError } from '@/lib/error-logger'
 import { logger } from '@/lib/logger'
 
 const anthropic = new Anthropic()
@@ -35,6 +36,12 @@ export async function POST(request: NextRequest) {
     // Log the full error internally but never echo raw error messages back to
     // the client — they can contain API keys or internal query details.
     logger.error('[scene-title] Error:', err instanceof Error ? err.message : String(err))
+    // Persist to the error log so AI failures here are observable alongside the
+    // sibling /api/ai/build-prompt and /api/ai/suggest-prompts routes.
+    await logError({
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/ai/scene-title',
+    })
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

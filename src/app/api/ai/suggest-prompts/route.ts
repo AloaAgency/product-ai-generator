@@ -9,6 +9,7 @@ import {
   validateSuggestionCount,
   MAX_SUGGESTION_COUNT,
 } from '@/lib/prompt-builder'
+import { parseRequestBody } from '@/lib/request-guards'
 import type { GlobalStyleSettings } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
@@ -20,12 +21,11 @@ const anthropic = new Anthropic()
 export async function POST(request: NextRequest) {
   let product_id: string | undefined
 
-  let body: { product_id?: string; count?: number }
-  try {
-    body = await request.json()
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 })
-  }
+  // parseRequestBody rejects non-object bodies (null/array/primitive) with a 400
+  // instead of letting a later `body.product_id` access throw into the 500 catch.
+  const parsed = await parseRequestBody<{ product_id?: string; count?: number }>(request)
+  if (!parsed.ok) return parsed.response
+  const body = parsed.body
 
   try {
     product_id = body.product_id
