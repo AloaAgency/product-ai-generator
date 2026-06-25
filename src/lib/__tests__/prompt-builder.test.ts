@@ -12,6 +12,7 @@ import {
   MAX_SUGGESTION_NAME_LEN,
   MAX_USER_PROMPT_LEN,
   parsePromptSuggestions,
+  safeTextFromContent,
   SCENE_TITLE_SYSTEM_PROMPT,
   validateSuggestionCount,
 } from '../prompt-builder'
@@ -28,6 +29,48 @@ describe('SCENE_TITLE_SYSTEM_PROMPT', () => {
 
   it('instructs Claude to produce only the title with no extra output', () => {
     expect(SCENE_TITLE_SYSTEM_PROMPT).toContain('Output ONLY the title')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// safeTextFromContent
+// ---------------------------------------------------------------------------
+
+describe('safeTextFromContent', () => {
+  it('returns the text of a single text block', () => {
+    expect(safeTextFromContent([{ type: 'text', text: 'Hello' }])).toBe('Hello')
+  })
+
+  it('returns an empty string for an empty content array', () => {
+    expect(safeTextFromContent([])).toBe('')
+  })
+
+  it('returns an empty string when the text field is missing on a text block', () => {
+    expect(safeTextFromContent([{ type: 'text' }])).toBe('')
+  })
+
+  it('skips a leading non-text block and returns the first text block', () => {
+    // The API can emit a thinking/tool_use block before the text block; index 0
+    // is not guaranteed to be the text we want.
+    expect(
+      safeTextFromContent([
+        { type: 'thinking' },
+        { type: 'text', text: 'The answer' },
+      ])
+    ).toBe('The answer')
+  })
+
+  it('returns the first text block when multiple text blocks are present', () => {
+    expect(
+      safeTextFromContent([
+        { type: 'text', text: 'first' },
+        { type: 'text', text: 'second' },
+      ])
+    ).toBe('first')
+  })
+
+  it('returns an empty string when no text block exists', () => {
+    expect(safeTextFromContent([{ type: 'tool_use' }, { type: 'thinking' }])).toBe('')
   })
 })
 

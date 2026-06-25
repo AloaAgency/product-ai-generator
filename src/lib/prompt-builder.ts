@@ -272,13 +272,17 @@ Output ONLY valid JSON, no markdown fences:
 const CODE_FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/gi
 
 /**
- * Safely extract the text from the first content block of an Anthropic API response.
+ * Safely extract the text from an Anthropic API response.
+ * Returns the first text block's content, scanning past any non-text blocks
+ * (e.g. a `thinking` or `tool_use` block the API may emit before the text)
+ * rather than only inspecting index 0 — otherwise a leading non-text block
+ * would make this silently return '' even when text is present.
  * Guards against empty content arrays, which can occur when the API returns an
  * unexpected stop reason (e.g. max_tokens reached at zero output).
  */
 export function safeTextFromContent(content: ReadonlyArray<{ type: string; text?: string }>): string {
-  const first = content[0]
-  return first?.type === 'text' ? (first.text ?? '') : ''
+  const textBlock = content.find((block) => block?.type === 'text')
+  return textBlock?.text ?? ''
 }
 
 /** A single parsed prompt suggestion — the shape returned by parsePromptSuggestions. */
