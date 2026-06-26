@@ -4,7 +4,7 @@
  * Covers: fail-closed behaviour, correct/wrong password flows, open-redirect
  * prevention, and handling of malformed form inputs.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import { AUTH_COOKIE_NAME, deriveAuthToken } from '@/lib/auth-constants'
 import { GET, POST } from '@/app/api/login/route'
@@ -347,5 +347,156 @@ describe('POST /api/login — malformed form inputs', () => {
     const loc = res.headers.get('location') ?? ''
     const pathname = loc.startsWith('http') ? new URL(loc).pathname : loc
     expect(pathname).toBe('/')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Cache-control — auth responses must never be cached by a shared proxy
+// ---------------------------------------------------------------------------
+
+describe('POST /api/login — no-store on auth responses', () => {
+  beforeEach(() => {
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+  })
+
+  afterEach(() => {
+    delete process.env.SITE_PASSWORD
+  })
+
+  it('sets Cache-Control: no-store on the success redirect carrying the Set-Cookie', async () => {
+    const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/' })
+    const res = await POST(req)
+    expect(res.headers.get('set-cookie')).toContain(AUTH_COOKIE_NAME)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('sets Cache-Control: no-store on the wrong-password redirect', async () => {
+    const req = buildLoginRequest({ password: 'nope', redirect: '/' })
+    const res = await POST(req)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('sets Cache-Control: no-store on the GET redirect', () => {
+    const res = GET(new NextRequest('http://localhost/api/login'))
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Configurable session TTL — SITE_AUTH_TTL_DAYS
+// ---------------------------------------------------------------------------
+
+describe('POST /api/login — configurable session TTL', () => {
+  beforeEach(() => {
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+  })
+
+  afterEach(() => {
+    delete process.env.SITE_PASSWORD
+    delete process.env.SITE_AUTH_TTL_DAYS
+  })
+
+  /** Extract the cookie Max-Age (seconds) from a Set-Cookie header. */
+  function cookieMaxAge(res: Response): number | null {
+    const setCookie = res.headers.get('set-cookie') ?? ''
+    const match = setCookie.match(/Max-Age=(\d+)/i)
+    return match ? Number(match[1]) : null
+  }
+
+  it('defaults to a 7-day cookie when SITE_AUTH_TTL_DAYS is unset', async () => {
+    const res = await POST(buildLoginRequest({ password: TEST_PASSWORD, redirect: '/' }))
+    expect(cookieMaxAge(res)).toBe(7 * 24 * 60 * 60)
+  })
+
+  it('honours a configured SITE_AUTH_TTL_DAYS value', async () => {
+    process.env.SITE_AUTH_TTL_DAYS = '2'
+    const res = await POST(buildLoginRequest({ password: TEST_PASSWORD, redirect: '/' }))
+    expect(cookieMaxAge(res)).toBe(2 * 24 * 60 * 60)
+  })
+
+  it('falls back to the 7-day default for invalid SITE_AUTH_TTL_DAYS values', async () => {
+    process.env.SITE_AUTH_TTL_DAYS = 'not-a-number'
+    const res = await POST(buildLoginRequest({ password: TEST_PASSWORD, redirect: '/' }))
+    expect(cookieMaxAge(res)).toBe(7 * 24 * 60 * 60)
+  })
+
+  it('clamps an absurdly large SITE_AUTH_TTL_DAYS to the 365-day maximum', async () => {
+    process.env.SITE_AUTH_TTL_DAYS = '100000'
+    const res = await POST(buildLoginRequest({ password: TEST_PASSWORD, redirect: '/' }))
+    expect(cookieMaxAge(res)).toBe(365 * 24 * 60 * 60)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Brute-force rate limiting — 429 after the configured failure cap
+//
+// Uses a fresh module instance (vi.resetModules + dynamic import) with a low
+// LOGIN_MAX_FAILED_ATTEMPTS so the singleton limiter is built with a tiny cap,
+// keeping the test fast and isolated from the statically-imported route.
+// ---------------------------------------------------------------------------
+
+describe('POST /api/login — brute-force rate limiting', () => {
+  afterEach(() => {
+    delete process.env.SITE_PASSWORD
+    delete process.env.LOGIN_MAX_FAILED_ATTEMPTS
+    vi.resetModules()
+  })
+
+  /** POST a login request carrying an explicit client IP so the limiter keys on it. */
+  function attempt(post: typeof POST, password: string, ip: string) {
+    const formData = new FormData()
+    formData.set('password', password)
+    formData.set('redirect', '/')
+    const req = new NextRequest('http://localhost/api/login', {
+      method: 'POST',
+      body: formData,
+      headers: { 'x-forwarded-for': ip },
+    })
+    return post(req)
+  }
+
+  it('returns 429 with a Retry-After header once the failed-attempt cap is exceeded', async () => {
+    vi.resetModules()
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+    process.env.LOGIN_MAX_FAILED_ATTEMPTS = '2'
+    const { POST: freshPost } = await import('@/app/api/login/route')
+
+    const ip = '203.0.113.50'
+    // Two wrong-password attempts reach the cap...
+    expect((await attempt(freshPost, 'wrong', ip)).status).toBe(303)
+    expect((await attempt(freshPost, 'wrong', ip)).status).toBe(303)
+    // ...the next attempt is throttled before the password is even checked.
+    const throttled = await attempt(freshPost, 'wrong', ip)
+    expect(throttled.status).toBe(429)
+    expect(Number(throttled.headers.get('retry-after'))).toBeGreaterThan(0)
+    expect(throttled.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('does not throttle a different client IP', async () => {
+    vi.resetModules()
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+    process.env.LOGIN_MAX_FAILED_ATTEMPTS = '2'
+    const { POST: freshPost } = await import('@/app/api/login/route')
+
+    await attempt(freshPost, 'wrong', '203.0.113.51')
+    await attempt(freshPost, 'wrong', '203.0.113.51')
+    // A clean IP is unaffected by another client's failures.
+    expect((await attempt(freshPost, 'wrong', '203.0.113.99')).status).toBe(303)
+  })
+
+  it('a correct password clears the counter, so a later attempt is not throttled', async () => {
+    vi.resetModules()
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+    process.env.LOGIN_MAX_FAILED_ATTEMPTS = '2'
+    const { POST: freshPost } = await import('@/app/api/login/route')
+
+    const ip = '203.0.113.52'
+    await attempt(freshPost, 'wrong', ip)
+    // Correct password resets the bucket.
+    expect((await attempt(freshPost, TEST_PASSWORD, ip)).status).toBe(303)
+    // Two fresh failures are needed again before throttling resumes.
+    expect((await attempt(freshPost, 'wrong', ip)).status).toBe(303)
+    expect((await attempt(freshPost, 'wrong', ip)).status).toBe(303)
+    expect((await attempt(freshPost, 'wrong', ip)).status).toBe(429)
   })
 })
