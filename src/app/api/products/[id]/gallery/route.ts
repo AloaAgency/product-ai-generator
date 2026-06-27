@@ -104,11 +104,6 @@ export async function GET(
       supabase.from(T.generated_images).select('id', { count: 'exact', head: true }),
       { productId, sceneId, approvalStatus, mediaType }
     )
-    const { count: totalCount, error: countError } = await countQuery
-
-    if (countError) {
-      return NextResponse.json({ error: 'Failed to count images' }, { status: 500 })
-    }
 
     let imagesQuery = applyImageFilters(
       supabase.from(T.generated_images).select(GALLERY_IMAGE_SELECT),
@@ -127,10 +122,20 @@ export async function GET(
 
     imagesQuery = imagesQuery.range(offset, offset + limit - 1)
 
-    const { data: images, error: imagesError } = await imagesQuery as {
-      data: GalleryImageRecord[] | null
-      error: { message: string } | null
+    // Count and page-fetch are independent — run them in one round-trip instead of serially.
+    const [{ count: totalCount, error: countError }, imagesResult] = await Promise.all([
+      countQuery,
+      imagesQuery as Promise<{
+        data: GalleryImageRecord[] | null
+        error: { message: string } | null
+      }>,
+    ])
+
+    if (countError) {
+      return NextResponse.json({ error: 'Failed to count images' }, { status: 500 })
     }
+
+    const { data: images, error: imagesError } = imagesResult
 
     if (imagesError) {
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
