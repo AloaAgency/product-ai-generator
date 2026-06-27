@@ -29,10 +29,10 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
-    // Fetch all image records
+    // Fetch all image records — only the storage paths are needed to delete.
     const { data: images, error: fetchError } = await supabase
       .from(T.generated_images)
-      .select('*')
+      .select('storage_path, thumb_storage_path, preview_storage_path')
       .in('id', sanitizedImageIds)
 
     if (fetchError) {

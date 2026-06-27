@@ -67,13 +67,17 @@ export async function POST(
       }
     }
 
-    const { data: existing } = await supabase
+    // Only the highest display_order row is needed for the next ordinal; the total
+    // is read from the exact count header. Fetching every row just to call .length
+    // pulled the whole set (up to MAX_REFERENCE_IMAGES) on every upload request.
+    const { data: existing, count } = await supabase
       .from(T.reference_images)
-      .select('display_order')
+      .select('display_order', { count: 'exact' })
       .eq('reference_set_id', setId)
       .order('display_order', { ascending: false })
+      .limit(1)
 
-    const existingCount = existing?.length ?? 0
+    const existingCount = count ?? 0
     if (existingCount + files.length > MAX_REFERENCE_IMAGES) {
       return NextResponse.json(
         {

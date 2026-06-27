@@ -69,10 +69,10 @@ export async function DELETE(
     const sanitizedImageId = requireUuid(imageId, 'image id')
     const supabase = createServiceClient()
 
-    // Fetch the image record first
+    // Fetch the image record first — only the storage paths are needed to delete.
     const { data: image, error: fetchError } = await supabase
       .from(T.generated_images)
-      .select('*')
+      .select('storage_path, thumb_storage_path, preview_storage_path')
       .eq('id', sanitizedImageId)
       .single()
 
