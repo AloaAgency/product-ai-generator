@@ -196,7 +196,7 @@ export function BugReportWidget() {
           aria-labelledby={dialogTitleId}
           aria-describedby={dialogDescriptionId}
         >
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={handleClose} />
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={handleClose} />
 
           <div
             className="relative z-10 mx-4 flex max-h-[90vh] w-full max-w-lg flex-col overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl"
