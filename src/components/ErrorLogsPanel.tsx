@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useAppStore } from '@/lib/store'
-import { AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Trash2 } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronUp, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 import {
   ERROR_LOGS_PAGE_SIZE,
   getNextVisibleErrorLogCount,
@@ -114,7 +114,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
           <div className="max-h-64 space-y-2 overflow-y-auto">
             {loadingErrorLogs && visibleLogs.length === 0 ? (
               <div className="flex items-center justify-center py-8">
-                <RefreshCw className="h-5 w-5 animate-spin text-zinc-500" />
+                <Loader2 className="h-5 w-5 animate-spin text-zinc-500" />
               </div>
             ) : visibleLogs.length === 0 ? (
               <div className="rounded-lg border border-dashed border-red-900/30 bg-red-950/10 px-4 py-6 text-center">
