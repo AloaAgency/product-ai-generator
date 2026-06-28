@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useId } from 'react'
+import { useCallback, useEffect, useId, useRef } from 'react'
 import { X, ChevronLeft, ChevronRight, ImageOff } from 'lucide-react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { getDownloadImageUrl } from './imageLightbox.helpers'
@@ -25,9 +25,14 @@ export default function ReferenceLightbox({
   onNavigate,
 }: ReferenceLightboxProps) {
   const dialogTitleId = useId()
+  const dialogRef = useRef<HTMLDivElement>(null)
   const currentImage = images[currentIndex]
   const hasPrev = currentIndex > 0
   const hasNext = currentIndex < images.length - 1
+
+  useEffect(() => {
+    dialogRef.current?.focus()
+  }, [])
 
   const handlePrev = useCallback(() => {
     if (hasPrev) onNavigate(currentIndex - 1)
@@ -46,9 +51,11 @@ export default function ReferenceLightbox({
     const handleKeyDown = (e: KeyboardEvent) => {
       switch (e.key) {
         case 'ArrowLeft':
+          e.preventDefault()
           handlePrev()
           break
         case 'ArrowRight':
+          e.preventDefault()
           handleNext()
           break
       }
@@ -72,15 +79,17 @@ export default function ReferenceLightbox({
     >
       <div className="fixed inset-0 bg-black/90" onClick={onClose} />
       <div
+        ref={dialogRef}
         className="relative z-10 flex h-full max-h-[90vh] w-full max-w-5xl flex-col"
         onClick={(e) => e.stopPropagation()}
+        tabIndex={-1}
       >
         <div className="flex items-center justify-between rounded-t-xl bg-zinc-900/80 px-4 py-3">
           <div className="flex items-center gap-4">
             <span id={dialogTitleId} className="text-sm font-medium text-zinc-100">
               {currentImage.file_name ?? `Image ${currentIndex + 1}`}
             </span>
-            <span className="text-xs text-zinc-400">
+            <span className="text-sm text-zinc-500">
               {currentIndex + 1} / {images.length}
             </span>
           </div>
