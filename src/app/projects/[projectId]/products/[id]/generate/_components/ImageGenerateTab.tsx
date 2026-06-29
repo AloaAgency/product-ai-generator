@@ -165,6 +165,7 @@ export function ImageGenerateTab({
   const [refSlots, setRefSlots] = useState<RefSlot[]>([])
   const [didInitRefSlots, setDidInitRefSlots] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [generateError, setGenerateError] = useState<string | null>(null)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
   const [templateName, setTemplateName] = useState('')
@@ -412,6 +413,7 @@ export function ImageGenerateTab({
     }
 
     setGenerating(true)
+    setGenerateError(null)
     try {
       const job = await startGeneration(productId, {
         prompt_text: finalPrompt,
@@ -429,7 +431,10 @@ export function ImageGenerateTab({
         style: photoStyle || undefined,
       })
       setActiveJobId(job.id)
-    } catch {
+    } catch (err) {
+      // Surface the failure instead of silently resetting — a swallowed error
+      // here once masked an entire image-generation outage.
+      setGenerateError(err instanceof Error ? err.message : 'Failed to start generation. Please try again.')
       setGenerating(false)
     }
   }
@@ -1284,6 +1289,12 @@ export function ImageGenerateTab({
           )}
           {generating ? 'Generating...' : 'Generate Images'}
         </button>
+        {generateError && (
+          <div className="flex items-start gap-2 rounded-md border border-red-900/60 bg-red-950/50 px-3 py-2 text-xs text-red-300">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span><span className="font-medium">Couldn&apos;t start generation:</span> {generateError}</span>
+          </div>
+        )}
         {!generating && !aiLoading && disabledReasons.length > 0 && (
           <div className="flex items-start gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-400">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-yellow-500 mt-0.5" />
