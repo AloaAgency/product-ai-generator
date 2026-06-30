@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto'
 import { logger } from '@/lib/logger'
+import { redactSensitiveText } from '@/lib/redact-secrets'
 
 export type GeminiImageResolution = '2K' | '4K'
 
@@ -157,9 +158,15 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
     const raw = await response.json().catch(() => ({})) as GeminiApiResponse
 
     if (!response.ok) {
-      const message = raw?.error?.message || raw?.message || response.statusText
+      // Provider error text/objects can echo back credentials supplied in the
+      // request (e.g. the x-goog-api-key value). Route everything that gets
+      // logged or surfaced through the shared redactor — the same single source
+      // of truth used by sanitizeWorkerErrorMessage / sanitizeExternalErrorMessage.
+      const rawMessage = raw?.error?.message || raw?.message || response.statusText
+      const message = redactSensitiveText(rawMessage)
       const errorCode = raw?.error?.code || raw?.error?.status || response.status
-      logger.error(`[Gemini] API error (${response.status}):`, message, raw?.error ?? null)
+      const safeErrorDetail = raw?.error ? redactSensitiveText(JSON.stringify(raw.error)) : null
+      logger.error(`[Gemini] API error (${response.status}):`, message, safeErrorDetail)
 
       if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
         lastError = new Error(response.status === 429
@@ -195,7 +202,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
       const finishReason = raw?.candidates?.[0]?.finishReason || 'unknown'
       logger.error(
         `[Gemini] Response did not include image data. finishReason=${finishReason}, ` +
-        `textResponse=${textParts.slice(0, 200)}, ` +
+        `textResponse=${redactSensitiveText(textParts).slice(0, 200)}, ` +
         `candidateCount=${raw?.candidates?.length || 0}, ` +
         `model=${model}`
       )
