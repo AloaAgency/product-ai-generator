@@ -7,6 +7,7 @@ import { ProjectHeader } from '@/components/ProjectHeader'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
 import { GalleryContextMenu, type ContextMenuAction, type ContextMenuMediaType } from '@/components/GalleryContextMenu'
 import { CreateVideoModal } from '@/components/CreateVideoModal'
+import { GenerationActivityModal } from '@/components/GenerationActivityModal'
 import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
 import { FallbackImage } from '@/components/FallbackImage'
 import type { GeneratedImage } from '@/lib/types'
@@ -19,6 +20,7 @@ import {
   X,
   Package,
   Trash2,
+  CalendarDays,
 } from 'lucide-react'
 import { logger } from '@/lib/logger'
 
@@ -79,6 +81,7 @@ export default function ProjectGalleryPage({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null; mediaType: ContextMenuMediaType } | null>(null)
   const [videoModal, setVideoModal] = useState<{ productId: string; imageId: string; previewUrl: string | null; sourcePrompt: string | null } | null>(null)
   const [videoToast, setVideoToast] = useState<string | null>(null)
+  const [activityOpen, setActivityOpen] = useState(false)
 
   useEffect(() => {
     signedUrlsRef.current = signedUrlsById
@@ -232,6 +235,7 @@ export default function ProjectGalleryPage({
       variation_number: img.variation_number,
       approval_status: img.approval_status ?? 'pending',
       notes: img.notes,
+      created_at: img.created_at,
       prompt: img._prompt,
       productId: img._productId,
     }))
@@ -573,6 +577,14 @@ export default function ProjectGalleryPage({
           )}
 
           <div className="ml-0 sm:ml-auto flex items-center gap-2">
+            <button
+              onClick={() => setActivityOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-1.5 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+              title="View assets generated per day"
+            >
+              <CalendarDays className="h-3.5 w-3.5" />
+              Activity
+            </button>
             {statusFilter === 'rejected' && totalImages > 0 && (
               <button
                 onClick={handleBulkDelete}
@@ -760,6 +772,16 @@ export default function ProjectGalleryPage({
           mediaType={contextMenu.mediaType}
           onAction={handleContextMenuAction}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Generation activity (per-day) modal */}
+      {activityOpen && (
+        <GenerationActivityModal
+          projectId={projectId}
+          productFilter={productFilter}
+          mediaFilter={mediaFilter}
+          onClose={() => setActivityOpen(false)}
         />
       )}
 

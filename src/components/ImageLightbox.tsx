@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import {
   buildRegenerateUrl,
+  formatGeneratedAt,
   getFixImageHref,
   getFullImageUrl,
   getDisplayImageUrl,
@@ -61,6 +62,9 @@ export interface LightboxImage {
   approval_status?: ApprovalStatus
   prompt?: string | null
   productId?: string | null
+  // Timestamp the asset was generated (from generated_images.created_at). Shown in the
+  // header to help correlate assets with generation dates when troubleshooting billing.
+  created_at?: string | null
   // Reference sets attached to the job that produced this image, used to seed the regenerate form.
   reference_sets?: LightboxReferenceSet[] | null
 }
@@ -484,6 +488,7 @@ export function ImageLightbox({
     productId: currentImage.productId,
     imageId: currentImage.id,
   })
+  const generatedAt = formatGeneratedAt(currentImage.created_at)
 
   return (
     <div
@@ -513,6 +518,14 @@ export function ImageLightbox({
             <span className="whitespace-nowrap text-sm text-zinc-500">
               {currentIndex + 1} / {images.length}
             </span>
+            {generatedAt && (
+              <span
+                className="hidden whitespace-nowrap text-sm text-zinc-500 md:inline"
+                title={`Generated ${generatedAt.full}`}
+              >
+                {generatedAt.short}
+              </span>
+            )}
           </div>
           <button
             type="button"

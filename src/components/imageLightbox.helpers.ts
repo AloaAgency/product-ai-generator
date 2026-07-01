@@ -90,6 +90,28 @@ export const getLightboxDisplayName = ({
   currentIndex: number
 }) => fileName || `Variation ${variationNumber ?? currentIndex + 1}`
 
+// Format an asset's generation timestamp for the lightbox header. Returns a compact
+// label (e.g. "Jul 1, 2026") plus a full date+time for the hover tooltip, so users can
+// correlate assets with generation dates when troubleshooting billing. Returns null for
+// missing/unparseable timestamps.
+export const formatGeneratedAt = (
+  createdAt?: string | null
+): { short: string; full: string } | null => {
+  if (!createdAt) return null
+  const date = new Date(createdAt)
+  if (Number.isNaN(date.getTime())) return null
+  return {
+    short: date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
+    full: date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }),
+  }
+}
+
 export const getLightboxWarmupIndexes = (currentIndex: number) => [
   currentIndex,
   currentIndex - 1,

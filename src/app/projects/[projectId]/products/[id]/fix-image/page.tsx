@@ -175,6 +175,7 @@ export default function FixImagePage({
       variation_number: img.variation_number,
       approval_status: img.approval_status ?? 'pending',
       notes: img.notes,
+      created_at: img.created_at,
       productId,
     }))
   }, [currentJob?.images, signedUrlsById, productId])
