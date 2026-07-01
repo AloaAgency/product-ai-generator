@@ -3,6 +3,7 @@
 import { use, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useAppStore } from '@/lib/store'
+import { logger } from '@/lib/logger'
 import { PromptTemplate } from '@/lib/types'
 import {
   Plus,
@@ -63,7 +64,9 @@ export default function PromptsPage({
       .then((data) => {
         if (!cancelled && data?.counts) setImageCounts(data.counts as Record<string, number>)
       })
-      .catch(() => {})
+      // Usage counts are decorative; log so failures are diagnosable, but
+      // don't block the page over them.
+      .catch((err) => logger.warn('[Prompts] Failed to load usage counts:', err))
     return () => {
       cancelled = true
     }

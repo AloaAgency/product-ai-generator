@@ -11,6 +11,7 @@ import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
 import { FallbackImage } from '@/components/FallbackImage'
 import type { PromptTemplate } from '@/lib/types'
 import {
+  AlertCircle,
   ArrowLeft,
   ArrowUpDown,
   ChevronLeft,
@@ -32,6 +33,7 @@ import {
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { logger } from '@/lib/logger'
+import { api, uploadToSignedUrl, cleanupImageRecord } from '@/lib/api-client'
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'request_changes'
 type SortOption = 'newest' | 'oldest' | 'variation'
@@ -95,14 +97,14 @@ export default function GalleryPage({
   const galleryFileInputRef = useRef<HTMLInputElement>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null; mediaType: ContextMenuMediaType } | null>(null)
   const [videoModal, setVideoModal] = useState<{ imageId: string; previewUrl: string | null; sourcePrompt: string | null } | null>(null)
-  const [videoToast, setVideoToast] = useState<string | null>(null)
+  const [toast, setToast] = useState<{ type: 'info' | 'error'; message: string } | null>(null)
   const loadMoreRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!videoToast) return
-    const timer = setTimeout(() => setVideoToast(null), 6000)
+    if (!toast) return
+    const timer = setTimeout(() => setToast(null), 6000)
     return () => clearTimeout(timer)
-  }, [videoToast])
+  }, [toast])
 
   useEffect(() => {
     signedUrlsRef.current = signedUrlsById
@@ -145,16 +147,27 @@ export default function GalleryPage({
       // Upload each file to its signed URL
       const fileArray = Array.from(fileList)
       const uploadedImageIds: string[] = []
+      const failedFileNames: string[] = []
       for (let i = 0; i < results.length; i++) {
         const result = results[i]
-        if (!result.signed_url) continue
         const file = fileArray[i]
-        await fetch(result.signed_url, {
-          method: 'PUT',
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
-          body: file,
+        if (!result.signed_url) {
+          failedFileNames.push(file.name)
+          continue
+        }
+        try {
+          await uploadToSignedUrl(result.signed_url, file, file.type)
+          if (result.image?.id) uploadedImageIds.push(result.image.id)
+        } catch {
+          failedFileNames.push(file.name)
+          if (result.image?.id) await cleanupImageRecord(result.image.id)
+        }
+      }
+      if (failedFileNames.length > 0) {
+        setToast({
+          type: 'error',
+          message: `Failed to upload ${failedFileNames.length} of ${results.length} file(s): ${failedFileNames.join(', ')}`,
         })
-        if (result.image?.id) uploadedImageIds.push(result.image.id)
       }
       // Generate thumbnails for uploaded images
       if (uploadedImageIds.length > 0) {
@@ -162,12 +175,21 @@ export default function GalleryPage({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ image_ids: uploadedImageIds }),
-        }).catch(() => {})
+        }).then((res) => {
+          if (!res.ok) throw new Error(`generate-thumbs responded ${res.status}`)
+        }).catch((err) => {
+          logger.error('[GalleryUpload] Thumbnail generation failed:', err)
+          setToast({ type: 'error', message: 'Images uploaded, but thumbnail generation failed. Previews may be missing.' })
+        })
       }
       // Refresh gallery
       await fetchGallery(id, { sort: sortOption })
     } catch (err) {
       logger.error('[GalleryUpload] Error:', err)
+      setToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Upload failed',
+      })
     } finally {
       setUploadingGallery(false)
       if (galleryFileInputRef.current) galleryFileInputRef.current.value = ''
@@ -177,10 +199,12 @@ export default function GalleryPage({
   useEffect(() => {
     fetchGallery(id, { sort: sortOption })
     fetchGenerationJobs(id)
-    fetch(`/api/products/${id}/prompts`)
-      .then((r) => r.json())
+    api(`/api/products/${id}/prompts`)
       .then((data) => { if (Array.isArray(data)) setPromptTemplates(data) })
-      .catch(() => {})
+      .catch((err) => {
+        logger.error('[Gallery] Failed to load prompt templates:', err)
+        setToast({ type: 'error', message: 'Failed to load prompt templates' })
+      })
   }, [id, sortOption, fetchGallery, fetchGenerationJobs])
 
   useEffect(() => {
@@ -355,7 +379,10 @@ export default function GalleryPage({
       body: JSON.stringify({ image_ids: pendingIds }),
     })
       .then(async (res) => {
-        if (!res.ok) return {}
+        if (!res.ok) {
+          setToast({ type: 'error', message: 'Failed to load image previews. Some images may not display.' })
+          return {}
+        }
         const data = await res.json() as { signed_urls?: Record<string, SignedImageUrls> }
         const updates = data.signed_urls ?? {}
         if (Object.keys(updates).length > 0) {
@@ -1172,18 +1199,20 @@ export default function GalleryPage({
           previewUrl={videoModal.previewUrl}
           sourcePrompt={videoModal.sourcePrompt}
           onClose={() => setVideoModal(null)}
-          onQueued={(message) => setVideoToast(message)}
+          onQueued={(message) => setToast({ type: 'info', message })}
         />
       )}
 
       {/* Transient toast */}
-      {videoToast && (
+      {toast && (
         <div className="fixed bottom-4 left-1/2 z-[120] -translate-x-1/2 px-4" role="status" aria-live="polite">
-          <div className="flex items-center gap-3 rounded-lg border border-purple-700/50 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 shadow-xl shadow-black/50">
-            <Video className="h-4 w-4 shrink-0 text-purple-400" />
-            <span className="flex-1">{videoToast}</span>
+          <div className={`flex items-center gap-3 rounded-lg border bg-zinc-900 px-4 py-3 text-sm text-zinc-100 shadow-xl shadow-black/50 ${toast.type === 'error' ? 'border-red-700/60' : 'border-purple-700/50'}`}>
+            {toast.type === 'error'
+              ? <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+              : <Video className="h-4 w-4 shrink-0 text-purple-400" />}
+            <span className="flex-1">{toast.message}</span>
             <button
-              onClick={() => setVideoToast(null)}
+              onClick={() => setToast(null)}
               className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
               aria-label="Dismiss"
             >

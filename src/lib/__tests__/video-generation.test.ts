@@ -8,6 +8,7 @@ import {
   getVeoConfig,
   getVeoVideoUri,
   pollVeoOperation,
+  VideoJobCancelledError,
 } from '../video-generation'
 
 afterEach(() => {
@@ -286,19 +287,45 @@ describe('pollVeoOperation', () => {
       pollVeoOperation('https://veo.example.test', 'operations/slow', 'api-key', 250, 1_000)
     ).rejects.toThrow(/Veo generation timed out after 1s/)
   })
+
+  it('stops polling with VideoJobCancelledError when the job is cancelled', async () => {
+    let polls = 0
+    vi.spyOn(global, 'fetch').mockImplementation(async () => {
+      polls += 1
+      return createJsonResponse({ done: false })
+    })
+    vi.spyOn(global, 'setTimeout').mockImplementation(((
+      callback: (...args: unknown[]) => void
+    ) => {
+      callback()
+      return 0 as unknown as ReturnType<typeof setTimeout>
+    }) as typeof setTimeout)
+
+    // First check reports not cancelled, second reports cancelled.
+    const answers = [false, true]
+    const shouldCancel = async () => answers.shift() ?? true
+
+    await expect(
+      pollVeoOperation('https://veo.example.test', 'operations/cancel', 'api-key', 250, 60_000, shouldCancel)
+    ).rejects.toThrow(VideoJobCancelledError)
+    expect(polls).toBe(1)
+  })
 })
 
 describe('getVeoConfig', () => {
-  it('trims configured values and falls back past blank overrides', async () => {
+  it('trims configured values and rejects blank project keys without env fallback', async () => {
     await withEnv({
+      // Env keys must NOT be used as a fallback — that would bill the wrong
+      // account (see the per-project key enforcement in getVeoConfig).
       GOOGLE_AI_API_KEY: '  env-api-key  ',
       GEMINI_API_KEY: '  ',
       VEO_API_BASE_URL: '  https://veo.example.test/base  ',
       VEO_MODEL: '  veo-custom  ',
     }, async () => {
-      const config = getVeoConfig('   ')
+      expect(() => getVeoConfig('   ')).toThrow(/No Google AI API key configured/)
 
-      expect(config.apiKey).toBe('env-api-key')
+      const config = getVeoConfig('  project-api-key  ')
+      expect(config.apiKey).toBe('project-api-key')
       expect(config.baseUrl).toBe('https://veo.example.test/base')
       expect(config.model).toBe('veo-custom')
     })

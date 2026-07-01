@@ -12,6 +12,7 @@ import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
 import { FallbackImage } from '@/components/FallbackImage'
 import type { GeneratedImage } from '@/lib/types'
 import {
+  AlertCircle,
   Filter,
   ImageIcon,
   Loader2,
@@ -80,7 +81,7 @@ export default function ProjectGalleryPage({
   const loadMoreRef = useRef<HTMLDivElement>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null; mediaType: ContextMenuMediaType } | null>(null)
   const [videoModal, setVideoModal] = useState<{ productId: string; imageId: string; previewUrl: string | null; sourcePrompt: string | null } | null>(null)
-  const [videoToast, setVideoToast] = useState<string | null>(null)
+  const [toast, setToast] = useState<{ type: 'info' | 'error'; message: string } | null>(null)
   const [activityOpen, setActivityOpen] = useState(false)
 
   useEffect(() => {
@@ -88,10 +89,10 @@ export default function ProjectGalleryPage({
   }, [signedUrlsById])
 
   useEffect(() => {
-    if (!videoToast) return
-    const timer = setTimeout(() => setVideoToast(null), 6000)
+    if (!toast) return
+    const timer = setTimeout(() => setToast(null), 6000)
     return () => clearTimeout(timer)
-  }, [videoToast])
+  }, [toast])
 
   useEffect(() => {
     fetchProject(projectId)
@@ -284,7 +285,10 @@ export default function ProjectGalleryPage({
       body: JSON.stringify({ image_ids: pendingIds }),
     })
       .then(async (res) => {
-        if (!res.ok) return {}
+        if (!res.ok) {
+          setToast({ type: 'error', message: 'Failed to load image previews. Some images may not display.' })
+          return {}
+        }
         const data = await res.json() as { signed_urls?: Record<string, SignedImageUrls> }
         const updates = data.signed_urls ?? {}
         if (Object.keys(updates).length > 0) {
@@ -793,18 +797,20 @@ export default function ProjectGalleryPage({
           previewUrl={videoModal.previewUrl}
           sourcePrompt={videoModal.sourcePrompt}
           onClose={() => setVideoModal(null)}
-          onQueued={(message) => setVideoToast(message)}
+          onQueued={(message) => setToast({ type: 'info', message })}
         />
       )}
 
       {/* Transient toast */}
-      {videoToast && (
+      {toast && (
         <div className="fixed bottom-4 left-1/2 z-[120] -translate-x-1/2 px-4" role="status" aria-live="polite">
-          <div className="flex items-center gap-3 rounded-lg border border-purple-700/50 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 shadow-xl shadow-black/50">
-            <Video className="h-4 w-4 shrink-0 text-purple-400" />
-            <span className="flex-1">{videoToast}</span>
+          <div className={`flex items-center gap-3 rounded-lg border bg-zinc-900 px-4 py-3 text-sm text-zinc-100 shadow-xl shadow-black/50 ${toast.type === 'error' ? 'border-red-700/60' : 'border-purple-700/50'}`}>
+            {toast.type === 'error'
+              ? <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+              : <Video className="h-4 w-4 shrink-0 text-purple-400" />}
+            <span className="flex-1">{toast.message}</span>
             <button
-              onClick={() => setVideoToast(null)}
+              onClick={() => setToast(null)}
               className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
               aria-label="Dismiss"
             >

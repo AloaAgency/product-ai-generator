@@ -1,6 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { generateGeminiImage } from '@/lib/gemini'
-import { generateSceneVideo } from '@/lib/video-generation'
+import { generateSceneVideo, VideoJobCancelledError } from '@/lib/video-generation'
 import {
   buildImageStoragePath,
   buildPreviewPath,
@@ -369,6 +369,11 @@ async function processVideoJob(
     )
     return createWorkerResult(job.id, 'completed', completedCounts, 1)
   } catch (err) {
+    if (err instanceof VideoJobCancelledError) {
+      // The cancel endpoint already set status='cancelled'; recording this as
+      // a failure would overwrite the user's cancellation.
+      return createWorkerResult(job.id, 'cancelled', counts)
+    }
     const failedCounts = { ...counts, failed: counts.failed + 1 }
     await updateGenerationJob(
       supabase,

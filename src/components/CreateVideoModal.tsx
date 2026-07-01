@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useState } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { getSafeErrorMessage } from './errorDisplay.helpers'
+import { api } from '@/lib/api-client'
 import {
   VEO_RESOLUTIONS,
   VEO_ASPECT_RATIOS,
@@ -29,15 +30,6 @@ const fieldClassName =
   'w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none'
 const selectClassName =
   'w-full min-h-11 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-200 outline-none focus:border-purple-500'
-
-const api = async (url: string, options?: RequestInit) => {
-  const res = await fetch(url, options)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || res.statusText)
-  }
-  return res.json()
-}
 
 interface CreateVideoModalProps {
   productId: string

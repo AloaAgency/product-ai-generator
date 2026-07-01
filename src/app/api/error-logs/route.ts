@@ -5,11 +5,13 @@ import { requireUuid, sanitizePublicErrorMessage } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
 async function resolveProject(supabase: ReturnType<typeof createServiceClient>, projectId: string) {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from(T.projects)
     .select('id')
     .eq('id', projectId)
-    .single()
+    .maybeSingle()
+  // A failed lookup must surface as a 500, not masquerade as a 404.
+  if (error) throw new Error(`Failed to look up project: ${error.message}`)
   return data
 }
 

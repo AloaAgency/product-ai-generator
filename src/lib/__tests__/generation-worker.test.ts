@@ -31,9 +31,13 @@ vi.mock('@/lib/gemini', () => ({
   generateGeminiImage: vi.fn(),
 }))
 
-vi.mock('@/lib/video-generation', () => ({
-  generateSceneVideo: vi.fn(),
-}))
+vi.mock('@/lib/video-generation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/video-generation')>()
+  return {
+    VideoJobCancelledError: actual.VideoJobCancelledError,
+    generateSceneVideo: vi.fn(),
+  }
+})
 
 vi.mock('@/lib/image-utils', () => ({
   buildImageStoragePath: vi.fn(() => 'products/product-1/jobs/job-1/gen-01.png'),
@@ -1392,6 +1396,35 @@ describe('processGenerationJob', () => {
       failed_count: 1,
       error_message: 'upstream failed with Bearer [redacted]',
     })
+  })
+
+  it('returns cancelled without marking the job failed when video generation is cancelled', async () => {
+    const jobId = '77777777-7777-4777-8777-777777777777'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createVideoJobRecord(jobId),
+      },
+    ])
+
+    const { generateSceneVideo, VideoJobCancelledError } = await import('@/lib/video-generation')
+    vi.mocked(generateSceneVideo).mockRejectedValue(new VideoJobCancelledError())
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      completed: 0,
+      failed: 0,
+      status: 'cancelled',
+    })
+    // The cancel endpoint owns the status; the worker must not write
+    // 'failed' (or anything else) over it.
+    const statusWrites = (serviceClientState.current?.updates ?? [])
+      .map((u) => (u.values as { status?: string }).status)
+      .filter(Boolean)
+    expect(statusWrites).toEqual(['running'])
   })
 
   it('fails when it cannot load the latest job state after another worker claims the job first', async () => {

@@ -353,12 +353,23 @@ async function fetchFrameBytes(frameRef: FrameRef, label: 'start' | 'end') {
   }
 }
 
+// Thrown when the generation job was cancelled by the user while a video was
+// still being generated. Callers must not record this as a failure — the job
+// status is already 'cancelled' in the database.
+export class VideoJobCancelledError extends Error {
+  constructor() {
+    super('Video generation cancelled by user')
+    this.name = 'VideoJobCancelledError'
+  }
+}
+
 export async function pollVeoOperation(
   baseUrl: string,
   operationName: string,
   apiKey: string,
   pollIntervalMs: number,
-  timeoutMs: number
+  timeoutMs: number,
+  shouldCancel?: () => Promise<boolean>
 ) {
   const startedAt = Date.now()
   let operation: Record<string, unknown> | null = null
@@ -367,6 +378,10 @@ export async function pollVeoOperation(
     if (Date.now() - startedAt > timeoutMs) {
       const timeoutSeconds = Math.round(timeoutMs / 1000)
       throw new Error(`Veo generation timed out after ${timeoutSeconds}s`)
+    }
+
+    if (shouldCancel && await shouldCancel()) {
+      throw new VideoJobCancelledError()
     }
 
     if (operation) {
@@ -745,6 +760,36 @@ async function cleanupUploadedVideoAssets(
   }
 }
 
+// Reads the job status at most once per interval so a long Veo poll notices a
+// user cancellation without hammering the database.
+function createJobCancellationChecker(
+  supabase: ReturnType<typeof createServiceClient>,
+  jobId: string,
+  minIntervalMs = 5_000
+) {
+  let lastCheckAt = 0
+  let cancelled = false
+
+  return async () => {
+    if (cancelled) return true
+    if (Date.now() - lastCheckAt < minIntervalMs) return cancelled
+
+    lastCheckAt = Date.now()
+    const { data, error } = await supabase
+      .from(T.generation_jobs)
+      .select('status')
+      .eq('id', jobId)
+      .single()
+
+    // A transient status read must not abort a generation that is otherwise
+    // progressing; re-check on the next interval.
+    if (error) return cancelled
+
+    cancelled = data?.status === 'cancelled'
+    return cancelled
+  }
+}
+
 export async function generateSceneVideo(
   productId: string,
   sceneId: string,
@@ -757,12 +802,13 @@ export async function generateSceneVideo(
 
   const isLtx = isLtxModel(resolvedModel)
   const isVeo = isVeoModel(resolvedModel)
+  const shouldCancel = jobId ? createJobCancellationChecker(supabase, jobId) : undefined
 
   // Generate video
   let result: VideoGenerationResult
 
   if (isVeo) {
-    result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings, geminiApiKey)
+    result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings, geminiApiKey, shouldCancel)
   } else if (isLtx) {
     result = await generateWithLtx(scene.motion_prompt, frameRefs, videoSettings)
   } else {
@@ -794,7 +840,8 @@ async function generateWithVeo3(
   prompt: string,
   frameRefs: FrameRefs,
   settings: SceneVideoSettings,
-  apiKeyOverride?: string | null
+  apiKeyOverride?: string | null,
+  shouldCancel?: () => Promise<boolean>
 ) : Promise<VideoGenerationResult> {
   const config = getVeoConfig(apiKeyOverride)
   const { instance, parameters } = await buildVeoRequestParts(prompt, frameRefs, settings, config.model)
@@ -808,7 +855,8 @@ async function generateWithVeo3(
     operationName,
     config.apiKey,
     config.pollIntervalMs,
-    config.timeoutMs
+    config.timeoutMs,
+    shouldCancel
   )
 
   return downloadVeoVideo(getVeoVideoUri(operation), config.apiKey)
