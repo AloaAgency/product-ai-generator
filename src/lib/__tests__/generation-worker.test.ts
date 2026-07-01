@@ -832,7 +832,8 @@ describe('processGenerationJob', () => {
           type: 'select-single',
           data: {
             global_style_settings: null,
-            prodai_projects: [{ global_style_settings: { gemini_api_key: 'project-key' } }],
+            // PostgREST returns a single object for this many-to-one embed.
+            prodai_projects: { global_style_settings: { gemini_api_key: 'project-key' } },
           },
         },
         {

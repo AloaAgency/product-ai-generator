@@ -81,11 +81,15 @@ type JobCounts = {
   failed: number
 }
 
+type ProjectSettingsRecord = {
+  global_style_settings: GlobalStyleSettings | null
+}
+
 type ProductRecord = {
   global_style_settings: GlobalStyleSettings | null
-  prodai_projects: Array<{
-    global_style_settings: GlobalStyleSettings | null
-  }> | null
+  // PostgREST returns an object for this many-to-one embed, but older mocks
+  // (and defensive callers) may still hand us an array.
+  prodai_projects: ProjectSettingsRecord | ProjectSettingsRecord[] | null
 }
 
 type SourceImageRecord = {
@@ -464,7 +468,10 @@ async function resolveGeminiApiKeyForJob(
   const productKey = resolveGoogleApiKey(product.global_style_settings)
   if (productKey) return productKey
 
-  return resolveGoogleApiKey(product.prodai_projects?.[0]?.global_style_settings ?? null)
+  const project = Array.isArray(product.prodai_projects)
+    ? product.prodai_projects[0]
+    : product.prodai_projects
+  return resolveGoogleApiKey(project?.global_style_settings ?? null)
 }
 
 function limitReferenceImages(
