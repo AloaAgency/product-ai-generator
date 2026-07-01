@@ -94,9 +94,11 @@ const MAX_RETRIES = 3
 const RETRY_DELAYS = [2000, 5000, 10000]
 
 export async function generateGeminiImage(request: GeminiImageRequest): Promise<GeminiImageResult> {
-  const apiKey = request.apiKey || process.env.GEMINI_API_KEY
+  // No env-var fallback: generation must use the requesting project's own key.
+  // Falling back to a shared/global key silently bills the wrong account.
+  const apiKey = request.apiKey
   if (!apiKey) {
-    throw new Error('Gemini API key is not configured')
+    throw new Error('No Gemini API key configured for this project. Add and activate a key in the project settings.')
   }
 
   const model = request.model || DEFAULT_MODEL

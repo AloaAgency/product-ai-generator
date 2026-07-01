@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 import { Save, CheckCircle, Settings, Camera, Palette, Trash2, FolderOpen, Plus, Download, Upload, ChevronDown, FileText } from 'lucide-react'
 import type { GlobalStyleSettings, SettingsTemplate } from '@/lib/types'
+import { normalizeGoogleApiKeySettings } from '@/lib/google-api-keys'
 
 function SectionCard({
   id,
@@ -136,7 +137,7 @@ export default function ProductSettingsPage({
       initializedForId.current = id
       setName(currentProduct.name)
       setDescription(currentProduct.description || '')
-      setSettings(currentProduct.global_style_settings || {})
+      setSettings(normalizeGoogleApiKeySettings(currentProduct.global_style_settings || {}))
       const defaults = currentProduct.global_style_settings || {}
       setDefaultVariationInput(
         typeof defaults.default_variation_count === 'number'
@@ -160,10 +161,11 @@ export default function ProductSettingsPage({
     setSaving(true)
     setSaved(false)
     try {
+      const normalizedSettings = normalizeGoogleApiKeySettings(settings)
       const updates: Parameters<typeof updateProduct>[1] = {
         name,
         description: description || undefined,
-        global_style_settings: settings,
+        global_style_settings: normalizedSettings,
       }
       if (selectedProjectId !== projectId) {
         updates.project_id = selectedProjectId

@@ -304,6 +304,7 @@ export default function GalleryPage({
         variation_number: img.variation_number,
         approval_status: img.approval_status ?? 'pending',
         notes: img.notes,
+        created_at: img.created_at,
         prompt: img.prompt ?? null,
         productId: id,
         reference_sets: (imgAny.reference_sets as LightboxImage['reference_sets']) ?? null,

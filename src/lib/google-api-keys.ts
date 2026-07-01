@@ -57,21 +57,24 @@ export function resolveActiveGoogleApiKeyId(
   const keys = listGoogleApiKeys(settings, options)
   if (keys.length === 0) return undefined
   const preferredId = asTrimmedString(settings?.active_google_api_key_id)
-  if (preferredId && keys.some((item) => item.id === preferredId)) {
-    return preferredId
+  if (preferredId) {
+    // Only honor an explicit selection that still matches a listed key.
+    // A stale/mismatched id must NOT silently resolve to a different key —
+    // that would bill the wrong account.
+    return keys.some((item) => item.id === preferredId) ? preferredId : undefined
   }
-  return keys[0].id
+  // No explicit selection: unambiguous only when there is exactly one key.
+  return keys.length === 1 ? keys[0].id : undefined
 }
 
 export function resolveGoogleApiKey(
   settings?: GlobalStyleSettings | null,
   options: { includeLegacyFallback?: boolean } = {}
 ): string | undefined {
-  const keys = listGoogleApiKeys(settings, options)
-  if (keys.length === 0) return undefined
   const activeId = resolveActiveGoogleApiKeyId(settings, options)
-  const active = keys.find((item) => item.id === activeId)
-  return active?.key || keys[0].key
+  if (!activeId) return undefined
+  const keys = listGoogleApiKeys(settings, options)
+  return keys.find((item) => item.id === activeId)?.key
 }
 
 export function normalizeGoogleApiKeySettings(
@@ -81,10 +84,11 @@ export function normalizeGoogleApiKeySettings(
   const source = settings ?? {}
   const keys = listGoogleApiKeys(source, options)
   const activeId = resolveActiveGoogleApiKeyId(source, options)
-  const activeKey =
-    keys.find((item) => item.id === activeId)?.key ||
-    keys[0]?.key ||
-    undefined
+  // Mirror only the resolved active key into the legacy field — never guess a
+  // different one, so the legacy field can't disagree with the active selection.
+  const activeKey = activeId
+    ? keys.find((item) => item.id === activeId)?.key
+    : undefined
 
   return {
     ...source,
