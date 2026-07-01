@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { X, Upload, Loader2, Image as ImageIcon } from 'lucide-react'
 import type { GeneratedImage } from '@/lib/types'
+import { api, uploadToSignedUrl, cleanupImageRecord } from '@/lib/api-client'
 
 interface ReferenceImagePickerProps {
   isOpen: boolean
@@ -12,20 +13,12 @@ interface ReferenceImagePickerProps {
   productId: string
 }
 
-const api = async (url: string, options?: RequestInit) => {
-  const res = await fetch(url, options)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || res.statusText)
-  }
-  return res.json()
-}
-
 export function ReferenceImagePicker({ isOpen, onClose, onSelect, productId }: ReferenceImagePickerProps) {
   const [tab, setTab] = useState<'gallery' | 'upload'>('gallery')
   const [galleryImages, setGalleryImages] = useState<GeneratedImage[]>([])
   const [loadingGallery, setLoadingGallery] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useModalShortcuts({ isOpen, onClose })
@@ -33,10 +26,14 @@ export function ReferenceImagePicker({ isOpen, onClose, onSelect, productId }: R
   useEffect(() => {
     if (!isOpen) return
     setTab('gallery')
+    setUploadError(null)
     setLoadingGallery(true)
     api(`/api/products/${productId}/gallery?media_type=image&approval_status=approved&limit=200`)
       .then((data) => setGalleryImages(data.images ?? data))
-      .catch(() => setGalleryImages([]))
+      .catch((err) => {
+        setGalleryImages([])
+        setUploadError(err instanceof Error ? err.message : 'Failed to load gallery images')
+      })
       .finally(() => setLoadingGallery(false))
   }, [isOpen, productId])
 
@@ -44,6 +41,7 @@ export function ReferenceImagePicker({ isOpen, onClose, onSelect, productId }: R
     const file = e.target.files?.[0]
     if (!file) return
     setUploading(true)
+    setUploadError(null)
     try {
       const results = await api(`/api/products/${productId}/gallery/upload`, {
         method: 'POST',
@@ -60,17 +58,19 @@ export function ReferenceImagePicker({ isOpen, onClose, onSelect, productId }: R
       if (!firstResult || firstResult.error || !firstResult.signed_url || !firstResult.image?.id) {
         throw new Error(firstResult?.error || 'Failed to prepare upload')
       }
-      const putRes = await fetch(firstResult.signed_url, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        body: file,
-      })
-      if (!putRes.ok) throw new Error('File upload failed')
+      try {
+        await uploadToSignedUrl(firstResult.signed_url, file, file.type)
+      } catch (err) {
+        await cleanupImageRecord(firstResult.image.id)
+        throw err
+      }
       // Fetch a signed download URL so the thumbnail can be displayed
       const signedRes = await fetch(`/api/images/${firstResult.image.id}/signed`)
       const signedData = signedRes.ok ? await signedRes.json() : null
       const thumbUrl = signedData?.thumb_signed_url || signedData?.preview_signed_url || signedData?.signed_url || null
       onSelect(firstResult.image.id, thumbUrl)
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -146,6 +146,11 @@ export function ReferenceImagePicker({ isOpen, onClose, onSelect, productId }: R
           </div>
         ) : (
           <div className="py-8 flex flex-col items-center gap-3">
+            {uploadError && (
+              <div className="rounded-lg border border-red-800 bg-red-950/60 px-3 py-2 text-sm text-red-300">
+                {uploadError}
+              </div>
+            )}
             <input
               ref={fileInputRef}
               type="file"

@@ -46,15 +46,7 @@ import {
   parsePositiveNumber,
 } from '@/lib/video-constants'
 import { logger } from '@/lib/logger'
-
-const api = async (url: string, options?: RequestInit) => {
-  const res = await fetch(url, options)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || res.statusText)
-  }
-  return res.json()
-}
+import { api, uploadToSignedUrl, cleanupImageRecord } from '@/lib/api-client'
 
 const fieldClassName = 'w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none'
 const selectClassName = 'w-full min-h-11 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-3 text-sm text-zinc-200 outline-none'
@@ -121,17 +113,20 @@ export default function ScenesPage({
   const [galleryImages, setGalleryImages] = useState<GeneratedImage[]>([])
   const [loadingGallery, setLoadingGallery] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [pickerError, setPickerError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   async function openFramePicker(sceneId: string | null, slot: 'start' | 'end', mode: 'create' | 'edit') {
     setFramePicker({ sceneId: sceneId || undefined, slot, mode })
     setPickerTab('gallery')
+    setPickerError(null)
     setLoadingGallery(true)
     try {
       const data = await api(`/api/products/${id}/gallery?media_type=image&approval_status=approved&limit=200`)
       setGalleryImages(data.images ?? data)
-    } catch {
+    } catch (err) {
       setGalleryImages([])
+      setPickerError(err instanceof Error ? err.message : 'Failed to load gallery images')
     } finally {
       setLoadingGallery(false)
     }
@@ -165,6 +160,7 @@ export default function ScenesPage({
     const file = e.target.files?.[0]
     if (!file || !framePicker) return
     setUploading(true)
+    setPickerError(null)
     try {
       if (framePicker.mode === 'create') {
         const results = await api(`/api/products/${id}/gallery/upload`, {
@@ -182,11 +178,12 @@ export default function ScenesPage({
         if (!firstResult || firstResult.error || !firstResult.signed_url || !firstResult.image?.id) {
           throw new Error(firstResult?.error || 'Failed to prepare upload')
         }
-        await fetch(firstResult.signed_url, {
-          method: 'PUT',
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
-          body: file,
-        })
+        try {
+          await uploadToSignedUrl(firstResult.signed_url, file, file.type)
+        } catch (err) {
+          await cleanupImageRecord(firstResult.image.id)
+          throw err
+        }
         if (framePicker.slot === 'start') {
           setNewStartFrameId(firstResult.image.id)
         } else {
@@ -206,16 +203,14 @@ export default function ScenesPage({
           file_size: file.size,
         }),
       })
-      await fetch(signed_url, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        body: file,
-      })
+      await uploadToSignedUrl(signed_url, file, file.type)
       const field = framePicker.slot === 'start' ? 'start_frame_image_id' : 'end_frame_image_id'
       setScenes((prev) => prev.map((s) =>
         s.id === framePicker.sceneId ? { ...s, [field]: image.id } : s
       ))
       setFramePicker(null)
+    } catch (err) {
+      setPickerError(err instanceof Error ? err.message : 'Frame upload failed')
     } finally {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -1269,6 +1264,12 @@ export default function ScenesPage({
                 <X className="h-5 w-5" />
               </button>
             </div>
+
+            {pickerError && (
+              <div className="mb-4 rounded-lg border border-red-800 bg-red-950/60 px-3 py-2 text-sm text-red-300">
+                {pickerError}
+              </div>
+            )}
 
             {/* Tabs */}
             <div className="mb-4 grid grid-cols-2 gap-2 border-b border-zinc-700 pb-2">

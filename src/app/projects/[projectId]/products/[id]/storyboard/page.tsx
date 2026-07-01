@@ -3,6 +3,7 @@
 import { use, useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { api } from '@/lib/api-client'
 import type { Storyboard as StoryboardRecord, StoryboardScene } from '@/lib/types'
 import {
   Film,
@@ -29,15 +30,6 @@ type SignedImageUrls = {
 }
 
 type Storyboard = StoryboardRecord
-
-const api = async (url: string, options?: RequestInit) => {
-  const res = await fetch(url, options)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || res.statusText)
-  }
-  return res.json()
-}
 
 // ---------------------------------------------------------------------------
 // Page component
