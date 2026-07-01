@@ -11,6 +11,11 @@ const REQUIRED_HEADERS = new Map([
   ['x-dns-prefetch-control', 'off'],
   ['cross-origin-opener-policy', 'same-origin'],
   ['x-permitted-cross-domain-policies', 'none'],
+  // Spectre mitigation — blocks other origins from reading this app's responses.
+  // Pinned here so it can't be silently dropped from SECURITY_HEADERS: the loop
+  // below only checks headers that are *applied*, so an omission from the source
+  // list would otherwise pass every existing assertion unnoticed.
+  ['cross-origin-resource-policy', 'same-origin'],
 ])
 
 describe('security headers', () => {
@@ -21,6 +26,18 @@ describe('security headers', () => {
     for (const [key, value] of REQUIRED_HEADERS) {
       expect(headersByName.get(key)).toBe(value)
     }
+  })
+
+  it('pins every header in the mechanical set — a new header must be added to REQUIRED_HEADERS', () => {
+    // Guard against the coverage gap that let Cross-Origin-Resource-Policy ship
+    // unpinned: any future addition to SECURITY_HEADERS (except the deliberately
+    // deferred CSP) must also be given an exact-value assertion in REQUIRED_HEADERS,
+    // so a hardening header can never be weakened or removed without a test failing.
+    const pinned = new Set(REQUIRED_HEADERS.keys())
+    const unpinned = SECURITY_HEADERS
+      .map((header) => header.key.toLowerCase())
+      .filter((key) => key !== 'content-security-policy' && !pinned.has(key))
+    expect(unpinned).toEqual([])
   })
 
   it('keeps CSP out of the mechanical header set pending policy review', () => {
