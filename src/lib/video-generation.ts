@@ -388,10 +388,10 @@ export async function pollVeoOperation(
 }
 
 export function getVeoConfig(apiKeyOverride?: string | null): VeoConfig {
+  // No env-var fallback: video generation must use the requesting project's own
+  // key. Falling back to a shared/global key silently bills the wrong account.
   const apiKey = getTrimmedStringOrNull(apiKeyOverride)
-    || getTrimmedStringOrNull(process.env.GOOGLE_AI_API_KEY)
-    || getTrimmedStringOrNull(process.env.GEMINI_API_KEY)
-  if (!apiKey) throw new Error('Google AI API key not configured')
+  if (!apiKey) throw new Error('No Google AI API key configured for this project. Add and activate a key in the project settings.')
 
   return {
     apiKey,
