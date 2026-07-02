@@ -526,7 +526,31 @@ function getVeoOperationErrorMessage(error: unknown) {
   return sanitizeExternalErrorMessage(safeJsonStringify(error) || '', 'Unknown error')
 }
 
-export function getVeoVideoUri(operation: Record<string, unknown>) {
+// The video download request attaches the project's Google API key as an
+// x-goog-api-key header, and fetch does NOT strip custom headers on
+// cross-origin redirects (only Authorization/Cookie). Downloading from an
+// unvalidated URI would therefore hand the key to whatever host the operation
+// response names. Only Google-owned hosts and the configured API base host
+// (which may be a proxy) are allowed to receive it.
+const TRUSTED_VEO_DOWNLOAD_HOST_SUFFIXES = ['.googleapis.com', '.googleusercontent.com']
+
+function isTrustedVeoDownloadHost(hostname: string, baseUrl: string) {
+  const host = hostname.toLowerCase()
+
+  let baseHost: string | null = null
+  try {
+    baseHost = new URL(baseUrl).hostname.toLowerCase()
+  } catch {
+    baseHost = null
+  }
+  if (baseHost && host === baseHost) return true
+
+  return TRUSTED_VEO_DOWNLOAD_HOST_SUFFIXES.some(
+    (suffix) => host.endsWith(suffix) || host === suffix.slice(1)
+  )
+}
+
+export function getVeoVideoUri(operation: Record<string, unknown>, baseUrl: string) {
   if (operation?.error) {
     throw createExternalServiceError('Veo operation error', getVeoOperationErrorMessage(operation.error))
   }
@@ -536,11 +560,15 @@ export function getVeoVideoUri(operation: Record<string, unknown>) {
     | undefined
   const videoUri = response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri
   if (!videoUri) throw new Error('No video URI in Veo response')
+  let parsed: URL
   try {
-    const parsed = new URL(videoUri)
+    parsed = new URL(videoUri)
     if (parsed.protocol !== 'https:') throw new Error('unsupported protocol')
   } catch {
     throw new Error('Invalid video URI in Veo response')
+  }
+  if (!isTrustedVeoDownloadHost(parsed.hostname, baseUrl)) {
+    throw new Error('Untrusted video URI host in Veo response')
   }
 
   return videoUri
@@ -859,7 +887,7 @@ async function generateWithVeo3(
     shouldCancel
   )
 
-  return downloadVeoVideo(getVeoVideoUri(operation), config.apiKey)
+  return downloadVeoVideo(getVeoVideoUri(operation, config.baseUrl), config.apiKey)
 }
 
 export function getLtxConfig(settings: SceneVideoSettings): LtxConfig {
