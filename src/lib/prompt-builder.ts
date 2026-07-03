@@ -148,7 +148,7 @@ export const MAX_SUBJECT_LABEL_LEN = 80
 
 function sanitizeLabel(label: string | null | undefined): string {
   if (!label) return ''
-  return label.slice(0, MAX_SUBJECT_LABEL_LEN).replace(/"/g, '\u2033').replace(/[\r\n]/g, ' ').trim()
+  return label.slice(0, MAX_SUBJECT_LABEL_LEN).replace(/"/g, '″').replace(/[\r\n]/g, ' ').trim()
 }
 
 function subjectName(label: string, subjectIndex: number, totalSubjects: number): string {
@@ -303,19 +303,14 @@ export type PromptSuggestion = {
 }
 
 /**
- * Parse Claude's prompt suggestion response.
- * Tries each code fence block before falling back to raw text, so a response that
- * includes explanatory text in one fence and the JSON in another is handled correctly.
+ * Collect JSON candidate strings from a raw AI response, in priority order:
+ * 1. Code fence contents (Claude sometimes wraps JSON in ```json``` despite instructions).
+ * 2. Outer-brace extract — handles "Here is the JSON: {...}" prose-wrapped responses
+ *    that have no fences. Scanning from first '{' to last '}' avoids a JSON.parse miss
+ *    on the full raw string, preventing a silent empty return that the caller would retry.
+ * 3. Full raw text as final fallback.
  */
-export function parsePromptSuggestions(raw: string): PromptSuggestion[] {
-  if (!raw) return []
-
-  // Collect JSON candidates in priority order:
-  // 1. Code fence contents (Claude sometimes wraps JSON in ```json``` despite instructions).
-  // 2. Outer-brace extract — handles "Here is the JSON: {...}" prose-wrapped responses
-  //    that have no fences. Scanning from first '{' to last '}' avoids a JSON.parse miss
-  //    on the full raw string, preventing a silent empty return that the caller would retry.
-  // 3. Full raw text as final fallback.
+function collectJsonCandidates(raw: string): string[] {
   // matchAll internally clones the regex, so CODE_FENCE_RE.lastIndex is not mutated.
   const fencedCandidates = Array.from(raw.matchAll(CODE_FENCE_RE), m => m[1]?.trim() ?? '').filter(Boolean)
   const firstBrace = raw.indexOf('{')
@@ -323,12 +318,46 @@ export function parsePromptSuggestions(raw: string): PromptSuggestion[] {
   const bracketExtract =
     firstBrace !== -1 && lastBrace > firstBrace ? raw.slice(firstBrace, lastBrace + 1) : null
   const rawTrimmed = raw.trim()
-  const candidates: string[] = [
+  return [
     ...fencedCandidates,
     ...(bracketExtract && bracketExtract !== rawTrimmed ? [bracketExtract] : []),
     rawTrimmed,
   ]
+}
 
+/**
+ * Normalize a parsed suggestions array into capped, string-typed PromptSuggestions.
+ * Defensive on every axis because the input comes straight from AI output:
+ * - Caps the item count — the AI may return more items than requested (e.g. when
+ *   it misreads the count); without this the caller could propagate an unbounded
+ *   number of DB inserts or response entries.
+ * - Skips null/non-object items from a malformed response — a null element would
+ *   otherwise throw inside .map() and discard every valid suggestion.
+ * - String()-coerces fields so a non-string value (e.g. a number) can't make
+ *   .trim() throw, and caps field lengths so oversized output cannot push
+ *   unbounded strings into DB inserts or API responses downstream.
+ */
+function normalizeSuggestions(items: unknown[]): PromptSuggestion[] {
+  return items
+    .slice(0, MAX_SUGGESTION_COUNT)
+    .filter((p: unknown): p is Record<string, unknown> => p !== null && typeof p === 'object')
+    .map((p) => ({
+      name: String(p.name || p.title || '').trim().slice(0, MAX_SUGGESTION_NAME_LEN),
+      prompt_text: String(p.prompt_text || p.promptText || p.prompt || '').trim().slice(0, MAX_USER_PROMPT_LEN),
+    }))
+    .filter((p: PromptSuggestion) => p.prompt_text.length > 0)
+}
+
+/**
+ * Parse Claude's prompt suggestion response.
+ * Tries each code fence block before falling back to raw text, so a response that
+ * includes explanatory text in one fence and the JSON in another is handled correctly.
+ * The first candidate that parses to an array (bare or under a "prompts" key) wins.
+ */
+export function parsePromptSuggestions(raw: string): PromptSuggestion[] {
+  if (!raw) return []
+
+  const candidates = collectJsonCandidates(raw)
   for (const jsonStr of candidates) {
     let parsed: unknown
     try {
@@ -342,25 +371,7 @@ export function parsePromptSuggestions(raw: string): PromptSuggestion[] {
       : (parsed as Record<string, unknown>)?.prompts
     if (!Array.isArray(prompts)) continue
 
-    return prompts
-      // Cap before mapping — the AI may return more items than requested (e.g. when
-      // it misreads the count). Without this guard the caller could receive and
-      // propagate an unbounded number of DB inserts or response entries.
-      .slice(0, MAX_SUGGESTION_COUNT)
-      // Guard against null/non-object array items from a malformed AI response —
-      // without this, a null element would throw inside .map() and the outer catch
-      // would silently discard every valid suggestion in the response.
-      .filter((p: unknown): p is Record<string, unknown> => p !== null && typeof p === 'object')
-      .map((p) => ({
-        // Cap fields so an oversized or adversarial AI response cannot push unbounded
-        // strings into DB inserts or API responses downstream.
-        // String() coercion prevents a TypeError when the AI returns a non-string value
-        // (e.g. a number) for these fields — without it, .trim() would throw and the
-        // entire response would be silently discarded by the outer catch.
-        name: String(p.name || p.title || '').trim().slice(0, MAX_SUGGESTION_NAME_LEN),
-        prompt_text: String(p.prompt_text || p.promptText || p.prompt || '').trim().slice(0, MAX_USER_PROMPT_LEN),
-      }))
-      .filter((p: PromptSuggestion) => p.prompt_text.length > 0)
+    return normalizeSuggestions(prompts)
   }
 
   logger.warn(
