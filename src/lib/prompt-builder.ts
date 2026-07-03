@@ -147,8 +147,7 @@ export type ReferenceGroup = {
 export const MAX_SUBJECT_LABEL_LEN = 80
 
 function sanitizeLabel(label: string | null | undefined): string {
-  if (!label) return ''
-  return label.slice(0, MAX_SUBJECT_LABEL_LEN).replace(/"/g, '″').replace(/[\r\n]/g, ' ').trim()
+  return label ? sanitizeField(label, MAX_SUBJECT_LABEL_LEN).trim() : ''
 }
 
 function subjectName(label: string, subjectIndex: number, totalSubjects: number): string {
