@@ -166,6 +166,8 @@ export function ImageLightbox({
   const notesInputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const preloadCacheRef = useRef<Map<string, Promise<void>>>(new Map())
+  const copyResetTimeoutRef = useRef<number | null>(null)
+  const isUpdatingRef = useRef(false)
 
   const currentImage = images[currentIndex]
   const hasPrev = currentIndex > 0
@@ -193,13 +195,16 @@ export function ImageLightbox({
 
     const img = new window.Image()
     img.decoding = 'async'
-    img.src = url
 
     const pending = (typeof img.decode === 'function'
-      ? img.decode().catch(() => undefined)
+      ? (() => {
+          img.src = url
+          return img.decode().catch(() => undefined)
+        })()
       : new Promise<void>((resolve) => {
           img.onload = () => resolve()
           img.onerror = () => resolve()
+          img.src = url
         }))
       .finally(() => {
         preloadCacheRef.current.set(url, Promise.resolve())
@@ -211,6 +216,14 @@ export function ImageLightbox({
 
   useEffect(() => {
     dialogRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current)
+      }
+    }
   }, [])
 
   const handlePrev = useCallback(() => {
@@ -237,7 +250,8 @@ export function ImageLightbox({
   }, [])
 
   const runUpdatingAction = useCallback(async (action: () => Promise<void>) => {
-    if (!currentImage || isUpdating) return
+    if (!currentImage || isUpdatingRef.current) return
+    isUpdatingRef.current = true
     setIsUpdating(true)
     try {
       await action()
@@ -245,9 +259,10 @@ export function ImageLightbox({
     } catch (error) {
       setErrorNotice(error, 'Failed to update approval. Please try again.')
     } finally {
+      isUpdatingRef.current = false
       setIsUpdating(false)
     }
-  }, [currentImage, isUpdating, setErrorNotice])
+  }, [currentImage, setErrorNotice])
 
   const handleApprovalAction = useCallback(async (targetStatus: Exclude<ApprovalStatus, 'pending' | null>) => {
     if (!currentImage) return
@@ -303,29 +318,35 @@ export function ImageLightbox({
 
   const handleDownload = useCallback(async () => {
     if (!currentImage) return
-    let url = getDownloadImageUrl(currentImage)
-    if (!url && onRequestSignedUrls) {
-      const signed = await onRequestSignedUrls(currentImage.id)
-      url = getDownloadImageUrl(currentImage, signed)
-    }
-    if (!url) {
-      setActionNotice({ type: 'error', message: 'Download is unavailable for this image right now.' })
-      return
-    }
 
     try {
+      let url = getDownloadImageUrl(currentImage)
+      if (!url && onRequestSignedUrls) {
+        const signed = await onRequestSignedUrls(currentImage.id)
+        url = getDownloadImageUrl(currentImage, signed)
+      }
+      if (!url) {
+        setActionNotice({ type: 'error', message: 'Download is unavailable for this image right now.' })
+        return
+      }
+
       const fileName = currentImage.file_name || `product-gen-${currentImage.variation_number || 0}.png`
       const resp = await fetch(url)
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const blob = await resp.blob()
       const blobUrl = URL.createObjectURL(blob)
       const link = document.createElement('a')
-      link.href = blobUrl
-      link.download = fileName
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(blobUrl)
+      try {
+        link.href = blobUrl
+        link.download = fileName
+        document.body.appendChild(link)
+        link.click()
+      } finally {
+        if (link.parentNode) {
+          document.body.removeChild(link)
+        }
+        URL.revokeObjectURL(blobUrl)
+      }
       setActionNotice(null)
     } catch (error) {
       setActionNotice({
@@ -341,7 +362,13 @@ export function ImageLightbox({
       await navigator.clipboard.writeText(currentImage.prompt)
       setCopied(true)
       setActionNotice({ type: 'success', message: 'Prompt copied.' })
-      setTimeout(() => setCopied(false), 2000)
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current)
+      }
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopied(false)
+        copyResetTimeoutRef.current = null
+      }, 2000)
     } catch (error) {
       setErrorNotice(error, 'Copy failed. Please copy the prompt manually.')
     }
@@ -414,10 +441,18 @@ export function ImageLightbox({
   // Fetch signed URLs when the current image changes and has no displayable URL
   useEffect(() => {
     if (!currentImage || !onRequestSignedUrls) return
+    let cancelled = false
     if (shouldRequestSignedUrls(currentImage, !!onRequestSignedUrls)) {
-      void onRequestSignedUrls(currentImage.id)
+      void onRequestSignedUrls(currentImage.id).catch((error) => {
+        if (!cancelled) {
+          setErrorNotice(error, 'Could not load the full-resolution image. Preview may be stale.')
+        }
+      })
     }
-  }, [currentImage, onRequestSignedUrls])
+    return () => {
+      cancelled = true
+    }
+  }, [currentImage, onRequestSignedUrls, setErrorNotice])
 
   // Start with a fast preview/thumbnail, then upgrade to full resolution only after it has decoded.
   useEffect(() => {
