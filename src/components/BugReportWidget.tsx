@@ -40,6 +40,7 @@ export function BugReportWidget() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
   const imagesRef = useRef<SelectedBugReportImage[]>([])
+  const submitInFlightRef = useRef(false)
   const dialogTitleId = useId()
   const dialogDescriptionId = useId()
 
@@ -51,7 +52,7 @@ export function BugReportWidget() {
   }, [toast])
 
   const handleClose = () => {
-    if (isSubmitting) return
+    if (isSubmitting || submitInFlightRef.current) return
     setIsOpen(false)
   }
 
@@ -77,17 +78,30 @@ export function BugReportWidget() {
       currentCount: images.length,
       files: Array.from(files),
     })
-    const newImages = buildSelectedBugReportImages(acceptedFiles)
+    try {
+      const newImages = buildSelectedBugReportImages(acceptedFiles)
 
-    if (errors.length > 0) setToast({ message: errors.join('. '), type: 'error' })
-    if (newImages.length > 0) setImages((prev) => [...prev, ...newImages])
-    if (fileInputRef.current) fileInputRef.current.value = ''
+      if (errors.length > 0) setToast({ message: errors.join('. '), type: 'error' })
+      if (newImages.length > 0) setImages((prev) => [...prev, ...newImages])
+    } catch (error) {
+      setToast({
+        message: getSafeErrorMessage(
+          error instanceof Error ? error.message : null,
+          'Could not prepare selected screenshots. Please try again.'
+        ),
+        type: 'error',
+      })
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
   }
 
   const removeImage = (index: number) => {
     setImages((prev) => {
       const updated = [...prev]
-      releaseBugReportImagePreviews([updated[index]])
+      const removed = updated[index]
+      if (!removed) return prev
+      releaseBugReportImagePreviews([removed])
       updated.splice(index, 1)
       return updated
     })
@@ -96,6 +110,7 @@ export function BugReportWidget() {
   const updateImageCaption = (index: number, caption: string) => {
     setImages((prev) => {
       const updated = [...prev]
+      if (!updated[index]) return prev
       updated[index] = {
         ...updated[index],
         caption: clampBugReportText(stripBugReportControlChars(caption), MAX_BUG_REPORT_CAPTION_LENGTH),
@@ -106,11 +121,13 @@ export function BugReportWidget() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (submitInFlightRef.current) return
     if (!title.trim() || !description.trim()) {
       setToast({ message: 'Please provide a title and description', type: 'error' })
       return
     }
 
+    submitInFlightRef.current = true
     setIsSubmitting(true)
     try {
       // createBugReportFormData normalizes the title/description itself, so the
@@ -150,6 +167,7 @@ export function BugReportWidget() {
         type: 'error',
       })
     } finally {
+      submitInFlightRef.current = false
       setIsSubmitting(false)
     }
   }

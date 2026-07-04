@@ -82,12 +82,23 @@ export const buildBugReportSubmission = ({
   imageCount: String(images.length),
 })
 
-export const buildSelectedBugReportImages = (files: File[]): SelectedBugReportImage[] =>
-  files.map((file) => ({
-    file,
-    preview: URL.createObjectURL(file),
-    caption: '',
-  }))
+export const buildSelectedBugReportImages = (files: File[]): SelectedBugReportImage[] => {
+  const images: SelectedBugReportImage[] = []
+
+  try {
+    for (const file of files) {
+      images.push({
+        file,
+        preview: URL.createObjectURL(file),
+        caption: '',
+      })
+    }
+    return images
+  } catch (error) {
+    releaseBugReportImagePreviews(images)
+    throw error
+  }
+}
 
 export const releaseBugReportImagePreviews = (images: Pick<SelectedBugReportImage, 'preview'>[]) => {
   images.forEach((image) => URL.revokeObjectURL(image.preview))
