@@ -41,7 +41,17 @@ let _cachedTokenPromise: Promise<string> | null = null
 
 function getCachedToken(password: string): Promise<string> {
   if (_cachedTokenPromise === null) {
-    _cachedTokenPromise = deriveAuthToken(password)
+    const pending = deriveAuthToken(password)
+    // A rejected derivation must not be cached for the isolate's lifetime —
+    // otherwise a transient Web Crypto fault at warm-up would make every
+    // subsequent correct-password login fail until the isolate restarts.
+    // Clear the slot so the next login retries; the current caller still sees
+    // the rejection. Attaching the handler here also keeps the module-load
+    // warm-up call below from surfacing as an unhandled promise rejection.
+    pending.catch(() => {
+      if (_cachedTokenPromise === pending) _cachedTokenPromise = null
+    })
+    _cachedTokenPromise = pending
   }
   return _cachedTokenPromise
 }
@@ -130,8 +140,19 @@ export async function POST(request: NextRequest) {
     // Successful auth clears the client's failed-attempt counter so a user who
     // mistyped a few times before getting it right starts fresh.
     loginRateLimiter.reset(clientKey)
+    // Deriving the cookie token uses Web Crypto and can fail (transiently) even
+    // though the password was correct. Return 503 — the same "service not able
+    // to authenticate right now" signal as the missing-SITE_PASSWORD path —
+    // instead of letting the rejection escape as an opaque 500.
+    let cookieToken: string
+    try {
+      cookieToken = await getCachedToken(PASSWORD)
+    } catch (err) {
+      logger.error('[Login] Failed to derive auth cookie token', err instanceof Error ? err.message : String(err))
+      return noStore(new NextResponse(null, { status: 503 }))
+    }
     const response = NextResponse.redirect(new URL(safeRedirect, request.url), 303)
-    response.cookies.set(AUTH_COOKIE_NAME, await getCachedToken(PASSWORD), {
+    response.cookies.set(AUTH_COOKIE_NAME, cookieToken, {
       httpOnly: true,
       secure: true,
       sameSite: 'lax',

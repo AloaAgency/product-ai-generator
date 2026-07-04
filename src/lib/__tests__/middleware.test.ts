@@ -348,6 +348,55 @@ describe('middleware — authenticated requests', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Transient token-derivation failure — fail closed now, recover later
+//
+// middleware.ts caches the deriveAuthToken() Promise in module state. If a
+// rejected Promise were cached forever, one transient Web Crypto fault would
+// lock every user out until the isolate restarts. These tests pin the
+// contract: while derivation is failing, requests fail closed; once it works
+// again, the cache retries instead of replaying the stale rejection.
+// ---------------------------------------------------------------------------
+
+describe('middleware — transient token-derivation failure recovers', () => {
+  afterEach(() => {
+    vi.doUnmock('@/lib/auth-constants')
+    vi.resetModules()
+    delete process.env.SITE_PASSWORD
+  })
+
+  it('fails closed while derivation fails, then accepts a valid cookie once it recovers', async () => {
+    vi.resetModules()
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+    const actual = await vi.importActual<typeof import('@/lib/auth-constants')>('@/lib/auth-constants')
+    let failing = true
+    vi.doMock('@/lib/auth-constants', () => ({
+      ...actual,
+      deriveAuthToken: async (password: string) => {
+        if (failing) throw new Error('transient web crypto failure')
+        return actual.deriveAuthToken(password)
+      },
+    }))
+    const mw = await importMiddleware()
+    const validToken = await actual.deriveAuthToken(TEST_PASSWORD)
+    const buildReq = () =>
+      new NextRequest('http://localhost/api/products', {
+        headers: { Cookie: `site-auth=${validToken}` },
+      })
+
+    // While derivation is broken, a request with a valid cookie fails closed.
+    const during = await mw(buildReq())
+    expect(during.status).toBe(401)
+
+    // Once derivation works again, the same cookie must authenticate — the
+    // earlier rejection must not have been cached permanently.
+    failing = false
+    const after = await mw(buildReq())
+    expect(after.headers.get('x-middleware-next')).toBe('1')
+    expect(after.status).not.toBe(401)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // SITE_PASSWORD not configured — fail-closed
 // ---------------------------------------------------------------------------
 

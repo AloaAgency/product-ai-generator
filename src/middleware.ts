@@ -78,7 +78,18 @@ let _tokenPromise: Promise<string> | null = null
 
 function getExpectedToken(password: string): Promise<string> {
   if (_tokenPromise === null) {
-    _tokenPromise = deriveAuthToken(password)
+    const pending = deriveAuthToken(password)
+    // A rejected derivation must not be cached for the isolate's lifetime —
+    // that would turn a transient Web Crypto fault into a permanent lockout
+    // (every request fails closed until the isolate restarts). Clear the slot
+    // so the next request retries; the current caller still sees the rejection
+    // and fails closed for this request only. Attaching the handler here also
+    // keeps the module-load warm-up call below from surfacing as an unhandled
+    // promise rejection.
+    pending.catch(() => {
+      if (_tokenPromise === pending) _tokenPromise = null
+    })
+    _tokenPromise = pending
   }
   return _tokenPromise
 }
