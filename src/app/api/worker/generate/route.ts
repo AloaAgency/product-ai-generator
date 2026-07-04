@@ -40,7 +40,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const supabase = createServiceClient()
   const url = new URL(request.url)
   const jobId = url.searchParams.get('jobId')
   const batchSize = parseWorkerPositiveInteger(
@@ -87,6 +86,11 @@ export async function GET(request: NextRequest) {
     if (jobId && !isValidGenerationJobId(jobId)) {
       return NextResponse.json({ error: 'Invalid jobId' }, { status: 400 })
     }
+
+    // Created inside the try so a misconfigured deployment (missing Supabase
+    // env vars → createServiceClient throws) gets the structured 500 + error
+    // logging below instead of an unhandled exception with an opaque response.
+    const supabase = createServiceClient()
 
     log.info('Trigger', {
       jobId: jobId || null,
@@ -152,8 +156,26 @@ export async function GET(request: NextRequest) {
         while (index < queued.length) {
           const current = queued[index]
           index += 1
-          const result = await processGenerationJob(current.id, { batchSize, parallelism, timeBudgetMs })
-          results.push(result)
+          try {
+            const result = await processGenerationJob(current.id, { batchSize, parallelism, timeBudgetMs })
+            results.push(result)
+          } catch (err) {
+            // One job throwing (e.g. a transient DB error while claiming it)
+            // must not abort this lane: without the catch the whole worker
+            // rejects, Promise.all discards results of jobs that already
+            // completed, and the sibling lane keeps running after the 500 is
+            // sent — on serverless that means being frozen mid-write. The job
+            // itself is either still 'pending' (claim failed → retried next
+            // tick) or already marked 'failed' by processGenerationJob.
+            const safeMessage = sanitizeWorkerErrorMessage(err, 'Generation job failed')
+            log.warn('Job error', { jobId: current.id, error: safeMessage })
+            await logError({
+              errorMessage: safeMessage,
+              errorSource: 'api/worker/generate',
+              errorContext: { jobId: current.id },
+            })
+            results.push({ jobId: current.id, processed: 0, completed: 0, failed: 0, status: 'error' })
+          }
         }
       }
       const workers = Array.from({ length: Math.min(limit, queued.length) }, () => worker())
