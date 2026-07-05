@@ -14,6 +14,22 @@ import { logger } from '@/lib/logger'
 const BFT_API_KEY = process.env.BFT_API_KEY?.replace(/"/g, '') || ''
 const BFT_BASE_URL = process.env.BFT_BASE_URL?.replace(/"/g, '') || ''
 
+// Bound outbound calls to the bug tracker so a hung/slow tracker fails fast
+// into the surrounding catch instead of holding the request open until the
+// platform maxDuration. Mirrors the AbortController timeout used for the
+// worker-kick fetch in video-job-request.ts.
+const BFT_REQUEST_TIMEOUT_MS = 15_000
+
+async function trackerFetch(input: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), BFT_REQUEST_TIMEOUT_MS)
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 interface ImageUpload {
   file: File
   caption: string
@@ -52,7 +68,7 @@ async function uploadImageToTracker(itemId: string, image: ImageUpload): Promise
     formData.append('caption', image.caption)
     formData.append('uploaded_by', 'aloa-ai-product-imager')
 
-    const response = await fetch(`${BFT_BASE_URL}/public/items/${itemId}/attachments`, {
+    const response = await trackerFetch(`${BFT_BASE_URL}/public/items/${itemId}/attachments`, {
       method: 'POST',
       headers: { 'x-api-key': BFT_API_KEY },
       body: formData,
@@ -107,10 +123,21 @@ export async function POST(request: NextRequest) {
         }
       }
     } else {
-      const body = await request.json()
-      type = body.type
-      title = body.title
-      description = body.description
+      let parsedBody: unknown
+      try {
+        parsedBody = await request.json()
+      } catch {
+        return NextResponse.json(
+          { success: false, message: 'Invalid JSON in request body' },
+          { status: 400 }
+        )
+      }
+      const body = (parsedBody && typeof parsedBody === 'object' && !Array.isArray(parsedBody)
+        ? parsedBody
+        : {}) as { type?: string; title?: string; description?: string }
+      type = body.type as string
+      title = body.title as string
+      description = body.description as string
     }
 
     if (!type || !title || !description) {
@@ -143,7 +170,7 @@ export async function POST(request: NextRequest) {
     let itemId: string | null = null
 
     try {
-      const response = await fetch(`${BFT_BASE_URL}/public/items`, {
+      const response = await trackerFetch(`${BFT_BASE_URL}/public/items`, {
         method: 'POST',
         headers: {
           'x-api-key': BFT_API_KEY,
@@ -153,9 +180,13 @@ export async function POST(request: NextRequest) {
       })
 
       if (response.ok) {
+        // Parse defensively: a 200 with an empty/non-JSON body must not throw
+        // (it would leave trackerResponseOk in a torn state). The item was
+        // created either way, so we still report success — only attachment
+        // upload is skipped when the returned id can't be read.
+        const data = await response.json().catch(() => null)
+        itemId = data?.data?.id ?? null
         trackerResponseOk = true
-        const data = await response.json()
-        itemId = data?.data?.id
       } else {
         logger.error('Bug tracker API error:', redactSensitiveText(await response.text()))
       }
