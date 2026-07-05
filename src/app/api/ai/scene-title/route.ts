@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
 import { parseRequestBody } from '@/lib/request-guards'
+import { createAnthropicClient } from '@/lib/anthropic-client'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import { MAX_USER_PROMPT_LEN, SCENE_TITLE_SYSTEM_PROMPT, safeTextFromContent } from '@/lib/prompt-builder'
 import { logError } from '@/lib/error-logger'
 import { logger } from '@/lib/logger'
 
-const anthropic = new Anthropic()
+const anthropic = createAnthropicClient()
 
 export async function POST(request: NextRequest) {
   try {
