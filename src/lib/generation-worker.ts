@@ -100,6 +100,10 @@ type SourceImageRecord = {
 type RecordedVariationRow = {
   variation_number: number | null
 }
+type SupabaseErrorLike = {
+  code?: string
+  message?: string
+}
 
 type LoadedImageJobResources = {
   geminiApiKey?: string
@@ -744,6 +748,16 @@ function isRetriableError(err: unknown) {
   )
 }
 
+function isDuplicateGeneratedImageInsertError(error: SupabaseErrorLike | null | undefined) {
+  const code = error?.code ?? ''
+  const message = error?.message?.toLowerCase() ?? ''
+  return (
+    code === '23505' ||
+    message.includes('duplicate key') ||
+    message.includes('unique constraint')
+  )
+}
+
 async function persistProgress(
   supabase: WorkerSupabase,
   jobId: string,
@@ -860,6 +874,17 @@ async function runVariation(
     })
 
     if (insertError) {
+      if (isDuplicateGeneratedImageInsertError(insertError)) {
+        try {
+          const recorded = await fetchRecordedImageVariationNumbers(supabase, job, [variationNumber])
+          if (recorded.has(variationNumber)) {
+            return
+          }
+        } catch {
+          // Fall through to the original insert error and cleanup path. A
+          // duplicate is only safe to treat as success after verification.
+        }
+      }
       await cleanupGeneratedImageAssets(supabase, generatedPaths)
       throw new Error(`Failed to record generated image: ${insertError.message}`)
     }
