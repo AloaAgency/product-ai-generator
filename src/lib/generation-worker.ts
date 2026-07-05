@@ -988,10 +988,14 @@ async function processVariations(
     config.statusRefreshIntervalMs
   )
   const progressPersister = createProgressPersister(supabase, job.id, plan)
+  let fatalError: unknown = null
 
   const worker = async () => {
-    while (nextIndex < plan.variationNumbers.length) {
+    while (nextIndex < plan.variationNumbers.length && fatalError === null) {
       if (await stopChecker.shouldStop()) {
+        break
+      }
+      if (fatalError !== null) {
         break
       }
 
@@ -1017,12 +1021,20 @@ async function processVariations(
     }
   }
 
-  await Promise.all(
-    Array.from(
-      { length: Math.min(config.parallelism, plan.variationNumbers.length) },
-      () => worker()
-    )
+  const workerCount = Math.min(config.parallelism, plan.variationNumbers.length)
+  await Promise.allSettled(
+    Array.from({ length: workerCount }, async () => {
+      try {
+        await worker()
+      } catch (err) {
+        fatalError ??= err
+      }
+    })
   )
+
+  if (fatalError !== null) {
+    throw fatalError
+  }
 
   await progressPersister.flush()
 

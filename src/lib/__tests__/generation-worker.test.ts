@@ -135,6 +135,16 @@ function createRejectingDownloadPayload(message: string) {
   }
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 function createMockSupabase(
   queryResponses: QueryResponse[],
   storageResponses: StorageResponse[] = []
@@ -574,6 +584,107 @@ describe('processGenerationJob', () => {
     await expect(processGenerationJob(jobId)).rejects.toThrow('Failed to persist generation job progress: write conflict')
     expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
       completed_count: 1,
+      status: 'failed',
+      failed_count: 1,
+      error_message: 'Failed to persist generation job progress: write conflict',
+    })
+  })
+
+  it('waits for in-flight parallel variations before surfacing fatal progress errors', async () => {
+    const jobId = '34343434-3434-4343-8343-343434343434'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId, { variation_count: 2 }),
+        },
+        recordedVariationRows(),
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: null, global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running' },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          error: { message: 'write conflict' },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-maybeSingle',
+          data: { completed_count: 0, failed_count: 0 },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+      ]
+    )
+
+    const imageResult = {
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-parallel-drain',
+      raw: {},
+    }
+    const secondGeneration = createDeferred<typeof imageResult>()
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage)
+      .mockResolvedValueOnce(imageResult)
+      .mockImplementationOnce(() => secondGeneration.promise)
+
+    const { processGenerationJob } = await import('../generation-worker')
+    let settled = false
+    const result = processGenerationJob(jobId, { batchSize: 2, parallelism: 2 })
+      .finally(() => {
+        settled = true
+      })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(settled).toBe(false)
+    expect(generateGeminiImage).toHaveBeenCalledTimes(2)
+
+    secondGeneration.resolve(imageResult)
+
+    await expect(result).rejects.toThrow('Failed to persist generation job progress: write conflict')
+    expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
       status: 'failed',
       failed_count: 1,
       error_message: 'Failed to persist generation job progress: write conflict',
