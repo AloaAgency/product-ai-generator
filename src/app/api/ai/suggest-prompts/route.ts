@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import Anthropic from '@anthropic-ai/sdk'
+import { createAnthropicClient } from '@/lib/anthropic-client'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import {
   buildPromptSuggestionSystemPrompt,
@@ -16,7 +16,7 @@ import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
 import { logger } from '@/lib/logger'
 
-const anthropic = new Anthropic()
+const anthropic = createAnthropicClient()
 
 export async function POST(request: NextRequest) {
   let product_id: string | undefined
