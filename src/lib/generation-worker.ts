@@ -100,6 +100,10 @@ type SourceImageRecord = {
 type RecordedVariationRow = {
   variation_number: number | null
 }
+type SupabaseErrorLike = {
+  code?: string
+  message?: string
+}
 
 type LoadedImageJobResources = {
   geminiApiKey?: string
@@ -534,26 +538,39 @@ async function downloadStorageBase64(
   let lastError: Error | null = null
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const { data, error } = await supabase.storage
-      .from(bucket)
-      .download(storagePath)
+    try {
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .download(storagePath)
 
-    if (error) {
-      lastError = new Error(`${context}: ${error.message}`)
-      const isRetryable = /bad gateway|gateway timeout|service unavailable|timeout|502|503|504/i.test(error.message)
-      if (isRetryable && attempt < MAX_RETRIES - 1) {
+      if (error) {
+        lastError = new Error(`${context}: ${error.message}`)
+        if (isRetriableError(error) && attempt < MAX_RETRIES - 1) {
+          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)))
+          continue
+        }
+        throw lastError
+      }
+
+      if (!data) return null
+
+      const arrayBuffer = await data.arrayBuffer()
+      return {
+        mimeType,
+        base64: Buffer.from(arrayBuffer).toString('base64'),
+      }
+    } catch (err) {
+      if (err instanceof Error && err === lastError) {
+        lastError = err
+      } else {
+        const message = err instanceof Error ? err.message : String(err)
+        lastError = new Error(`${context}: ${message}`)
+      }
+      if (isRetriableError(lastError) && attempt < MAX_RETRIES - 1) {
         await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)))
         continue
       }
       throw lastError
-    }
-
-    if (!data) return null
-
-    const arrayBuffer = await data.arrayBuffer()
-    return {
-      mimeType,
-      base64: Buffer.from(arrayBuffer).toString('base64'),
     }
   }
 
@@ -716,11 +733,28 @@ function isRetriableError(err: unknown) {
     message.includes('rate limit') ||
     message.includes('429') ||
     message.includes('timeout') ||
+    message.includes('timed out') ||
     message.includes('aborted') ||
     message.includes('abort') ||
     message.includes('server error') ||
+    message.includes('bad gateway') ||
+    message.includes('gateway timeout') ||
+    message.includes('service unavailable') ||
+    message.includes('network') ||
+    message.includes('econnreset') ||
+    message.includes('504') ||
     message.includes('503') ||
     message.includes('502')
+  )
+}
+
+function isDuplicateGeneratedImageInsertError(error: SupabaseErrorLike | null | undefined) {
+  const code = error?.code ?? ''
+  const message = error?.message?.toLowerCase() ?? ''
+  return (
+    code === '23505' ||
+    message.includes('duplicate key') ||
+    message.includes('unique constraint')
   )
 }
 
@@ -840,6 +874,17 @@ async function runVariation(
     })
 
     if (insertError) {
+      if (isDuplicateGeneratedImageInsertError(insertError)) {
+        try {
+          const recorded = await fetchRecordedImageVariationNumbers(supabase, job, [variationNumber])
+          if (recorded.has(variationNumber)) {
+            return
+          }
+        } catch {
+          // Fall through to the original insert error and cleanup path. A
+          // duplicate is only safe to treat as success after verification.
+        }
+      }
       await cleanupGeneratedImageAssets(supabase, generatedPaths)
       throw new Error(`Failed to record generated image: ${insertError.message}`)
     }
@@ -943,10 +988,14 @@ async function processVariations(
     config.statusRefreshIntervalMs
   )
   const progressPersister = createProgressPersister(supabase, job.id, plan)
+  let fatalError: unknown = null
 
   const worker = async () => {
-    while (nextIndex < plan.variationNumbers.length) {
+    while (nextIndex < plan.variationNumbers.length && fatalError === null) {
       if (await stopChecker.shouldStop()) {
+        break
+      }
+      if (fatalError !== null) {
         break
       }
 
@@ -972,12 +1021,20 @@ async function processVariations(
     }
   }
 
-  await Promise.all(
-    Array.from(
-      { length: Math.min(config.parallelism, plan.variationNumbers.length) },
-      () => worker()
-    )
+  const workerCount = Math.min(config.parallelism, plan.variationNumbers.length)
+  await Promise.allSettled(
+    Array.from({ length: workerCount }, async () => {
+      try {
+        await worker()
+      } catch (err) {
+        fatalError ??= err
+      }
+    })
   )
+
+  if (fatalError !== null) {
+    throw fatalError
+  }
 
   await progressPersister.flush()
 
