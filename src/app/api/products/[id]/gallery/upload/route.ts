@@ -75,40 +75,53 @@ export async function POST(request: NextRequest, { params }: Params) {
     }
 
     const results = await Promise.all(files.map(async (file) => {
-      const extension = sanitizeStorageFileExtension(file.file_name)
-      const storageFileName = `${Date.now()}-${randomUUID()}${extension}`
-      const storagePath = `products/${productId}/uploads/${storageFileName}`
+      // Wrap each file so an unexpected throw (network error, storage client
+      // rejection) degrades to a per-file error entry instead of rejecting the
+      // whole Promise.all — which would discard the results of sibling files
+      // that already committed a generated_images row, leaving them orphaned
+      // and invisible to the client behind a generic 500.
+      try {
+        const extension = sanitizeStorageFileExtension(file.file_name)
+        const storageFileName = `${Date.now()}-${randomUUID()}${extension}`
+        const storagePath = `products/${productId}/uploads/${storageFileName}`
 
-      const { data: signedData, error: signError } = await supabase.storage
-        .from('generated-images')
-        .createSignedUploadUrl(storagePath, { upsert: true })
+        const { data: signedData, error: signError } = await supabase.storage
+          .from('generated-images')
+          .createSignedUploadUrl(storagePath, { upsert: true })
 
-      if (signError || !signedData?.signedUrl) {
-        return { file_name: file.file_name, error: signError?.message || 'Failed to sign' }
+        if (signError || !signedData?.signedUrl) {
+          return { file_name: file.file_name, error: signError?.message || 'Failed to sign' }
+        }
+
+        const imageId = randomUUID()
+        const { data: image, error: insertError } = await supabase
+          .from(T.generated_images)
+          .insert({
+            id: imageId,
+            product_id: productId,
+            job_id: jobId,
+            storage_path: storagePath,
+            mime_type: file.mime_type,
+            file_size: file.file_size || null,
+            media_type: 'image',
+            variation_number: 0,
+            approval_status: 'pending',
+          })
+          .select()
+          .single()
+
+        if (insertError || !image) {
+          return { file_name: file.file_name, error: insertError?.message || 'Insert failed' }
+        }
+
+        return { signed_url: signedData.signedUrl, image }
+      } catch (err) {
+        logger.error('[GalleryUpload] Per-file error:', err)
+        return {
+          file_name: file.file_name,
+          error: err instanceof Error ? err.message : 'Upload preparation failed',
+        }
       }
-
-      const imageId = randomUUID()
-      const { data: image, error: insertError } = await supabase
-        .from(T.generated_images)
-        .insert({
-          id: imageId,
-          product_id: productId,
-          job_id: jobId,
-          storage_path: storagePath,
-          mime_type: file.mime_type,
-          file_size: file.file_size || null,
-          media_type: 'image',
-          variation_number: 0,
-          approval_status: 'pending',
-        })
-        .select()
-        .single()
-
-      if (insertError || !image) {
-        return { file_name: file.file_name, error: insertError?.message || 'Insert failed' }
-      }
-
-      return { signed_url: signedData.signedUrl, image }
     }))
 
     // Return results immediately so client can start uploading.
