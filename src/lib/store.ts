@@ -491,19 +491,35 @@ const api = async (url: string, options?: RequestInit) => {
   return data ?? null
 }
 
+const getLocalStorage = () => {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
+
 const getDevParallelDefault = () => {
   if (typeof window === 'undefined') return true
-  const stored = window.localStorage.getItem('devParallelGeneration')
-  if (stored === null) return true
-  return stored === 'true'
+  try {
+    const stored = getLocalStorage()?.getItem('devParallelGeneration')
+    if (stored === null || stored === undefined) return true
+    return stored === 'true'
+  } catch (error) {
+    logStoreError('DevParallelGenerationStorage', error)
+    return true
+  }
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
   devParallelGeneration: getDevParallelDefault(),
   setDevParallelGeneration: (enabled) => {
     set({ devParallelGeneration: enabled })
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('devParallelGeneration', String(enabled))
+    try {
+      getLocalStorage()?.setItem('devParallelGeneration', String(enabled))
+    } catch (error) {
+      logStoreError('DevParallelGenerationStorage', error)
     }
   },
   // Projects

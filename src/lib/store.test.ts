@@ -91,3 +91,26 @@ describe('useAppStore async scope guards', () => {
     expect(useAppStore.getState().referenceSets).toEqual([])
   })
 })
+
+describe('useAppStore storage resilience', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    useAppStore.setState({ devParallelGeneration: true })
+  })
+
+  it('keeps dev parallel state in memory when localStorage writes fail', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: vi.fn(() => null),
+        setItem: vi.fn(() => {
+          throw new Error('storage unavailable')
+        }),
+      },
+    })
+
+    expect(() => useAppStore.getState().setDevParallelGeneration(false)).not.toThrow()
+    expect(useAppStore.getState().devParallelGeneration).toBe(false)
+  })
+})
