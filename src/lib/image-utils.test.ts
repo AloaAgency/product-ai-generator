@@ -23,6 +23,7 @@ import {
   createPreview,
   createThumbnailAndPreview,
   extractVideoThumbnail,
+  assertImageDimensions,
 } from './image-utils'
 
 // ---------------------------------------------------------------------------
@@ -448,6 +449,44 @@ describe('compressReferenceImage', () => {
       .toBuffer()
     await expect(compressReferenceImage(atLimit)).rejects.toThrow(
       /dimensions.*exceed maximum/i
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// assertImageDimensions — memory-safety guard (pure, no bitmap allocation)
+//
+// Tested directly with plain numbers so the total-area branch can be exercised
+// without materialising a multi-hundred-megapixel bitmap in the test process.
+// ---------------------------------------------------------------------------
+
+describe('assertImageDimensions', () => {
+  it('accepts an image comfortably within both limits', () => {
+    expect(() => assertImageDimensions(4096, 4096, 'test')).not.toThrow()
+  })
+
+  it('rejects when a single axis reaches the per-side ceiling', () => {
+    expect(() => assertImageDimensions(32_768, 100, 'test')).toThrow(
+      /dimensions.*exceed maximum/i
+    )
+  })
+
+  it('rejects when the total area exceeds the max even though each axis is in-range', () => {
+    // 20000 × 20000 = 400 MP: both axes are below the 32 768 per-side ceiling
+    // yet the decoded area (~1.6 GB as RGBA) is a memory bomb.
+    expect(() => assertImageDimensions(20_000, 20_000, 'test')).toThrow(
+      /area.*exceeds maximum decodable area/i
+    )
+  })
+
+  it('accepts a large-but-thin image whose total area stays under the ceiling', () => {
+    // 30000 × 8000 = 240 MP < 268,402,689, and neither axis hits 32 768.
+    expect(() => assertImageDimensions(30_000, 8_000, 'test')).not.toThrow()
+  })
+
+  it('includes the provided context in the thrown message', () => {
+    expect(() => assertImageDimensions(20_000, 20_000, 'myContext')).toThrow(
+      /^myContext:/
     )
   })
 })

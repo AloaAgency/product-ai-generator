@@ -144,6 +144,16 @@ const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
 // pixels (≈8× the max output dimension) before any Sharp pipeline executes.
 const MAX_SAFE_INPUT_DIMENSION = 32_768
 
+// Total decoded-area guard. The per-axis ceiling alone permits an image where
+// neither side exceeds MAX_SAFE_INPUT_DIMENSION yet the product is enormous
+// (e.g. 20000×20000 ≈ 400 MP ≈ 1.6 GB once decoded to RGBA). Sharp would reject
+// such a file at decode time via its own limitInputPixels default, but only
+// after this module has already read metadata — and the failure surfaces as a
+// generic downstream "Sharp encode failed". We cap the total at Sharp's own
+// default (0x3FFF² = 268,402,689) so nothing Sharp would have accepted is newly
+// rejected; we simply fail earlier, before any decode, with a clear message.
+const MAX_SAFE_INPUT_PIXELS = 268_402_689 // 0x3FFF² — matches Sharp's default limitInputPixels
+
 function assertBufferSize(buffer: Buffer, context: string): void {
   if (buffer.length === 0) throw new Error(`${context}: buffer is empty`)
   if (buffer.length > MAX_BUFFER_BYTES) {
@@ -156,11 +166,18 @@ function assertBufferSize(buffer: Buffer, context: string): void {
 // Shared dimension assertion used by assertInputDimensions and
 // compressReferenceImage (which already has metadata in hand). Keeping a
 // single implementation prevents the two call-sites from diverging if the
-// threshold changes.
-function assertDimensions(w: number, h: number, context: string): void {
+// threshold changes. Exported so the guard can be unit-tested with plain
+// numbers, without materialising a multi-hundred-megapixel bitmap in memory.
+export function assertImageDimensions(w: number, h: number, context: string): void {
   if (w >= MAX_SAFE_INPUT_DIMENSION || h >= MAX_SAFE_INPUT_DIMENSION) {
     throw new Error(
       `${context}: image dimensions ${w}x${h} exceed maximum allowed (${MAX_SAFE_INPUT_DIMENSION}px per side)`
+    )
+  }
+  // Guard the total decoded area even when each axis is individually in-range.
+  if (w * h > MAX_SAFE_INPUT_PIXELS) {
+    throw new Error(
+      `${context}: image area ${w}x${h} (${w * h}px) exceeds maximum decodable area (${MAX_SAFE_INPUT_PIXELS}px)`
     )
   }
 }
@@ -175,7 +192,7 @@ async function assertInputDimensions(buffer: Buffer, context: string): Promise<v
   } catch {
     throw new Error(`${context}: could not read image metadata (file may be corrupt or unsupported)`)
   }
-  assertDimensions(meta.width ?? 0, meta.height ?? 0, context)
+  assertImageDimensions(meta.width ?? 0, meta.height ?? 0, context)
 }
 
 /** Shared return shape for all Sharp encode operations. */
@@ -297,7 +314,7 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   }
   const w = meta.width ?? 0
   const h = meta.height ?? 0
-  assertDimensions(w, h, 'compressReferenceImage')
+  assertImageDimensions(w, h, 'compressReferenceImage')
 
   const needsResize = w > REF_MAX_DIMENSION || h > REF_MAX_DIMENSION
   const needsCompress = originalSize > REF_MAX_FILE_SIZE
@@ -389,10 +406,31 @@ export const extractVideoThumbnail = async (
   const tmpFrame = join(tmpdir(), `frame-${id}.png`)
 
   try {
-    await writeFile(tmpVideo, videoBuffer)
+    try {
+      await writeFile(tmpVideo, videoBuffer)
+    } catch (err) {
+      throw new Error(
+        `extractVideoThumbnail: failed to stage temp video — ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+
     await runFfmpegExtract(tmpVideo, tmpFrame)
 
-    const frameBuffer = await readFile(tmpFrame)
+    // ffmpeg can exit 0 yet leave no frame on disk (e.g. a seek past the end of
+    // a truncated clip). Surface that as a clear "no output frame" error rather
+    // than letting a raw ENOENT from readFile bubble up.
+    let frameBuffer: Buffer
+    try {
+      frameBuffer = await readFile(tmpFrame)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code
+      throw new Error(
+        code === 'ENOENT'
+          ? 'extractVideoThumbnail: ffmpeg produced no output frame'
+          : `extractVideoThumbnail: failed to read extracted frame — ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+
     assertBufferSize(frameBuffer, 'extractVideoThumbnail:frame')
     await assertInputDimensions(frameBuffer, 'extractVideoThumbnail:frame')
     return await encodeWebP(frameBuffer, width, THUMB_QUALITY, 'extractVideoThumbnail')

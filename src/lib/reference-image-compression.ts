@@ -6,6 +6,78 @@ import { logger } from '@/lib/logger'
 
 const BUCKET = 'reference-images'
 
+// Bounded retry for transient Supabase storage/DB failures. Network blips,
+// rate limits and upstream 5xx responses are common for object storage and
+// should not permanently fail a compression that would otherwise succeed.
+const STORAGE_MAX_ATTEMPTS = 3
+const STORAGE_RETRY_BASE_MS = 300
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// Only transient/infrastructural errors are retried. Deterministic failures
+// (object not found, quota exceeded, constraint violations) are returned
+// immediately so callers surface them without added latency.
+function isRetriableStorageError(message: string | null | undefined): boolean {
+  if (!message) return false
+  const m = message.toLowerCase()
+  return (
+    m.includes('timeout') ||
+    m.includes('timed out') ||
+    m.includes('network') ||
+    m.includes('fetch failed') ||
+    m.includes('econnreset') ||
+    m.includes('econnrefused') ||
+    m.includes('socket hang up') ||
+    m.includes('rate limit') ||
+    m.includes('429') ||
+    m.includes('service unavailable') ||
+    m.includes('bad gateway') ||
+    m.includes('gateway timeout') ||
+    m.includes('server error') ||
+    m.includes('502') ||
+    m.includes('503') ||
+    m.includes('504')
+  )
+}
+
+/**
+ * Run a Supabase operation that resolves to `{ error }`, retrying with linear
+ * backoff while the error looks transient. Thrown errors (e.g. a network
+ * exception before a response is formed) are treated the same way. Returns the
+ * final result (successful or not) so existing error-mapping logic is unchanged.
+ */
+async function withStorageRetry<T extends { error: { message?: string } | null }>(
+  op: () => PromiseLike<T>,
+  label: string
+): Promise<T> {
+  let lastResult: T | undefined
+  for (let attempt = 0; attempt < STORAGE_MAX_ATTEMPTS; attempt++) {
+    try {
+      const result = await op()
+      if (!result.error) return result
+      lastResult = result
+      if (attempt < STORAGE_MAX_ATTEMPTS - 1 && isRetriableStorageError(result.error.message)) {
+        logger.warn(`${label}: retriable error on attempt ${attempt + 1}/${STORAGE_MAX_ATTEMPTS}: ${result.error.message}`)
+        await sleep(STORAGE_RETRY_BASE_MS * (attempt + 1))
+        continue
+      }
+      return result
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (attempt < STORAGE_MAX_ATTEMPTS - 1 && isRetriableStorageError(message)) {
+        logger.warn(`${label}: retriable exception on attempt ${attempt + 1}/${STORAGE_MAX_ATTEMPTS}: ${message}`)
+        await sleep(STORAGE_RETRY_BASE_MS * (attempt + 1))
+        continue
+      }
+      throw err
+    }
+  }
+  // Unreachable in practice: the loop always returns on the final attempt.
+  return lastResult as T
+}
+
 export type CompressionResult =
   | {
       imageId: string
@@ -34,10 +106,11 @@ export async function processReferenceImageCompression(
 ): Promise<CompressionResult> {
   const supabase = createServiceClient()
 
-  // Download the original file
-  const { data: fileData, error: downloadError } = await supabase.storage
-    .from(BUCKET)
-    .download(storagePath)
+  // Download the original file (retried on transient storage errors)
+  const { data: fileData, error: downloadError } = await withStorageRetry(
+    () => supabase.storage.from(BUCKET).download(storagePath),
+    'reference-image-compression:download'
+  )
 
   if (downloadError || !fileData) {
     return {
@@ -91,13 +164,15 @@ export async function processReferenceImageCompression(
   // Build new storage path with .webp extension
   const newStoragePath = storagePath.replace(/\.[^/.]+$/, '.webp')
 
-  // Upload the compressed version
-  const { error: uploadError } = await supabase.storage
-    .from(BUCKET)
-    .upload(newStoragePath, result.buffer, {
-      contentType: result.mimeType,
-      upsert: true,
-    })
+  // Upload the compressed version (retried on transient storage errors)
+  const { error: uploadError } = await withStorageRetry(
+    () =>
+      supabase.storage.from(BUCKET).upload(newStoragePath, result.buffer, {
+        contentType: result.mimeType,
+        upsert: true,
+      }),
+    'reference-image-compression:upload'
+  )
 
   if (uploadError) {
     return {
@@ -111,14 +186,20 @@ export async function processReferenceImageCompression(
 
   // Update DB record before deleting the old file so a delete failure
   // never leaves the DB pointing at a path that no longer exists.
-  const { error: dbError } = await supabase
-    .from(T.reference_images)
-    .update({
-      storage_path: newStoragePath,
-      mime_type: result.mimeType,
-      file_size: result.compressedSize,
-    })
-    .eq('id', imageId)
+  // Retried on transient errors; the upload used upsert:true, so a retried
+  // update targets the same already-uploaded object and stays idempotent.
+  const { error: dbError } = await withStorageRetry(
+    () =>
+      supabase
+        .from(T.reference_images)
+        .update({
+          storage_path: newStoragePath,
+          mime_type: result.mimeType,
+          file_size: result.compressedSize,
+        })
+        .eq('id', imageId),
+    'reference-image-compression:db-update'
+  )
 
   if (dbError) {
     return {
