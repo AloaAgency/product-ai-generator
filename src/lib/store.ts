@@ -37,6 +37,21 @@ const inFlightRequests = new Map<string, Promise<unknown>>()
 const sliceScopes = new Map<string, string>()
 let aiRequestCount = 0
 
+type SignedReferenceUpload = {
+  clientId: string
+  signedUrl: string
+  storage_path: string
+  file_name: string
+  mime_type: string
+  file_size: number
+  display_order: number
+}
+
+type FailedReferenceUpload = {
+  clientId: string
+  error: string
+}
+
 const sanitizePathSegment = (value: string) => encodeURIComponent(value.trim())
 
 const buildApiPath = (...segments: string[]) =>
@@ -73,6 +88,9 @@ const isCurrentOrUntrackedSliceScope = (slice: string, scope: string) => {
 // active product is still A (or no product is tracked yet, e.g. in isolation).
 const isActiveProductScope = (productId: string) =>
   isCurrentOrUntrackedSliceScope('currentProduct', productId)
+
+const isCurrentProductScopedSlice = (slice: string, scope: string, productId: string) =>
+  isCurrentOrUntrackedSliceScope(slice, scope) && isActiveProductScope(productId)
 
 const clearProductScopedSliceScopes = () => {
   sliceScopes.set('referenceSets', '_')
@@ -142,6 +160,57 @@ const extractErrorMessage = (value: unknown): string | null => {
   const message = value.trim().replace(/\s+/g, ' ')
   if (!message) return null
   return message.slice(0, 200)
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object'
+
+const getUploadErrorMessage = (value: unknown) =>
+  isRecord(value) ? extractErrorMessage(value.error) : null
+
+const normalizeSignedUploadPayload = (value: unknown): Array<SignedReferenceUpload | FailedReferenceUpload> => {
+  if (!Array.isArray(value)) {
+    throw new Error('Failed to sign upload')
+  }
+
+  return value.map((item) => {
+    if (!isRecord(item)) {
+      return { clientId: 'unknown', error: 'Failed to sign upload' }
+    }
+
+    const clientId = typeof item.clientId === 'string' && item.clientId.trim()
+      ? item.clientId
+      : 'unknown'
+    const itemError = extractErrorMessage(item.error)
+    if (itemError && !('signedUrl' in item)) {
+      return { clientId, error: itemError }
+    }
+
+    const signedUrl = typeof item.signedUrl === 'string' ? item.signedUrl : ''
+    const storagePath = typeof item.storage_path === 'string' ? item.storage_path : ''
+    const fileName = typeof item.file_name === 'string' ? item.file_name : ''
+    const mimeType = typeof item.mime_type === 'string' ? item.mime_type : ''
+    const fileSize = typeof item.file_size === 'number' && Number.isFinite(item.file_size)
+      ? item.file_size
+      : 0
+    const displayOrder = typeof item.display_order === 'number' && Number.isFinite(item.display_order)
+      ? item.display_order
+      : 0
+
+    if (!signedUrl || !storagePath || !fileName || !mimeType) {
+      return { clientId, error: 'Failed to sign upload' }
+    }
+
+    return {
+      clientId,
+      signedUrl,
+      storage_path: storagePath,
+      file_name: fileName,
+      mime_type: mimeType,
+      file_size: fileSize,
+      display_order: displayOrder,
+    }
+  })
 }
 
 const isRetryableNetworkError = (error: unknown) =>
@@ -491,19 +560,35 @@ const api = async (url: string, options?: RequestInit) => {
   return data ?? null
 }
 
+const getLocalStorage = () => {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
+
 const getDevParallelDefault = () => {
   if (typeof window === 'undefined') return true
-  const stored = window.localStorage.getItem('devParallelGeneration')
-  if (stored === null) return true
-  return stored === 'true'
+  try {
+    const stored = getLocalStorage()?.getItem('devParallelGeneration')
+    if (stored === null || stored === undefined) return true
+    return stored === 'true'
+  } catch (error) {
+    logStoreError('DevParallelGenerationStorage', error)
+    return true
+  }
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
   devParallelGeneration: getDevParallelDefault(),
   setDevParallelGeneration: (enabled) => {
     set({ devParallelGeneration: enabled })
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('devParallelGeneration', String(enabled))
+    try {
+      getLocalStorage()?.setItem('devParallelGeneration', String(enabled))
+    } catch (error) {
+      logStoreError('DevParallelGenerationStorage', error)
     }
   },
   // Projects
@@ -783,10 +868,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     invalidateRequestKeys(buildRequestKey('referenceSets', scopedProductId))
-    if (
-      isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId) &&
-      isActiveProductScope(scopedProductId)
-    ) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({ referenceSets: [...s.referenceSets, refSet] }))
     }
     return refSet
@@ -805,7 +887,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     invalidateRequestKeys(buildRequestKey('referenceSets', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({
         referenceSets: s.referenceSets.map((r) =>
           r.id === referenceSetId ? refSet : data.is_active ? { ...r, is_active: false } : r
@@ -821,7 +903,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       buildRequestKey('referenceSets', scopedProductId),
       buildRequestKey('referenceImages', scopedProductId, referenceSetId)
     )
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => {
         const nextReferenceImages = { ...s.referenceImages }
         delete nextReferenceImages[referenceSetId]
@@ -846,7 +928,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           `/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}/images`
         )
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
       set((s) => ({ referenceImages: { ...s.referenceImages, [referenceSetId]: data } }))
     } catch (error) {
@@ -874,18 +960,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     )
 
-    const signedPayload = signed as Array<
-      | {
-          clientId: string
-          signedUrl: string
-          storage_path: string
-          file_name: string
-          mime_type: string
-          file_size: number
-          display_order: number
-        }
-      | { clientId: string; error: string }
-    >
+    const signedPayload = normalizeSignedUploadPayload(signed)
 
     const fileMap = new Map(uploadSpecs.map((spec, idx) => [spec.clientId, validatedFiles[idx]]))
     const uploadResultPromises = signedPayload.map(async (item) => {
@@ -960,6 +1035,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uploads: successfulUploads }),
       })
+      if (!Array.isArray(data)) {
+        throw new Error('Upload finalization failed')
+      }
       payload = data as Array<ReferenceImage & { error?: string; file?: string }>
     }
 
@@ -968,7 +1046,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...uploadResults.filter((u) => u.error),
       ...payload.filter((img) => !img?.id && img?.error),
     ]
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    const firstError = getUploadErrorMessage(errors[0])
+    if (uploaded.length > 0 && errors.length > 0) {
+      logStoreError('ReferenceImageUpload', new Error(firstError || 'Some uploads failed'))
+    }
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({
         referenceImages: {
           ...s.referenceImages,
@@ -978,10 +1060,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     invalidateRequestKeys(referenceImagesRequestKey)
     if (uploaded.length === 0 && errors.length > 0) {
-      const firstError =
-        errors[0] && typeof errors[0] === 'object' && 'error' in errors[0]
-        ? (errors[0] as { error?: string }).error
-          : null
       throw new Error(firstError || 'Upload failed')
     }
   },
@@ -994,7 +1072,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       { method: 'DELETE' }
     )
     invalidateRequestKeys(buildRequestKey('referenceImages', scopedProductId, referenceSetId))
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({
         referenceImages: {
           ...s.referenceImages,
@@ -1049,10 +1127,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
-    if (
-      isCurrentOrUntrackedSliceScope('promptTemplates', scopedProductId) &&
-      isActiveProductScope(scopedProductId)
-    ) {
+    if (isCurrentProductScopedSlice('promptTemplates', scopedProductId, scopedProductId)) {
       set((s) => ({ promptTemplates: [...s.promptTemplates, tmpl] }))
     }
     return tmpl
@@ -1072,7 +1147,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('promptTemplates', scopedProductId)) {
+    if (isCurrentProductScopedSlice('promptTemplates', scopedProductId, scopedProductId)) {
       set((s) => ({ promptTemplates: s.promptTemplates.map((p) => (p.id === promptTemplateId ? tmpl : p)) }))
     }
   },
@@ -1081,7 +1156,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const promptTemplateId = requireUuid(promptId, 'prompt template id')
     await api(`/api/products/${buildApiPath(scopedProductId)}/prompts/${buildApiPath(promptTemplateId)}`, { method: 'DELETE' })
     invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('promptTemplates', scopedProductId)) {
+    if (isCurrentProductScopedSlice('promptTemplates', scopedProductId, scopedProductId)) {
       set((s) => ({ promptTemplates: s.promptTemplates.filter((p) => p.id !== promptTemplateId) }))
     }
   },
@@ -1154,10 +1229,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const job = result.job ?? result
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
-    if (
-      isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey) &&
-      isActiveProductScope(scopedProductId)
-    ) {
+    if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
       set((s) => ({ generationJobs: [job, ...s.generationJobs] }))
     }
     return job
@@ -1204,7 +1276,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       buildRequestKey('generationJobs', scopedProductId),
       buildRequestKey('currentJob', scopedProductId, generationJobId)
     )
-    if (isCurrentOrUntrackedSliceScope('generationJobs', buildRequestKey('generationJobs', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'generationJobs',
+        buildRequestKey('generationJobs', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({
         generationJobs: [job, ...s.generationJobs.filter((j) => j.id !== job.id)],
         currentJob: s.currentJob?.id === job.id ? { ...job, images: s.currentJob?.images } : s.currentJob,
@@ -1217,7 +1295,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api(`/api/products/${buildApiPath(scopedProductId)}/generate`, { method: 'DELETE' })
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
-    if (isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey)) {
+    if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
       await get().fetchGenerationJobs(scopedProductId)
     }
   },
@@ -1226,7 +1304,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api(`/api/products/${buildApiPath(scopedProductId)}/generate?scope=failed`, { method: 'DELETE' })
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
-    if (isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey)) {
+    if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
       await get().fetchGenerationJobs(scopedProductId)
     }
   },
@@ -1238,7 +1316,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       buildRequestKey('generationJobs', scopedProductId),
       buildRequestKey('currentJob', scopedProductId, generationJobId)
     )
-    if (isCurrentOrUntrackedSliceScope('generationJobs', buildRequestKey('generationJobs', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'generationJobs',
+        buildRequestKey('generationJobs', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({
         generationJobs: s.generationJobs.filter((j) => j.id !== generationJobId),
         currentJob: s.currentJob?.id === generationJobId ? null : s.currentJob,
@@ -1250,7 +1334,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api(`/api/products/${buildApiPath(scopedProductId)}/generate?scope=log`, { method: 'DELETE' })
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey, getActiveSliceScope('currentJob'))
-    if (isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey)) {
+    if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
       set((s) => ({
         generationJobs: s.generationJobs.filter((j) => j.status === 'pending' || j.status === 'running'),
         currentJob:
@@ -1458,7 +1542,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('settingsTemplates', buildRequestKey('settingsTemplates', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'settingsTemplates',
+        buildRequestKey('settingsTemplates', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({ settingsTemplates: [...s.settingsTemplates, tmpl] }))
     }
     return tmpl
@@ -1476,7 +1566,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       body: JSON.stringify(requestBody),
     })
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('settingsTemplates', buildRequestKey('settingsTemplates', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'settingsTemplates',
+        buildRequestKey('settingsTemplates', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({
         settingsTemplates: s.settingsTemplates.map((t) =>
           t.id === settingsTemplateId ? tmpl : data.is_active ? { ...t, is_active: false } : t
@@ -1492,7 +1588,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       { method: 'DELETE' }
     )
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('settingsTemplates', buildRequestKey('settingsTemplates', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'settingsTemplates',
+        buildRequestKey('settingsTemplates', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({ settingsTemplates: s.settingsTemplates.filter((t) => t.id !== settingsTemplateId) }))
     }
   },
@@ -1505,7 +1607,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       body: JSON.stringify({ is_active: true }),
     })
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('settingsTemplates', buildRequestKey('settingsTemplates', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'settingsTemplates',
+        buildRequestKey('settingsTemplates', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({
         settingsTemplates: s.settingsTemplates.map((t) =>
           t.id === settingsTemplateId ? tmpl : { ...t, is_active: false }
