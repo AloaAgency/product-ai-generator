@@ -74,6 +74,9 @@ const isCurrentOrUntrackedSliceScope = (slice: string, scope: string) => {
 const isActiveProductScope = (productId: string) =>
   isCurrentOrUntrackedSliceScope('currentProduct', productId)
 
+const isCurrentProductScopedSlice = (slice: string, scope: string, productId: string) =>
+  isCurrentOrUntrackedSliceScope(slice, scope) && isActiveProductScope(productId)
+
 const clearProductScopedSliceScopes = () => {
   sliceScopes.set('referenceSets', '_')
   sliceScopes.set('promptTemplates', '_')
@@ -799,10 +802,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     invalidateRequestKeys(buildRequestKey('referenceSets', scopedProductId))
-    if (
-      isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId) &&
-      isActiveProductScope(scopedProductId)
-    ) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({ referenceSets: [...s.referenceSets, refSet] }))
     }
     return refSet
@@ -821,7 +821,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     invalidateRequestKeys(buildRequestKey('referenceSets', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({
         referenceSets: s.referenceSets.map((r) =>
           r.id === referenceSetId ? refSet : data.is_active ? { ...r, is_active: false } : r
@@ -837,7 +837,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       buildRequestKey('referenceSets', scopedProductId),
       buildRequestKey('referenceImages', scopedProductId, referenceSetId)
     )
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => {
         const nextReferenceImages = { ...s.referenceImages }
         delete nextReferenceImages[referenceSetId]
@@ -862,7 +862,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           `/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}/images`
         )
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
       set((s) => ({ referenceImages: { ...s.referenceImages, [referenceSetId]: data } }))
     } catch (error) {
@@ -984,7 +988,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...uploadResults.filter((u) => u.error),
       ...payload.filter((img) => !img?.id && img?.error),
     ]
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({
         referenceImages: {
           ...s.referenceImages,
@@ -1010,7 +1014,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       { method: 'DELETE' }
     )
     invalidateRequestKeys(buildRequestKey('referenceImages', scopedProductId, referenceSetId))
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({
         referenceImages: {
           ...s.referenceImages,
@@ -1065,10 +1069,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
-    if (
-      isCurrentOrUntrackedSliceScope('promptTemplates', scopedProductId) &&
-      isActiveProductScope(scopedProductId)
-    ) {
+    if (isCurrentProductScopedSlice('promptTemplates', scopedProductId, scopedProductId)) {
       set((s) => ({ promptTemplates: [...s.promptTemplates, tmpl] }))
     }
     return tmpl
@@ -1088,7 +1089,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('promptTemplates', scopedProductId)) {
+    if (isCurrentProductScopedSlice('promptTemplates', scopedProductId, scopedProductId)) {
       set((s) => ({ promptTemplates: s.promptTemplates.map((p) => (p.id === promptTemplateId ? tmpl : p)) }))
     }
   },
@@ -1097,7 +1098,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const promptTemplateId = requireUuid(promptId, 'prompt template id')
     await api(`/api/products/${buildApiPath(scopedProductId)}/prompts/${buildApiPath(promptTemplateId)}`, { method: 'DELETE' })
     invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('promptTemplates', scopedProductId)) {
+    if (isCurrentProductScopedSlice('promptTemplates', scopedProductId, scopedProductId)) {
       set((s) => ({ promptTemplates: s.promptTemplates.filter((p) => p.id !== promptTemplateId) }))
     }
   },
@@ -1170,10 +1171,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const job = result.job ?? result
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
-    if (
-      isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey) &&
-      isActiveProductScope(scopedProductId)
-    ) {
+    if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
       set((s) => ({ generationJobs: [job, ...s.generationJobs] }))
     }
     return job
@@ -1220,7 +1218,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       buildRequestKey('generationJobs', scopedProductId),
       buildRequestKey('currentJob', scopedProductId, generationJobId)
     )
-    if (isCurrentOrUntrackedSliceScope('generationJobs', buildRequestKey('generationJobs', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'generationJobs',
+        buildRequestKey('generationJobs', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({
         generationJobs: [job, ...s.generationJobs.filter((j) => j.id !== job.id)],
         currentJob: s.currentJob?.id === job.id ? { ...job, images: s.currentJob?.images } : s.currentJob,
@@ -1233,7 +1237,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api(`/api/products/${buildApiPath(scopedProductId)}/generate`, { method: 'DELETE' })
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
-    if (isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey)) {
+    if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
       await get().fetchGenerationJobs(scopedProductId)
     }
   },
@@ -1242,7 +1246,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api(`/api/products/${buildApiPath(scopedProductId)}/generate?scope=failed`, { method: 'DELETE' })
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
-    if (isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey)) {
+    if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
       await get().fetchGenerationJobs(scopedProductId)
     }
   },
@@ -1254,7 +1258,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       buildRequestKey('generationJobs', scopedProductId),
       buildRequestKey('currentJob', scopedProductId, generationJobId)
     )
-    if (isCurrentOrUntrackedSliceScope('generationJobs', buildRequestKey('generationJobs', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'generationJobs',
+        buildRequestKey('generationJobs', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({
         generationJobs: s.generationJobs.filter((j) => j.id !== generationJobId),
         currentJob: s.currentJob?.id === generationJobId ? null : s.currentJob,
@@ -1266,7 +1276,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api(`/api/products/${buildApiPath(scopedProductId)}/generate?scope=log`, { method: 'DELETE' })
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey, getActiveSliceScope('currentJob'))
-    if (isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey)) {
+    if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
       set((s) => ({
         generationJobs: s.generationJobs.filter((j) => j.status === 'pending' || j.status === 'running'),
         currentJob:
@@ -1474,7 +1484,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('settingsTemplates', buildRequestKey('settingsTemplates', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'settingsTemplates',
+        buildRequestKey('settingsTemplates', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({ settingsTemplates: [...s.settingsTemplates, tmpl] }))
     }
     return tmpl
@@ -1492,7 +1508,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       body: JSON.stringify(requestBody),
     })
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('settingsTemplates', buildRequestKey('settingsTemplates', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'settingsTemplates',
+        buildRequestKey('settingsTemplates', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({
         settingsTemplates: s.settingsTemplates.map((t) =>
           t.id === settingsTemplateId ? tmpl : data.is_active ? { ...t, is_active: false } : t
@@ -1508,7 +1530,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       { method: 'DELETE' }
     )
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('settingsTemplates', buildRequestKey('settingsTemplates', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'settingsTemplates',
+        buildRequestKey('settingsTemplates', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({ settingsTemplates: s.settingsTemplates.filter((t) => t.id !== settingsTemplateId) }))
     }
   },
@@ -1521,7 +1549,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       body: JSON.stringify({ is_active: true }),
     })
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('settingsTemplates', buildRequestKey('settingsTemplates', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'settingsTemplates',
+        buildRequestKey('settingsTemplates', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({
         settingsTemplates: s.settingsTemplates.map((t) =>
           t.id === settingsTemplateId ? tmpl : { ...t, is_active: false }

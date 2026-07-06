@@ -4,6 +4,8 @@ import { useAppStore } from './store'
 const productA = '11111111-1111-4111-8111-111111111111'
 const productB = '22222222-2222-4222-8222-222222222222'
 const referenceSetA = '33333333-3333-4333-8333-333333333333'
+const settingsTemplateA = '44444444-4444-4444-8444-444444444444'
+const referenceImageA = '55555555-5555-4555-8555-555555555555'
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -34,6 +36,8 @@ describe('useAppStore async scope guards', () => {
       galleryTotal: 0,
       galleryHasMore: false,
       loadingRefSets: false,
+      settingsTemplates: [],
+      loadingSettingsTemplates: false,
     })
   })
 
@@ -89,6 +93,116 @@ describe('useAppStore async scope guards', () => {
     expect(created.id).toBe(referenceSetA)
     expect(useAppStore.getState().currentProduct?.id).toBe(productB)
     expect(useAppStore.getState().referenceSets).toEqual([])
+  })
+
+  it('does not append a settings template when its create request completes after product navigation', async () => {
+    const pendingCreate = deferred<Response>()
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/settings-templates` && init?.method !== 'POST') {
+        return Promise.resolve(jsonResponse([]))
+      }
+      if (url === `/api/products/${productA}/settings-templates` && init?.method === 'POST') {
+        return pendingCreate.promise
+      }
+      if (url === `/api/products/${productB}`) {
+        return Promise.resolve(jsonResponse({ id: productB, name: 'Product B' }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchSettingsTemplates(productA)
+    const createPromise = useAppStore
+      .getState()
+      .createSettingsTemplate(productA, { name: 'Template A', settings: {} })
+    await useAppStore.getState().fetchProduct(productB)
+
+    pendingCreate.resolve(
+      jsonResponse({
+        id: settingsTemplateA,
+        product_id: productA,
+        name: 'Template A',
+        settings: {},
+        is_active: false,
+      }, 201)
+    )
+    const created = await createPromise
+
+    expect(created.id).toBe(settingsTemplateA)
+    expect(useAppStore.getState().currentProduct?.id).toBe(productB)
+    expect(useAppStore.getState().settingsTemplates).toEqual([])
+  })
+
+  it('does not append reference images when upload finalization completes after product navigation', async () => {
+    const pendingFinalize = deferred<Response>()
+    const finalizeStarted = deferred<void>()
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/reference-sets`) {
+        return Promise.resolve(jsonResponse([]))
+      }
+      if (
+        url === `/api/products/${productA}/reference-sets/${referenceSetA}/images/upload-urls` &&
+        method === 'POST'
+      ) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { files?: Array<{ clientId: string }> }
+        const clientId = body.files?.[0]?.clientId ?? 'missing-client'
+        return Promise.resolve(jsonResponse([{
+          clientId,
+          signedUrl: '/signed-upload',
+          storage_path: 'references/photo.png',
+          file_name: 'photo.png',
+          mime_type: 'image/png',
+          file_size: 1,
+          display_order: 1,
+        }]))
+      }
+      if (url === '/signed-upload' && method === 'PUT') {
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }
+      if (url === `/api/products/${productA}/reference-sets/${referenceSetA}/images` && method === 'POST') {
+        finalizeStarted.resolve()
+        return pendingFinalize.promise
+      }
+      if (url === `/api/products/${productB}`) {
+        return Promise.resolve(jsonResponse({ id: productB, name: 'Product B' }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchReferenceSets(productA)
+    const uploadPromise = useAppStore
+      .getState()
+      .uploadReferenceImages(productA, referenceSetA, [
+        new File(['x'], 'photo.png', { type: 'image/png' }),
+      ])
+    await finalizeStarted.promise
+    await useAppStore.getState().fetchProduct(productB)
+
+    pendingFinalize.resolve(jsonResponse([{
+      id: referenceImageA,
+      reference_set_id: referenceSetA,
+      storage_path: 'references/photo.png',
+      public_url: null,
+      file_name: 'photo.png',
+      mime_type: 'image/png',
+      file_size: 1,
+      display_order: 1,
+      created_at: '2026-07-06T00:00:00.000Z',
+    }], 201))
+    await uploadPromise
+
+    expect(useAppStore.getState().currentProduct?.id).toBe(productB)
+    expect(useAppStore.getState().referenceImages).toEqual({})
   })
 })
 
