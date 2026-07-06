@@ -37,6 +37,21 @@ const inFlightRequests = new Map<string, Promise<unknown>>()
 const sliceScopes = new Map<string, string>()
 let aiRequestCount = 0
 
+type SignedReferenceUpload = {
+  clientId: string
+  signedUrl: string
+  storage_path: string
+  file_name: string
+  mime_type: string
+  file_size: number
+  display_order: number
+}
+
+type FailedReferenceUpload = {
+  clientId: string
+  error: string
+}
+
 const sanitizePathSegment = (value: string) => encodeURIComponent(value.trim())
 
 const buildApiPath = (...segments: string[]) =>
@@ -145,6 +160,57 @@ const extractErrorMessage = (value: unknown): string | null => {
   const message = value.trim().replace(/\s+/g, ' ')
   if (!message) return null
   return message.slice(0, 200)
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object'
+
+const getUploadErrorMessage = (value: unknown) =>
+  isRecord(value) ? extractErrorMessage(value.error) : null
+
+const normalizeSignedUploadPayload = (value: unknown): Array<SignedReferenceUpload | FailedReferenceUpload> => {
+  if (!Array.isArray(value)) {
+    throw new Error('Failed to sign upload')
+  }
+
+  return value.map((item) => {
+    if (!isRecord(item)) {
+      return { clientId: 'unknown', error: 'Failed to sign upload' }
+    }
+
+    const clientId = typeof item.clientId === 'string' && item.clientId.trim()
+      ? item.clientId
+      : 'unknown'
+    const itemError = extractErrorMessage(item.error)
+    if (itemError && !('signedUrl' in item)) {
+      return { clientId, error: itemError }
+    }
+
+    const signedUrl = typeof item.signedUrl === 'string' ? item.signedUrl : ''
+    const storagePath = typeof item.storage_path === 'string' ? item.storage_path : ''
+    const fileName = typeof item.file_name === 'string' ? item.file_name : ''
+    const mimeType = typeof item.mime_type === 'string' ? item.mime_type : ''
+    const fileSize = typeof item.file_size === 'number' && Number.isFinite(item.file_size)
+      ? item.file_size
+      : 0
+    const displayOrder = typeof item.display_order === 'number' && Number.isFinite(item.display_order)
+      ? item.display_order
+      : 0
+
+    if (!signedUrl || !storagePath || !fileName || !mimeType) {
+      return { clientId, error: 'Failed to sign upload' }
+    }
+
+    return {
+      clientId,
+      signedUrl,
+      storage_path: storagePath,
+      file_name: fileName,
+      mime_type: mimeType,
+      file_size: fileSize,
+      display_order: displayOrder,
+    }
+  })
 }
 
 const isRetryableNetworkError = (error: unknown) =>
@@ -894,18 +960,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     )
 
-    const signedPayload = signed as Array<
-      | {
-          clientId: string
-          signedUrl: string
-          storage_path: string
-          file_name: string
-          mime_type: string
-          file_size: number
-          display_order: number
-        }
-      | { clientId: string; error: string }
-    >
+    const signedPayload = normalizeSignedUploadPayload(signed)
 
     const fileMap = new Map(uploadSpecs.map((spec, idx) => [spec.clientId, validatedFiles[idx]]))
     const uploadResultPromises = signedPayload.map(async (item) => {
@@ -980,6 +1035,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uploads: successfulUploads }),
       })
+      if (!Array.isArray(data)) {
+        throw new Error('Upload finalization failed')
+      }
       payload = data as Array<ReferenceImage & { error?: string; file?: string }>
     }
 
@@ -988,6 +1046,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...uploadResults.filter((u) => u.error),
       ...payload.filter((img) => !img?.id && img?.error),
     ]
+    const firstError = getUploadErrorMessage(errors[0])
+    if (uploaded.length > 0 && errors.length > 0) {
+      logStoreError('ReferenceImageUpload', new Error(firstError || 'Some uploads failed'))
+    }
     if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({
         referenceImages: {
@@ -998,10 +1060,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     invalidateRequestKeys(referenceImagesRequestKey)
     if (uploaded.length === 0 && errors.length > 0) {
-      const firstError =
-        errors[0] && typeof errors[0] === 'object' && 'error' in errors[0]
-        ? (errors[0] as { error?: string }).error
-          : null
       throw new Error(firstError || 'Upload failed')
     }
   },

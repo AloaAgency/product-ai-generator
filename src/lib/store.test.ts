@@ -204,6 +204,67 @@ describe('useAppStore async scope guards', () => {
     expect(useAppStore.getState().currentProduct?.id).toBe(productB)
     expect(useAppStore.getState().referenceImages).toEqual({})
   })
+
+  it('rejects malformed upload signing responses with a stable error', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (
+        url === `/api/products/${productA}/reference-sets/${referenceSetA}/images/upload-urls` &&
+        init?.method === 'POST'
+      ) {
+        return Promise.resolve(jsonResponse({ error: 'not an array' }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await expect(
+      useAppStore
+        .getState()
+        .uploadReferenceImages(productA, referenceSetA, [
+          new File(['x'], 'photo.png', { type: 'image/png' }),
+        ])
+    ).rejects.toThrow('Failed to sign upload')
+    expect(useAppStore.getState().referenceImages).toEqual({})
+  })
+
+  it('rejects malformed upload finalization responses with a stable error', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (
+        url === `/api/products/${productA}/reference-sets/${referenceSetA}/images/upload-urls` &&
+        method === 'POST'
+      ) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { files?: Array<{ clientId: string }> }
+        const clientId = body.files?.[0]?.clientId ?? 'missing-client'
+        return Promise.resolve(jsonResponse([{
+          clientId,
+          signedUrl: '/signed-upload',
+          storage_path: 'references/photo.png',
+          file_name: 'photo.png',
+          mime_type: 'image/png',
+          file_size: 1,
+          display_order: 1,
+        }]))
+      }
+      if (url === '/signed-upload' && method === 'PUT') {
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }
+      if (url === `/api/products/${productA}/reference-sets/${referenceSetA}/images` && method === 'POST') {
+        return Promise.resolve(jsonResponse({ ok: true }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await expect(
+      useAppStore
+        .getState()
+        .uploadReferenceImages(productA, referenceSetA, [
+          new File(['x'], 'photo.png', { type: 'image/png' }),
+        ])
+    ).rejects.toThrow('Upload finalization failed')
+    expect(useAppStore.getState().referenceImages).toEqual({})
+  })
 })
 
 describe('useAppStore storage resilience', () => {
