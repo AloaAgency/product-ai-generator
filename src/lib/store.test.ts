@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppStore } from './store'
+import type { GeneratedImage } from './types'
 
 const productA = '11111111-1111-4111-8111-111111111111'
 const productB = '22222222-2222-4222-8222-222222222222'
@@ -40,8 +41,11 @@ describe('useAppStore async scope guards', () => {
       galleryTotal: 0,
       galleryHasMore: false,
       loadingRefSets: false,
+      loadingGallery: false,
+      loadingGalleryMore: false,
       settingsTemplates: [],
       loadingSettingsTemplates: false,
+      aiLoading: false,
     })
   })
 
@@ -79,7 +83,7 @@ describe('useAppStore async scope guards', () => {
   })
 
   it('preserves loaded gallery images when a gallery refresh returns malformed JSON', async () => {
-    const image = {
+    const image: GeneratedImage = {
       id: generatedImageA,
       job_id: generationJobA,
       variation_number: 1,
@@ -345,6 +349,89 @@ describe('useAppStore async scope guards', () => {
         ])
     ).rejects.toThrow('Upload finalization failed')
     expect(useAppStore.getState().referenceImages).toEqual({})
+  })
+
+  it('rejects malformed generation start responses without adding a job', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}/generate` && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ ok: true }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await expect(
+      useAppStore.getState().startGeneration(productA, {
+        prompt_text: 'Make a product image',
+        reference_sets: [],
+      })
+    ).rejects.toThrow('Failed to start generation')
+    expect(useAppStore.getState().generationJobs).toEqual([])
+  })
+
+  it('rejects malformed image update responses without mutating gallery state', async () => {
+    const image: GeneratedImage = {
+      id: generatedImageA,
+      job_id: generationJobA,
+      variation_number: 1,
+      storage_path: 'images/a.png',
+      public_url: null,
+      thumb_storage_path: null,
+      thumb_public_url: null,
+      preview_storage_path: null,
+      preview_public_url: null,
+      mime_type: 'image/png',
+      file_size: 1,
+      approval_status: 'pending',
+      notes: null,
+      media_type: 'image',
+      scene_id: null,
+      scene_name: null,
+      created_at: '2026-07-06T00:00:00.000Z',
+    }
+    useAppStore.setState({ galleryImages: [image] })
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === `/api/images/${generatedImageA}` && init?.method === 'PATCH') {
+        return Promise.resolve(jsonResponse({ image: null }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await expect(
+      useAppStore.getState().updateImageApproval(generatedImageA, 'approved')
+    ).rejects.toThrow('Failed to update image')
+    expect(useAppStore.getState().galleryImages).toEqual([image])
+  })
+
+  it('clears ai loading when build-prompt returns malformed JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/ai/build-prompt' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ refined_prompt: null }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await expect(
+      useAppStore.getState().buildPrompt(productA, 'make it brighter')
+    ).rejects.toThrow('Failed to build prompt')
+    expect(useAppStore.getState().aiLoading).toBe(false)
+  })
+
+  it('rejects malformed prompt suggestions with a stable error', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/ai/suggest-prompts' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ prompts: [{ name: 'Idea', prompt_text: null }] }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await expect(
+      useAppStore.getState().suggestPrompts(productA, 1)
+    ).rejects.toThrow('Failed to suggest prompts')
+    expect(useAppStore.getState().aiLoading).toBe(false)
   })
 })
 

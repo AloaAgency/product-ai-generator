@@ -232,6 +232,30 @@ const normalizeGalleryPayload = (value: unknown) => {
   }
 }
 
+const getEntityPayload = <T extends { id: string }>(
+  value: unknown,
+  property: string,
+  message: string
+): T => requireEntityResponse<T>(getNestedRecordPayload(value, property, message), message)
+
+const normalizeSuggestedPromptsPayload = (value: unknown) => {
+  const record = requireRecordResponse(value, 'Failed to suggest prompts')
+  const prompts = requireArrayResponse<{ name: unknown; prompt_text: unknown }>(
+    record.prompts,
+    'Failed to suggest prompts'
+  )
+
+  return prompts.map((prompt) => {
+    if (typeof prompt.name !== 'string' || typeof prompt.prompt_text !== 'string') {
+      throw new Error('Failed to suggest prompts')
+    }
+    return {
+      name: prompt.name,
+      prompt_text: prompt.prompt_text,
+    }
+  })
+}
+
 const getUploadErrorMessage = (value: unknown) =>
   isRecord(value) ? extractErrorMessage(value.error) : null
 
@@ -589,7 +613,7 @@ interface AppState {
   suggestPrompts: (productId: string, count?: number) => Promise<{ name: string; prompt_text: string }[]>
 }
 
-const api = async (url: string, options?: RequestInit) => {
+const api = async (url: string, options?: RequestInit): Promise<unknown> => {
   const method = (options?.method ?? 'GET').toUpperCase()
   let res: Response
 
@@ -713,30 +737,36 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   createProject: async (data) => {
-    const project = await api('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: normalizeLabelInput(data.name),
-        description: data.description ? trimTextInput(data.description) : undefined,
+    const project = requireEntityResponse<Project>(
+      await api('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: normalizeLabelInput(data.name),
+          description: data.description ? trimTextInput(data.description) : undefined,
+        }),
       }),
-    })
+      'Failed to create project'
+    )
     invalidateRequestKeys(buildRequestKey('projects'))
     set((s) => ({ projects: [project, ...s.projects] }))
     return project
   },
   updateProject: async (id, data) => {
     const projectId = requireUuid(id, 'project id')
-    const project = await api(`/api/projects/${buildApiPath(projectId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: data.name ? normalizeLabelInput(data.name) : data.name,
-        description:
-          typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+    const project = requireEntityResponse<Project>(
+      await api(`/api/projects/${buildApiPath(projectId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: data.name ? normalizeLabelInput(data.name) : data.name,
+          description:
+            typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+        }),
       }),
-    })
+      'Failed to update project'
+    )
     invalidateRequestKeys(buildRequestKey('projects'), buildRequestKey('currentProject', projectId))
     set((s) => ({
       currentProject: s.currentProject?.id === projectId ? project : s.currentProject,
@@ -839,16 +869,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   createProduct: async (data) => {
     const projectId = requireUuid(data.project_id, 'project id')
-    const product = await api('/api/products', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: normalizeLabelInput(data.name),
-        description: data.description ? trimTextInput(data.description) : undefined,
-        project_id: projectId,
+    const product = requireEntityResponse<Product>(
+      await api('/api/products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: normalizeLabelInput(data.name),
+          description: data.description ? trimTextInput(data.description) : undefined,
+          project_id: projectId,
+        }),
       }),
-    })
+      'Failed to create product'
+    )
     invalidateRequestKeys(buildRequestKey('products', projectId))
     if (isCurrentOrUntrackedSliceScope('products', projectId)) {
       set((s) => ({ products: [product, ...s.products] }))
@@ -859,17 +892,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     const productId = requireUuid(id, 'product id')
     const nextProjectId = optionalUuid(data.project_id, 'project id')
     const existingProduct = get().products.find((product) => product.id === productId)
-    const product = await api(`/api/products/${buildApiPath(productId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: data.name ? normalizeLabelInput(data.name) : data.name,
-        description:
-          typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
-        project_id: nextProjectId,
+    const product = requireEntityResponse<Product>(
+      await api(`/api/products/${buildApiPath(productId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: data.name ? normalizeLabelInput(data.name) : data.name,
+          description:
+            typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+          project_id: nextProjectId,
+        }),
       }),
-    })
+      'Failed to update product'
+    )
     invalidateRequestKeys(
       buildRequestKey('currentProduct', productId),
       buildRequestKey('products', existingProduct?.project_id),
@@ -940,15 +976,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   createReferenceSet: async (productId, data) => {
     const scopedProductId = requireUuid(productId, 'product id')
-    const refSet = await api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: normalizeLabelInput(data.name),
-        description: data.description ? trimTextInput(data.description) : undefined,
+    const refSet = requireEntityResponse<ReferenceSet>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: normalizeLabelInput(data.name),
+          description: data.description ? trimTextInput(data.description) : undefined,
+        }),
       }),
-    })
+      'Failed to create reference set'
+    )
     invalidateRequestKeys(buildRequestKey('referenceSets', scopedProductId))
     if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({ referenceSets: [...s.referenceSets, refSet] }))
@@ -958,16 +997,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateReferenceSet: async (productId, setId, data) => {
     const scopedProductId = requireUuid(productId, 'product id')
     const referenceSetId = requireUuid(setId, 'reference set id')
-    const refSet = await api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: data.name ? normalizeLabelInput(data.name) : data.name,
-        description:
-          typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+    const refSet = requireEntityResponse<ReferenceSet>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: data.name ? normalizeLabelInput(data.name) : data.name,
+          description:
+            typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+        }),
       }),
-    })
+      'Failed to update reference set'
+    )
     invalidateRequestKeys(buildRequestKey('referenceSets', scopedProductId))
     if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({
@@ -1204,16 +1246,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   createPromptTemplate: async (productId, data) => {
     const scopedProductId = requireUuid(productId, 'product id')
-    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/prompts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: normalizeLabelInput(data.name),
-        prompt_text: sanitizePromptText(data.prompt_text, 'prompt_text'),
-        tags: data.tags ? sanitizeStringArray(data.tags) : undefined,
+    const tmpl = requireEntityResponse<PromptTemplate>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/prompts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: normalizeLabelInput(data.name),
+          prompt_text: sanitizePromptText(data.prompt_text, 'prompt_text'),
+          tags: data.tags ? sanitizeStringArray(data.tags) : undefined,
+        }),
       }),
-    })
+      'Failed to create prompt template'
+    )
     invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
     if (isCurrentProductScopedSlice('promptTemplates', scopedProductId, scopedProductId)) {
       set((s) => ({ promptTemplates: [...s.promptTemplates, tmpl] }))
@@ -1223,17 +1268,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   updatePromptTemplate: async (productId, promptId, data) => {
     const scopedProductId = requireUuid(productId, 'product id')
     const promptTemplateId = requireUuid(promptId, 'prompt template id')
-    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/prompts/${buildApiPath(promptTemplateId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: data.name ? normalizeLabelInput(data.name) : data.name,
-        prompt_text:
-          typeof data.prompt_text === 'string' ? sanitizePromptText(data.prompt_text, 'prompt_text') : data.prompt_text,
-        tags: data.tags ? sanitizeStringArray(data.tags) : data.tags,
+    const tmpl = requireEntityResponse<PromptTemplate>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/prompts/${buildApiPath(promptTemplateId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: data.name ? normalizeLabelInput(data.name) : data.name,
+          prompt_text:
+            typeof data.prompt_text === 'string' ? sanitizePromptText(data.prompt_text, 'prompt_text') : data.prompt_text,
+          tags: data.tags ? sanitizeStringArray(data.tags) : data.tags,
+        }),
       }),
-    })
+      'Failed to update prompt template'
+    )
     invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
     if (isCurrentProductScopedSlice('promptTemplates', scopedProductId, scopedProductId)) {
       set((s) => ({ promptTemplates: s.promptTemplates.map((p) => (p.id === promptTemplateId ? tmpl : p)) }))
@@ -1312,12 +1360,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         ? { parallelism_override: 1, batch_override: 1 }
         : {}),
     }
-    const result = await api(`/api/products/${buildApiPath(scopedProductId)}/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    const job = result.job ?? result
+    const job = getEntityPayload<GenerationJob>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      'job',
+      'Failed to start generation'
+    )
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
     if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
@@ -1366,10 +1417,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   retryGenerationJob: async (productId, jobId) => {
     const scopedProductId = requireUuid(productId, 'product id')
     const generationJobId = requireUuid(jobId, 'generation job id')
-    const data = await api(`/api/products/${buildApiPath(scopedProductId)}/generate/${buildApiPath(generationJobId)}/retry`, {
-      method: 'POST',
-    })
-    const job = data.job ?? data
+    const job = getEntityPayload<GenerationJob>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/generate/${buildApiPath(generationJobId)}/retry`, {
+        method: 'POST',
+      }),
+      'job',
+      'Failed to retry generation job'
+    )
     invalidateRequestKeys(
       buildRequestKey('generationJobs', scopedProductId),
       buildRequestKey('currentJob', scopedProductId, generationJobId)
@@ -1535,15 +1589,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   updateImageApproval: async (imageId, approval_status, notes) => {
     const scopedImageId = requireUuid(imageId, 'image id')
-    const data = await api(`/api/images/${buildApiPath(scopedImageId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        approval_status: sanitizeApprovalStatus(approval_status, { allowNull: true }) ?? null,
-        notes: typeof notes === 'string' ? trimTextInput(notes) : notes,
+    const updated = getNestedRecordPayload<Record<string, unknown>>(
+      await api(`/api/images/${buildApiPath(scopedImageId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          approval_status: sanitizeApprovalStatus(approval_status, { allowNull: true }) ?? null,
+          notes: typeof notes === 'string' ? trimTextInput(notes) : notes,
+        }),
       }),
-    })
-    const updated = data.image ?? data
+      'image',
+      'Failed to update image'
+    ) as Partial<GeneratedImage>
     const activeGalleryScope = getActiveSliceScope('gallery')
     const activeCurrentJobScope = getActiveSliceScope('currentJob')
     if (activeGalleryScope) invalidateTrackedRequest(activeGalleryScope)
@@ -1636,14 +1693,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   createSettingsTemplate: async (productId, data) => {
     const scopedProductId = requireUuid(productId, 'product id')
-    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: normalizeLabelInput(data.name),
+    const tmpl = requireEntityResponse<SettingsTemplate>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: normalizeLabelInput(data.name),
+        }),
       }),
-    })
+      'Failed to create settings template'
+    )
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
     if (
       isCurrentProductScopedSlice(
@@ -1663,11 +1723,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...data,
       name: data.name ? normalizeLabelInput(data.name) : data.name,
     }
-    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates/${buildApiPath(settingsTemplateId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-    })
+    const tmpl = requireEntityResponse<SettingsTemplate>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates/${buildApiPath(settingsTemplateId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      }),
+      'Failed to update settings template'
+    )
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
     if (
       isCurrentProductScopedSlice(
@@ -1704,11 +1767,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   activateSettingsTemplate: async (productId, templateId) => {
     const scopedProductId = requireUuid(productId, 'product id')
     const settingsTemplateId = requireUuid(templateId, 'settings template id')
-    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates/${buildApiPath(settingsTemplateId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ is_active: true }),
-    })
+    const tmpl = requireEntityResponse<SettingsTemplate>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates/${buildApiPath(settingsTemplateId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: true }),
+      }),
+      'Failed to activate settings template'
+    )
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
     if (
       isCurrentProductScopedSlice(
@@ -1779,14 +1845,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   buildPrompt: async (productId, userPrompt) => {
     beginAiRequest(set)
     try {
-      const data = await api('/api/ai/build-prompt', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          product_id: requireUuid(productId, 'product id'),
-          user_prompt: sanitizePromptText(userPrompt, 'user_prompt'),
+      const data = requireRecordResponse(
+        await api('/api/ai/build-prompt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            product_id: requireUuid(productId, 'product id'),
+            user_prompt: sanitizePromptText(userPrompt, 'user_prompt'),
+          }),
         }),
-      })
+        'Failed to build prompt'
+      )
+      if (typeof data.refined_prompt !== 'string') {
+        throw new Error('Failed to build prompt')
+      }
       return data.refined_prompt
     } finally {
       endAiRequest(set)
@@ -1795,15 +1867,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   suggestPrompts: async (productId, count = 5) => {
     beginAiRequest(set)
     try {
-      const data = await api('/api/ai/suggest-prompts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          product_id: requireUuid(productId, 'product id'),
-          count: clampInteger(count, 1, MAX_SUGGESTED_PROMPT_COUNT, 5),
-        }),
-      })
-      return data.prompts
+      return normalizeSuggestedPromptsPayload(
+        await api('/api/ai/suggest-prompts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            product_id: requireUuid(productId, 'product id'),
+            count: clampInteger(count, 1, MAX_SUGGESTED_PROMPT_COUNT, 5),
+          }),
+        })
+      )
     } finally {
       endAiRequest(set)
     }
