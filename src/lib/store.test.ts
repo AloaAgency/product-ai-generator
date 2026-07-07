@@ -6,6 +6,8 @@ const productB = '22222222-2222-4222-8222-222222222222'
 const referenceSetA = '33333333-3333-4333-8333-333333333333'
 const settingsTemplateA = '44444444-4444-4444-8444-444444444444'
 const referenceImageA = '55555555-5555-4555-8555-555555555555'
+const generationJobA = '66666666-6666-4666-8666-666666666666'
+const generatedImageA = '77777777-7777-4777-8777-777777777777'
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -26,6 +28,8 @@ const deferred = <T>() => {
 describe('useAppStore async scope guards', () => {
   beforeEach(() => {
     useAppStore.setState({
+      projects: [],
+      products: [],
       currentProduct: null,
       referenceSets: [],
       referenceImages: {},
@@ -43,6 +47,83 @@ describe('useAppStore async scope guards', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('preserves a previously loaded project list when a refresh returns malformed JSON', async () => {
+    const project = {
+      id: productA,
+      user_id: 'user-a',
+      name: 'Project A',
+      description: null,
+      global_style_settings: {},
+      created_at: '2026-07-06T00:00:00.000Z',
+      updated_at: '2026-07-06T00:00:00.000Z',
+    }
+    let calls = 0
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/projects') {
+        calls += 1
+        return Promise.resolve(calls === 1 ? jsonResponse([project]) : jsonResponse({ ok: true }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProjects()
+    expect(useAppStore.getState().projects).toEqual([project])
+
+    await useAppStore.getState().fetchProjects()
+    expect(useAppStore.getState().projects).toEqual([project])
+  })
+
+  it('preserves loaded gallery images when a gallery refresh returns malformed JSON', async () => {
+    const image = {
+      id: generatedImageA,
+      job_id: generationJobA,
+      variation_number: 1,
+      storage_path: 'images/a.png',
+      public_url: null,
+      thumb_storage_path: null,
+      thumb_public_url: null,
+      preview_storage_path: null,
+      preview_public_url: null,
+      mime_type: 'image/png',
+      file_size: 1,
+      approval_status: 'pending',
+      notes: null,
+      media_type: 'image',
+      scene_id: null,
+      scene_name: null,
+      created_at: '2026-07-06T00:00:00.000Z',
+    }
+    let galleryCalls = 0
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url.startsWith(`/api/products/${productA}/gallery?`)) {
+        galleryCalls += 1
+        return Promise.resolve(
+          galleryCalls === 1
+            ? jsonResponse({ images: [image], total: 1, has_more: false })
+            : jsonResponse({ ok: true })
+        )
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGallery(productA)
+    expect(useAppStore.getState().galleryImages).toEqual([image])
+
+    await useAppStore.getState().fetchGallery(productA)
+    expect(useAppStore.getState().galleryImages).toEqual([image])
+    expect(useAppStore.getState().galleryTotal).toBe(1)
+    expect(useAppStore.getState().galleryHasMore).toBe(false)
   })
 
   it('ignores a reference-set fetch that resolves after the current product changes', async () => {

@@ -165,6 +165,73 @@ const extractErrorMessage = (value: unknown): string | null => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object'
 
+const requireArrayResponse = <T>(value: unknown, message: string): T[] => {
+  if (!Array.isArray(value)) {
+    throw new Error(message)
+  }
+  return value as T[]
+}
+
+const requireRecordResponse = <T extends Record<string, unknown> = Record<string, unknown>>(
+  value: unknown,
+  message: string
+): T => {
+  if (!isRecord(value) || Array.isArray(value)) {
+    throw new Error(message)
+  }
+  return value as T
+}
+
+const requireEntityResponse = <T extends { id: string }>(value: unknown, message: string): T => {
+  const record = requireRecordResponse(value, message)
+  if (typeof record.id !== 'string' || !record.id.trim()) {
+    throw new Error(message)
+  }
+  return record as unknown as T
+}
+
+const getNestedRecordPayload = <T extends Record<string, unknown>>(
+  value: unknown,
+  property: string,
+  message: string
+): T => {
+  const record = requireRecordResponse(value, message)
+  const nested = record[property]
+  if (nested === undefined) return record as T
+  if (!isRecord(nested) || Array.isArray(nested)) {
+    throw new Error(message)
+  }
+  return nested as T
+}
+
+const normalizeGalleryPayload = (value: unknown) => {
+  const record = isRecord(value) && !Array.isArray(value) ? value : null
+  const images = Array.isArray(value)
+    ? value
+    : Array.isArray(record?.images)
+      ? record.images
+      : null
+
+  if (!images) {
+    throw new Error('Failed to load gallery')
+  }
+
+  const total =
+    typeof record?.total === 'number' && Number.isFinite(record.total)
+      ? Math.max(0, Math.trunc(record.total))
+      : images.length
+  const has_more =
+    typeof record?.has_more === 'boolean'
+      ? record.has_more
+      : total > images.length
+
+  return {
+    images: images as GeneratedImage[],
+    total,
+    has_more,
+  }
+}
+
 const getUploadErrorMessage = (value: unknown) =>
   isRecord(value) ? extractErrorMessage(value.error) : null
 
@@ -600,7 +667,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingProjects: true })
     try {
-      const data = await getInFlightRequest(requestKey, () => api('/api/projects'))
+      const data = requireArrayResponse<Project>(
+        await getInFlightRequest(requestKey, () => api('/api/projects')),
+        'Failed to load projects'
+      )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ projects: data })
@@ -624,7 +694,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestKey = buildRequestKey('currentProject', projectId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await getInFlightRequest(requestKey, () => api(`/api/projects/${buildApiPath(projectId)}`))
+      const data = requireEntityResponse<Project>(
+        await getInFlightRequest(requestKey, () => api(`/api/projects/${buildApiPath(projectId)}`)),
+        'Failed to load project'
+      )
       if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('currentProject', projectId)) return
       markRequestSuccessful(requestKey)
       set({ currentProject: data })
@@ -697,7 +770,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const params = new URLSearchParams()
       if (scopedProjectId) params.set('project_id', scopedProjectId)
       const qs = params.toString()
-      const data = await getInFlightRequest(requestKey, () => api(`/api/products${qs ? `?${qs}` : ''}`))
+      const data = requireArrayResponse<Product>(
+        await getInFlightRequest(requestKey, () => api(`/api/products${qs ? `?${qs}` : ''}`)),
+        'Failed to load products'
+      )
       if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('products', scopeToken)) return
       markRequestSuccessful(requestKey)
       set({ products: data })
@@ -743,7 +819,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestKey = buildRequestKey('currentProduct', productId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await getInFlightRequest(requestKey, () => api(`/api/products/${buildApiPath(productId)}`))
+      const data = requireEntityResponse<Product>(
+        await getInFlightRequest(requestKey, () => api(`/api/products/${buildApiPath(productId)}`)),
+        'Failed to load product'
+      )
       if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('currentProduct', productId)) return
       markRequestSuccessful(requestKey)
       set({ currentProduct: data })
@@ -830,8 +909,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingRefSets: true })
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets`)
+      const data = requireArrayResponse<ReferenceSet>(
+        await getInFlightRequest(requestKey, () =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets`)
+        ),
+        'Failed to load reference sets'
       )
       if (
         !isLatestRequest(requestKey, requestVersion) ||
@@ -923,10 +1005,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestKey = buildRequestKey('referenceImages', scopedProductId, referenceSetId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(
-          `/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}/images`
-        )
+      const data = requireArrayResponse<ReferenceImage>(
+        await getInFlightRequest(requestKey, () =>
+          api(
+            `/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}/images`
+          )
+        ),
+        'Failed to load reference images'
       )
       if (
         !isLatestRequest(requestKey, requestVersion) ||
@@ -1092,8 +1177,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestKey = buildRequestKey('promptTemplates', scopedProductId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(scopedProductId)}/prompts`)
+      const data = requireArrayResponse<PromptTemplate>(
+        await getInFlightRequest(requestKey, () =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/prompts`)
+        ),
+        'Failed to load prompt templates'
       )
       if (
         !isLatestRequest(requestKey, requestVersion) ||
@@ -1175,8 +1263,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     const shouldShowLoading = get().generationJobs.length === 0
     if (shouldShowLoading) set({ loadingJobs: true })
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(scopedProductId)}/generate`)
+      const data = requireArrayResponse<GenerationJob>(
+        await getInFlightRequest(requestKey, () =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/generate`)
+        ),
+        'Failed to load generation jobs'
       )
       if (
         !isLatestRequest(requestKey, requestVersion) ||
@@ -1243,8 +1334,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(scopedProductId)}/generate/${buildApiPath(generationJobId)}`)
+      const data = requireRecordResponse(
+        await getInFlightRequest(requestKey, () =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/generate/${buildApiPath(generationJobId)}`)
+        ),
+        'Failed to load job status'
       )
       if (
         !isLatestRequest(requestKey, requestVersion) ||
@@ -1253,7 +1347,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       )
         return
       markRequestSuccessful(requestKey)
-      set({ currentJob: { ...data.job, images: data.images } })
+      const job = requireEntityResponse<GenerationJob>(data.job, 'Failed to load job status')
+      const images = data.images === undefined
+        ? undefined
+        : requireArrayResponse<GeneratedImage>(data.images, 'Failed to load job images')
+      set({ currentJob: { ...job, images } })
     } catch (error) {
       if (
         isLatestRequest(requestKey, requestVersion) &&
@@ -1364,8 +1462,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const qs = getGalleryQueryString(sanitizedFilters, 0, Math.max(GALLERY_PAGE_SIZE, loadedCount))
     if (shouldShowLoading) set({ loadingGallery: true })
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(scopedProductId)}/gallery?${qs}`)
+      const data = normalizeGalleryPayload(
+        await getInFlightRequest(requestKey, () =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/gallery?${qs}`)
+        )
       )
       if (
         !isLatestRequest(requestKey, requestVersion) ||
@@ -1375,9 +1475,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         return
       markRequestSuccessful(requestKey)
       set((state) => ({
-        galleryImages: mergeGalleryImagesPreservingLoadedUrls(state.galleryImages, data.images ?? data),
-        galleryTotal: data.total ?? 0,
-        galleryHasMore: data.has_more ?? false,
+        galleryImages: mergeGalleryImagesPreservingLoadedUrls(state.galleryImages, data.images),
+        galleryTotal: data.total,
+        galleryHasMore: data.has_more,
       }))
     } catch (error) {
       if (
@@ -1407,7 +1507,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ loadingGalleryMore: true })
     try {
       const qs = getGalleryQueryString(sanitizedFilters, galleryImages.length)
-      const data = await api(`/api/products/${buildApiPath(scopedProductId)}/gallery?${qs}`)
+      const data = normalizeGalleryPayload(await api(`/api/products/${buildApiPath(scopedProductId)}/gallery?${qs}`))
       if (
         !isCurrentSliceScope('gallery', requestKey) ||
         !isLatestRequest(requestKey, requestVersion) ||
@@ -1415,14 +1515,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       ) {
         return
       }
-      const newImages = data.images ?? []
+      const newImages = data.images
       set((state) => {
         const existingIds = new Set(state.galleryImages.map((img) => img.id))
         const unique = newImages.filter((img: GeneratedImage) => !existingIds.has(img.id))
         return {
           galleryImages: [...state.galleryImages, ...unique],
-          galleryTotal: data.total ?? state.galleryImages.length + unique.length,
-          galleryHasMore: data.has_more ?? false,
+          galleryTotal: data.total,
+          galleryHasMore: data.has_more,
         }
       })
     } catch (error) {
@@ -1505,8 +1605,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingSettingsTemplates: true })
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates`)
+      const data = requireArrayResponse<SettingsTemplate>(
+        await getInFlightRequest(requestKey, () =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates`)
+        ),
+        'Failed to load settings templates'
       )
       if (
         !isLatestRequest(requestKey, requestVersion) ||
@@ -1639,7 +1742,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ loadingErrorLogs: true })
     try {
       const qs = buildProjectScopedQuery(scopedProjectId)
-      const data = await getInFlightRequest(requestKey, () => api(`/api/error-logs?${qs}`))
+      const data = requireArrayResponse<ErrorLog>(
+        await getInFlightRequest(requestKey, () => api(`/api/error-logs?${qs}`)),
+        'Failed to load error logs'
+      )
       if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('errorLogs', scopedProjectId)) return
       markRequestSuccessful(requestKey)
       set({ errorLogs: data })
