@@ -72,6 +72,14 @@ describe('safeTextFromContent', () => {
   it('returns an empty string when no text block exists', () => {
     expect(safeTextFromContent([{ type: 'tool_use' }, { type: 'thinking' }])).toBe('')
   })
+
+  it('degrades to an empty string when content is not an array', () => {
+    // An unexpected response shape (null/undefined/object) must not throw inside
+    // .find — callers rely on the same graceful-empty behavior as for [].
+    expect(safeTextFromContent(null as never)).toBe('')
+    expect(safeTextFromContent(undefined as never)).toBe('')
+    expect(safeTextFromContent({} as never)).toBe('')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -362,6 +370,23 @@ describe('parsePromptSuggestions', () => {
     const result = parsePromptSuggestions(raw)
     expect(result).toHaveLength(1)
     expect(result[0]?.prompt_text).toBe('99')
+  })
+
+  it('extracts a prose-wrapped bare array instead of returning empty', () => {
+    // The AI is told to output only JSON, but a bare array with a prose preamble
+    // and no fences must still parse rather than silently degrading to [].
+    const raw = 'Here you go: [{"name":"Preamble shot","prompt_text":"A prompt after prose"}] Enjoy!'
+    const result = parsePromptSuggestions(raw)
+    expect(result).toHaveLength(1)
+    expect(result[0]?.name).toBe('Preamble shot')
+    expect(result[0]?.prompt_text).toBe('A prompt after prose')
+  })
+
+  it('still extracts a prose-wrapped {"prompts":[...]} object', () => {
+    const raw = 'Sure! {"prompts":[{"name":"Wrapped","prompt_text":"Wrapped prompt text"}]} Done.'
+    const result = parsePromptSuggestions(raw)
+    expect(result).toHaveLength(1)
+    expect(result[0]?.name).toBe('Wrapped')
   })
 })
 
