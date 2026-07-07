@@ -3,12 +3,16 @@
  * Uses Claude to refine user prompts with global product style settings
  */
 
-import Anthropic from '@anthropic-ai/sdk'
 import type { GlobalStyleSettings } from '@/lib/types'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
+import { createAnthropicClient } from '@/lib/anthropic-client'
 import { logger } from '@/lib/logger'
 
-const anthropic = new Anthropic()
+// Route through the shared factory so the inline generateSceneTitle path gets the
+// same bounded per-request timeout + retry policy as the AI routes. A bare
+// `new Anthropic()` would inherit the SDK's 10-minute default timeout, letting a
+// hung request pin the serverless function open until the platform maxDuration.
+const anthropic = createAnthropicClient()
 
 /**
  * Shared system prompt for generating short scene titles from a prompt text.
@@ -289,8 +293,12 @@ const CODE_FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/gi
  * would make this silently return '' even when text is present.
  * Guards against empty content arrays, which can occur when the API returns an
  * unexpected stop reason (e.g. max_tokens reached at zero output).
+ * Also tolerates a non-array `content` (null/undefined or an unexpected shape):
+ * `.find` on such a value would throw, so we degrade to '' instead — the same
+ * graceful-empty behavior callers already rely on for empty arrays.
  */
 export function safeTextFromContent(content: ReadonlyArray<{ type: string; text?: string }>): string {
+  if (!Array.isArray(content)) return ''
   const textBlock = content.find((block) => block?.type === 'text')
   return textBlock?.text ?? ''
 }
@@ -307,7 +315,10 @@ export type PromptSuggestion = {
  * 2. Outer-brace extract — handles "Here is the JSON: {...}" prose-wrapped responses
  *    that have no fences. Scanning from first '{' to last '}' avoids a JSON.parse miss
  *    on the full raw string, preventing a silent empty return that the caller would retry.
- * 3. Full raw text as final fallback.
+ * 3. Outer-bracket extract — the same idea for a prose-wrapped bare array
+ *    ("Here you go: [{...}]"). Without this, the brace extract slices out a single
+ *    inner object (which lacks a "prompts" key) and the caller silently returns [].
+ * 4. Full raw text as final fallback.
  */
 function collectJsonCandidates(raw: string): string[] {
   // matchAll internally clones the regex, so CODE_FENCE_RE.lastIndex is not mutated.
@@ -316,10 +327,15 @@ function collectJsonCandidates(raw: string): string[] {
   const lastBrace = raw.lastIndexOf('}')
   const bracketExtract =
     firstBrace !== -1 && lastBrace > firstBrace ? raw.slice(firstBrace, lastBrace + 1) : null
+  const firstBracket = raw.indexOf('[')
+  const lastBracket = raw.lastIndexOf(']')
+  const arrayExtract =
+    firstBracket !== -1 && lastBracket > firstBracket ? raw.slice(firstBracket, lastBracket + 1) : null
   const rawTrimmed = raw.trim()
   return [
     ...fencedCandidates,
     ...(bracketExtract && bracketExtract !== rawTrimmed ? [bracketExtract] : []),
+    ...(arrayExtract && arrayExtract !== bracketExtract && arrayExtract !== rawTrimmed ? [arrayExtract] : []),
     rawTrimmed,
   ]
 }
