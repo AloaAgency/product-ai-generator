@@ -29,6 +29,7 @@ const DEFAULT_ERROR_MESSAGE = 'Request failed'
 const MAX_SUGGESTED_PROMPT_COUNT = 10
 const MAX_API_RETRIES = 2
 const MAX_UPLOAD_RETRIES = 1
+const MAX_RETRY_AFTER_MS = 5_000
 const GALLERY_PAGE_SIZE = 48
 const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const requestVersions = new Map<string, number>()
@@ -120,6 +121,25 @@ const clampInteger = (value: number, min: number, max: number, fallback: number)
   if (!Number.isFinite(value)) return fallback
   return Math.min(max, Math.max(min, Math.trunc(value)))
 }
+
+const parseRetryAfterMs = (value: string | null) => {
+  if (!value) return null
+
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(MAX_RETRY_AFTER_MS, seconds * 1000)
+  }
+
+  const retryAt = Date.parse(value)
+  if (!Number.isNaN(retryAt)) {
+    return Math.min(MAX_RETRY_AFTER_MS, Math.max(0, retryAt - Date.now()))
+  }
+
+  return null
+}
+
+const getRetryDelayMs = (attempt: number, response: Response | null) =>
+  parseRetryAfterMs(response?.headers.get('retry-after') ?? null) ?? 250 * attempt
 
 const beginTrackedRequest = (key: string) => {
   const version = (requestVersions.get(key) ?? 0) + 1
@@ -332,7 +352,7 @@ const withRetry = async (
     }
 
     attempt += 1
-    await wait(250 * attempt)
+    await wait(getRetryDelayMs(attempt, response))
   }
 
   return response as Response

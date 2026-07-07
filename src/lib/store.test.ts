@@ -82,6 +82,44 @@ describe('useAppStore async scope guards', () => {
     expect(useAppStore.getState().projects).toEqual([project])
   })
 
+  it('retries retryable project fetch responses before updating state', async () => {
+    const project = {
+      id: productA,
+      user_id: 'user-a',
+      name: 'Project A',
+      description: null,
+      global_style_settings: {},
+      created_at: '2026-07-06T00:00:00.000Z',
+      updated_at: '2026-07-06T00:00:00.000Z',
+    }
+    let calls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/projects') {
+        calls += 1
+        if (calls === 1) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'busy' }), {
+              status: 503,
+              headers: {
+                'Content-Type': 'application/json',
+                'Retry-After': '0',
+              },
+            })
+          )
+        }
+        return Promise.resolve(jsonResponse([project]))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await useAppStore.getState().fetchProjects()
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(useAppStore.getState().projects).toEqual([project])
+  })
+
   it('preserves loaded gallery images when a gallery refresh returns malformed JSON', async () => {
     const image: GeneratedImage = {
       id: generatedImageA,
