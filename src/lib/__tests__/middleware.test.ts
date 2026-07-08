@@ -4,12 +4,13 @@
  * Strategy: each test resets the module registry with vi.resetModules() then
  * re-imports middleware via a dynamic import. This is necessary because
  * middleware.ts caches the derived HMAC token in module-level state
- * (`_cachedExpectedToken`); without resetting, a token cached by an earlier
+ * (`_tokenPromise`); without resetting, a token cached by an earlier
  * test would persist and cause false positives or negatives in later tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import { deriveAuthToken } from '@/lib/auth-constants'
+import { SECURITY_HEADERS } from '@/lib/security-headers'
 
 // A stable password used across all middleware tests so the cached HMAC is
 // consistent within each test (reset by vi.resetModules() between tests).
@@ -20,6 +21,12 @@ type MiddlewareFn = (req: NextRequest) => Promise<Response>
 async function importMiddleware(): Promise<MiddlewareFn> {
   const mod = await import('@/middleware')
   return mod.middleware
+}
+
+function expectSecurityHeaders(res: Response) {
+  for (const { key, value } of SECURITY_HEADERS) {
+    expect(res.headers.get(key)).toBe(value)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -44,6 +51,7 @@ describe('middleware — public paths bypass auth', () => {
     const res = await middleware(req)
     // NextResponse.next() sets x-middleware-next: 1 — confirms the request was passed through
     expect(res.headers.get('x-middleware-next')).toBe('1')
+    expectSecurityHeaders(res)
   })
 
   it('allows unauthenticated requests to /api/worker/generate — worker uses its own auth', async () => {
@@ -91,6 +99,7 @@ describe('middleware — unauthenticated requests', () => {
     const req = new NextRequest('http://localhost/api/products')
     const res = await middleware(req)
     expect(res.status).toBe(401)
+    expectSecurityHeaders(res)
     const body = await res.json()
     expect(body).toEqual({ error: 'Unauthorized' })
   })
@@ -99,7 +108,8 @@ describe('middleware — unauthenticated requests', () => {
     const req = new NextRequest('http://localhost/dashboard')
     const res = await middleware(req)
     expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('text/html')
+    expect(res.headers.get('content-type')).toContain('text/html')
+    expectSecurityHeaders(res)
     const html = await res.text()
     expect(html).toContain('<form')
     expect(html).toContain('/api/login')
@@ -111,6 +121,43 @@ describe('middleware — unauthenticated requests', () => {
     const html = await res.text()
     expect(html).toContain('name="redirect"')
     expect(html).toContain('/products/123/gallery')
+  })
+
+  it('preserves the query string in the hidden redirect field', async () => {
+    const req = new NextRequest('http://localhost/products/123?view=grid')
+    const res = await middleware(req)
+    const html = await res.text()
+    const match = html.match(/name="redirect" value="([^"]*)"/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toBe('/products/123?view=grid')
+  })
+
+  it('HTML-escapes & between multiple preserved query params', async () => {
+    const req = new NextRequest('http://localhost/products/123?view=grid&page=2')
+    const res = await middleware(req)
+    const html = await res.text()
+    const match = html.match(/name="redirect" value="([^"]*)"/)
+    expect(match).not.toBeNull()
+    // Raw attribute value uses the HTML entity; it decodes back to a literal &
+    expect(match![1]).toBe('/products/123?view=grid&amp;page=2')
+  })
+
+  it('strips the flow-internal error param from the redirect field but keeps other params', async () => {
+    const req = new NextRequest('http://localhost/dashboard?error=1&view=list')
+    const res = await middleware(req)
+    const html = await res.text()
+    const match = html.match(/name="redirect" value="([^"]*)"/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toBe('/dashboard?view=list')
+  })
+
+  it('omits the ? entirely when error was the only query param', async () => {
+    const req = new NextRequest('http://localhost/dashboard?error=1')
+    const res = await middleware(req)
+    const html = await res.text()
+    const match = html.match(/name="redirect" value="([^"]*)"/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toBe('/dashboard')
   })
 
   it('shows error message on login page when ?error query param is present', async () => {
@@ -125,6 +172,62 @@ describe('middleware — unauthenticated requests', () => {
     const res = await middleware(req)
     const html = await res.text()
     expect(html).not.toContain('Incorrect password')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Cache-control on auth-gate responses — CDN/proxy poisoning prevention
+//
+// The 401 JSON and the login HTML gate must carry `cache-control: no-store`
+// (middleware.ts). Without it a CDN or shared proxy could cache the
+// unauthorized/login response keyed only on the URL and then serve that stale
+// gate to a user who has since authenticated — or, worse, cache and replay an
+// authenticated-looking page to an anonymous visitor. These tests lock the
+// documented no-store invariant so it cannot be silently dropped.
+// ---------------------------------------------------------------------------
+
+describe('middleware — cache-control on auth-gate responses', () => {
+  let middleware: MiddlewareFn
+
+  beforeEach(async () => {
+    vi.resetModules()
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+    middleware = await importMiddleware()
+  })
+
+  afterEach(() => {
+    delete process.env.SITE_PASSWORD
+  })
+
+  it('sets cache-control: no-store on the 401 JSON for unauthenticated API requests', async () => {
+    const req = new NextRequest('http://localhost/api/products')
+    const res = await middleware(req)
+    expect(res.status).toBe(401)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('sets cache-control: no-store on the login page served to unauthenticated page requests', async () => {
+    const req = new NextRequest('http://localhost/dashboard')
+    const res = await middleware(req)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('sets cache-control: no-store on the login page even when an ?error param is present', async () => {
+    const req = new NextRequest('http://localhost/dashboard?error=1')
+    const res = await middleware(req)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('sets cache-control: no-store on the 401 when SITE_PASSWORD is not configured (fail-closed path)', async () => {
+    vi.resetModules()
+    delete process.env.SITE_PASSWORD
+    const failClosed = await importMiddleware()
+    const req = new NextRequest('http://localhost/api/products')
+    const res = await failClosed(req)
+    expect(res.status).toBe(401)
+    expect(res.headers.get('cache-control')).toBe('no-store')
   })
 })
 
@@ -230,7 +333,7 @@ describe('middleware — authenticated requests', () => {
     const res = await middleware(req)
     // Wrong token → show login page
     expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('text/html')
+    expect(res.headers.get('content-type')).toContain('text/html')
   })
 
   it('rejects a cookie that uses the right algorithm on a different password', async () => {
@@ -240,7 +343,56 @@ describe('middleware — authenticated requests', () => {
     })
     const res = await middleware(req)
     expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('text/html')
+    expect(res.headers.get('content-type')).toContain('text/html')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Transient token-derivation failure — fail closed now, recover later
+//
+// middleware.ts caches the deriveAuthToken() Promise in module state. If a
+// rejected Promise were cached forever, one transient Web Crypto fault would
+// lock every user out until the isolate restarts. These tests pin the
+// contract: while derivation is failing, requests fail closed; once it works
+// again, the cache retries instead of replaying the stale rejection.
+// ---------------------------------------------------------------------------
+
+describe('middleware — transient token-derivation failure recovers', () => {
+  afterEach(() => {
+    vi.doUnmock('@/lib/auth-constants')
+    vi.resetModules()
+    delete process.env.SITE_PASSWORD
+  })
+
+  it('fails closed while derivation fails, then accepts a valid cookie once it recovers', async () => {
+    vi.resetModules()
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+    const actual = await vi.importActual<typeof import('@/lib/auth-constants')>('@/lib/auth-constants')
+    let failing = true
+    vi.doMock('@/lib/auth-constants', () => ({
+      ...actual,
+      deriveAuthToken: async (password: string) => {
+        if (failing) throw new Error('transient web crypto failure')
+        return actual.deriveAuthToken(password)
+      },
+    }))
+    const mw = await importMiddleware()
+    const validToken = await actual.deriveAuthToken(TEST_PASSWORD)
+    const buildReq = () =>
+      new NextRequest('http://localhost/api/products', {
+        headers: { Cookie: `site-auth=${validToken}` },
+      })
+
+    // While derivation is broken, a request with a valid cookie fails closed.
+    const during = await mw(buildReq())
+    expect(during.status).toBe(401)
+
+    // Once derivation works again, the same cookie must authenticate — the
+    // earlier rejection must not have been cached permanently.
+    failing = false
+    const after = await mw(buildReq())
+    expect(after.headers.get('x-middleware-next')).toBe('1')
+    expect(after.status).not.toBe(401)
   })
 })
 
@@ -266,7 +418,7 @@ describe('middleware — SITE_PASSWORD not configured', () => {
     const res = await middleware(req)
     // No SITE_PASSWORD → isAuthenticated() returns false → show login page
     expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('text/html')
+    expect(res.headers.get('content-type')).toContain('text/html')
   })
 
   it('blocks all API requests with 401 when SITE_PASSWORD is not set', async () => {

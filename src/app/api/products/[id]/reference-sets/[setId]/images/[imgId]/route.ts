@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { logger } from '@/lib/logger'
 
 export async function DELETE(
   request: NextRequest,
@@ -27,7 +28,8 @@ export async function DELETE(
       .remove([image.storage_path])
 
     if (storageError) {
-      return NextResponse.json({ error: storageError.message }, { status: 500 })
+      logger.error('[ReferenceImageDelete] Storage deletion failed:', storageError)
+      return NextResponse.json({ error: 'Failed to delete image from storage' }, { status: 500 })
     }
 
     // Delete from DB
@@ -36,9 +38,13 @@ export async function DELETE(
       .delete()
       .eq('id', imgId)
 
-    if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
+    if (dbError) {
+      logger.error('[ReferenceImageDelete] DB deletion failed:', dbError)
+      return NextResponse.json({ error: 'Failed to delete image record' }, { status: 500 })
+    }
     return NextResponse.json({ success: true })
-  } catch {
+  } catch (err) {
+    logger.error('[ReferenceImageDelete] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

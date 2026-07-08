@@ -2,9 +2,10 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { slugify, extractVideoThumbnail, buildThumbnailPath } from '@/lib/image-utils'
 import { resolveGoogleApiKey } from '@/lib/google-api-keys'
-import { sanitizePublicErrorMessage } from '@/lib/request-guards'
 import type { GlobalStyleSettings } from '@/lib/types'
 import { isLtxModel, normalizeDurationValue, parsePositiveNumber } from '@/lib/video-constants'
+import { logger } from '@/lib/logger'
+import { redactSensitiveText } from '@/lib/redact-secrets'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const MAX_PROMPT_LENGTH = 4_000
@@ -105,11 +106,15 @@ function getTrimmedStringOrNull(value: unknown) {
 }
 
 function sanitizeExternalErrorMessage(
-  value: unknown,
+  value: string,
   fallback: string,
   maxLength = 240
 ) {
-  return sanitizePublicErrorMessage(value, { fallback, maxLength })
+  const normalized = redactSensitiveText(value)
+
+  if (!normalized) return fallback
+  if (normalized.length <= maxLength) return normalized
+  return `${normalized.slice(0, maxLength - 3)}...`
 }
 
 function createExternalServiceError(context: string, detail: string) {
@@ -352,12 +357,23 @@ async function fetchFrameBytes(frameRef: FrameRef, label: 'start' | 'end') {
   }
 }
 
+// Thrown when the generation job was cancelled by the user while a video was
+// still being generated. Callers must not record this as a failure — the job
+// status is already 'cancelled' in the database.
+export class VideoJobCancelledError extends Error {
+  constructor() {
+    super('Video generation cancelled by user')
+    this.name = 'VideoJobCancelledError'
+  }
+}
+
 export async function pollVeoOperation(
   baseUrl: string,
   operationName: string,
   apiKey: string,
   pollIntervalMs: number,
-  timeoutMs: number
+  timeoutMs: number,
+  shouldCancel?: () => Promise<boolean>
 ) {
   const startedAt = Date.now()
   let operation: Record<string, unknown> | null = null
@@ -366,6 +382,10 @@ export async function pollVeoOperation(
     if (Date.now() - startedAt > timeoutMs) {
       const timeoutSeconds = Math.round(timeoutMs / 1000)
       throw new Error(`Veo generation timed out after ${timeoutSeconds}s`)
+    }
+
+    if (shouldCancel && await shouldCancel()) {
+      throw new VideoJobCancelledError()
     }
 
     if (operation) {
@@ -387,10 +407,10 @@ export async function pollVeoOperation(
 }
 
 export function getVeoConfig(apiKeyOverride?: string | null): VeoConfig {
+  // No env-var fallback: video generation must use the requesting project's own
+  // key. Falling back to a shared/global key silently bills the wrong account.
   const apiKey = getTrimmedStringOrNull(apiKeyOverride)
-    || getTrimmedStringOrNull(process.env.GOOGLE_AI_API_KEY)
-    || getTrimmedStringOrNull(process.env.GEMINI_API_KEY)
-  if (!apiKey) throw new Error('Google AI API key not configured')
+  if (!apiKey) throw new Error('No Google AI API key configured for this project. Add and activate a key in the project settings.')
 
   return {
     apiKey,
@@ -419,7 +439,7 @@ export async function buildVeoRequestParts(
 
   if (frameRefs.end?.url) {
     if (!frameRefs.start?.url) {
-      console.warn('[Veo] Ignoring end frame because no start frame was provided.')
+      logger.warn('[Veo] Ignoring end frame because no start frame was provided.')
     }
   }
 
@@ -464,7 +484,7 @@ export async function buildVeoRequestParts(
 function logVeoParameters(config: VeoConfig, parameters: Record<string, unknown>) {
   if (!config.shouldLog) return
 
-  console.log('[Veo] parameters', {
+  logger.debug('[Veo] parameters', {
     model: config.model,
     durationSeconds: parameters.durationSeconds,
     resolution: parameters.resolution,
@@ -510,7 +530,31 @@ function getVeoOperationErrorMessage(error: unknown) {
   return sanitizeExternalErrorMessage(safeJsonStringify(error) || '', 'Unknown error')
 }
 
-export function getVeoVideoUri(operation: Record<string, unknown>) {
+// The video download request attaches the project's Google API key as an
+// x-goog-api-key header, and fetch does NOT strip custom headers on
+// cross-origin redirects (only Authorization/Cookie). Downloading from an
+// unvalidated URI would therefore hand the key to whatever host the operation
+// response names. Only Google-owned hosts and the configured API base host
+// (which may be a proxy) are allowed to receive it.
+const TRUSTED_VEO_DOWNLOAD_HOST_SUFFIXES = ['.googleapis.com', '.googleusercontent.com']
+
+function isTrustedVeoDownloadHost(hostname: string, baseUrl: string) {
+  const host = hostname.toLowerCase()
+
+  let baseHost: string | null = null
+  try {
+    baseHost = new URL(baseUrl).hostname.toLowerCase()
+  } catch {
+    baseHost = null
+  }
+  if (baseHost && host === baseHost) return true
+
+  return TRUSTED_VEO_DOWNLOAD_HOST_SUFFIXES.some(
+    (suffix) => host.endsWith(suffix) || host === suffix.slice(1)
+  )
+}
+
+export function getVeoVideoUri(operation: Record<string, unknown>, baseUrl: string) {
   if (operation?.error) {
     throw createExternalServiceError('Veo operation error', getVeoOperationErrorMessage(operation.error))
   }
@@ -520,11 +564,15 @@ export function getVeoVideoUri(operation: Record<string, unknown>) {
     | undefined
   const videoUri = response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri
   if (!videoUri) throw new Error('No video URI in Veo response')
+  let parsed: URL
   try {
-    const parsed = new URL(videoUri)
+    parsed = new URL(videoUri)
     if (parsed.protocol !== 'https:') throw new Error('unsupported protocol')
   } catch {
     throw new Error('Invalid video URI in Veo response')
+  }
+  if (!isTrustedVeoDownloadHost(parsed.hostname, baseUrl)) {
+    throw new Error('Untrusted video URI host in Veo response')
   }
 
   return videoUri
@@ -692,13 +740,13 @@ async function uploadVideoThumbnail(
       .upload(thumbStoragePath, thumb.buffer, { contentType: thumb.mimeType })
 
     if (thumbUploadErr) {
-      console.warn(`Video thumbnail upload failed: ${thumbUploadErr.message}`)
+      logger.warn(`Video thumbnail upload failed: ${thumbUploadErr.message}`)
       return null
     }
 
     return thumbStoragePath
   } catch (err) {
-    console.warn('Video thumbnail extraction failed:', err)
+    logger.warn('Video thumbnail extraction failed:', err)
     return null
   }
 }
@@ -706,6 +754,7 @@ async function uploadVideoThumbnail(
 async function createGeneratedVideoRecord(
   supabase: ReturnType<typeof createServiceClient>,
   scene: SceneRecord,
+  productId: string,
   jobId: string | null | undefined,
   storagePath: string,
   thumbStoragePath: string | null,
@@ -714,7 +763,7 @@ async function createGeneratedVideoRecord(
   const { data: record, error: insertErr } = await supabase
     .from(T.generated_images)
     .insert({
-      product_id: scene.product_id,
+      product_id: scene.product_id || productId,
       job_id: jobId || null,
       variation_number: 1,
       storage_path: storagePath,
@@ -746,10 +795,40 @@ async function cleanupUploadedVideoAssets(
       .remove(paths)
 
     if (error) {
-      console.warn('Failed to clean up uploaded video assets:', error.message)
+      logger.warn('Failed to clean up uploaded video assets:', error.message)
     }
   } catch (error) {
-    console.warn('Failed to clean up uploaded video assets:', error)
+    logger.warn('Failed to clean up uploaded video assets:', error)
+  }
+}
+
+// Reads the job status at most once per interval so a long Veo poll notices a
+// user cancellation without hammering the database.
+function createJobCancellationChecker(
+  supabase: ReturnType<typeof createServiceClient>,
+  jobId: string,
+  minIntervalMs = 5_000
+) {
+  let lastCheckAt = 0
+  let cancelled = false
+
+  return async () => {
+    if (cancelled) return true
+    if (Date.now() - lastCheckAt < minIntervalMs) return cancelled
+
+    lastCheckAt = Date.now()
+    const { data, error } = await supabase
+      .from(T.generation_jobs)
+      .select('status')
+      .eq('id', jobId)
+      .single()
+
+    // A transient status read must not abort a generation that is otherwise
+    // progressing; re-check on the next interval.
+    if (error) return cancelled
+
+    cancelled = data?.status === 'cancelled'
+    return cancelled
   }
 }
 
@@ -765,12 +844,13 @@ export async function generateSceneVideo(
 
   const isLtx = isLtxModel(resolvedModel)
   const isVeo = isVeoModel(resolvedModel)
+  const shouldCancel = jobId ? createJobCancellationChecker(supabase, jobId) : undefined
 
   // Generate video
   let result: VideoGenerationResult
 
   if (isVeo) {
-    result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings, geminiApiKey)
+    result = await generateWithVeo3(scene.motion_prompt, frameRefs, videoSettings, geminiApiKey, shouldCancel)
   } else if (isLtx) {
     result = await generateWithLtx(scene.motion_prompt, frameRefs, videoSettings)
   } else {
@@ -787,7 +867,7 @@ export async function generateSceneVideo(
   const thumbStoragePath = await uploadVideoThumbnail(supabase, storagePath, result.buffer)
 
   try {
-    return await createGeneratedVideoRecord(supabase, scene, jobId, storagePath, thumbStoragePath, result)
+    return await createGeneratedVideoRecord(supabase, scene, productId, jobId, storagePath, thumbStoragePath, result)
   } catch (error) {
     await cleanupUploadedVideoAssets(supabase, [storagePath, thumbStoragePath])
     throw error
@@ -802,7 +882,8 @@ async function generateWithVeo3(
   prompt: string,
   frameRefs: FrameRefs,
   settings: SceneVideoSettings,
-  apiKeyOverride?: string | null
+  apiKeyOverride?: string | null,
+  shouldCancel?: () => Promise<boolean>
 ): Promise<VideoGenerationResult> {
   const config = getVeoConfig(apiKeyOverride)
   const { instance, parameters } = await buildVeoRequestParts(prompt, frameRefs, settings, config.model)
@@ -816,10 +897,11 @@ async function generateWithVeo3(
     operationName,
     config.apiKey,
     config.pollIntervalMs,
-    config.timeoutMs
+    config.timeoutMs,
+    shouldCancel
   )
 
-  return downloadVeoVideo(getVeoVideoUri(operation), config.apiKey)
+  return downloadVeoVideo(getVeoVideoUri(operation, config.baseUrl), config.apiKey)
 }
 
 export function getLtxConfig(settings: SceneVideoSettings): LtxConfig {

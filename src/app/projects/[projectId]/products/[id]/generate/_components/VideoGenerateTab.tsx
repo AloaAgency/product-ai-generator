@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useAppStore } from '@/lib/store'
+import { api, uploadToSignedUrl, cleanupImageRecord } from '@/lib/api-client'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import type { GeneratedImage } from '@/lib/types'
 import {
@@ -39,15 +40,6 @@ type SignedImageUrls = {
   expires_at: number
 }
 
-const api = async (url: string, options?: RequestInit) => {
-  const res = await fetch(url, options)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || res.statusText)
-  }
-  return res.json()
-}
-
 const fieldClassName = 'w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none'
 const selectClassName = 'w-full min-h-11 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-3 text-sm text-zinc-200 outline-none'
 const thumbButtonClassName = 'flex h-24 w-24 items-center justify-center overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 transition-colors hover:border-blue-500 sm:h-20 sm:w-20'
@@ -55,7 +47,7 @@ const secondaryActionClassName = 'inline-flex min-h-11 items-center justify-cent
 const iconButtonClassName = 'inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-current transition-opacity hover:opacity-100'
 
 export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
-  const { fetchGenerationJobs } = useAppStore()
+  const fetchGenerationJobs = useAppStore((s) => s.fetchGenerationJobs)
 
   // Scene form state
   const [title, setTitle] = useState('')
@@ -125,8 +117,12 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
     try {
       const data = await api(`/api/products/${productId}/gallery?media_type=image&approval_status=approved&limit=200`)
       setGalleryImages(data.images ?? data)
-    } catch {
+    } catch (err) {
       setGalleryImages([])
+      setNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to load gallery images',
+      })
     } finally {
       setLoadingGallery(false)
     }
@@ -162,17 +158,23 @@ export function VideoGenerateTab({ productId }: VideoGenerateTabProps) {
       if (!firstResult || firstResult.error || !firstResult.signed_url || !firstResult.image?.id) {
         throw new Error(firstResult?.error || 'Failed to prepare upload')
       }
-      await fetch(firstResult.signed_url, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        body: file,
-      })
+      try {
+        await uploadToSignedUrl(firstResult.signed_url, file, file.type)
+      } catch (err) {
+        await cleanupImageRecord(firstResult.image.id)
+        throw err
+      }
       if (framePicker.slot === 'start') {
         setStartFrameId(firstResult.image.id)
       } else {
         setEndFrameId(firstResult.image.id)
       }
       setFramePicker(null)
+    } catch (err) {
+      setNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Frame upload failed',
+      })
     } finally {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''

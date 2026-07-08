@@ -152,6 +152,26 @@ describe('sanitizeWorkerErrorMessage', () => {
     expect(safe).toContain('[redacted]')
   })
 
+  it('redacts JSON-style secret fields from provider payloads', () => {
+    const err = new Error('Provider payload {"gemini_api_key":"AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","token":"session-token"}')
+    const safe = sanitizeWorkerErrorMessage(err)
+
+    expect(safe).not.toContain('AIzaSy')
+    expect(safe).not.toContain('session-token')
+    expect(safe).toContain('"gemini_api_key":"[redacted]"')
+    expect(safe).toContain('"token":"[redacted]"')
+  })
+
+  it('redacts standalone provider keys even without a field name', () => {
+    const safe = sanitizeWorkerErrorMessage(
+      'Provider rejected key AIzaSyBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB and sk-proj-CCCCCCCCCCCCCCCCCCCC'
+    )
+
+    expect(safe).not.toContain('AIzaSy')
+    expect(safe).not.toContain('sk-proj')
+    expect(safe.match(/\[redacted\]/g)?.length).toBe(2)
+  })
+
   it('returns the fallback string when the error is null', () => {
     expect(sanitizeWorkerErrorMessage(null)).toBe('Worker error')
     expect(sanitizeWorkerErrorMessage(null, 'Custom fallback')).toBe('Custom fallback')

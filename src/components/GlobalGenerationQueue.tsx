@@ -11,40 +11,64 @@ import {
   getFailureTimestamp,
   getGenerationJobProgress,
   POLL_MS,
+  shouldPollGenerationQueue,
   shouldShowIndeterminateJobProgress,
 } from './globalGenerationQueue.helpers'
-import { getSafeQueueErrorMessage } from './errorDisplay.helpers'
+import { getSafeErrorMessage, getSafeQueueErrorMessage } from './errorDisplay.helpers'
 
 function useGenerationQueuePolling({
   productId,
   fetchGenerationJobs,
   hasActiveJobs,
+  onPollError,
+  onPollSuccess,
 }: {
   productId: string
   fetchGenerationJobs: (productId: string) => Promise<void>
   hasActiveJobs: boolean
+  onPollError: (error: unknown) => void
+  onPollSuccess: () => void
 }) {
   const isPollingRef = useRef(false)
+  const lastPollAtRef = useRef(0)
 
   useEffect(() => {
     let cancelled = false
 
-    const runPoll = async () => {
-      if (cancelled || document.visibilityState === 'hidden' || isPollingRef.current) return
+    const runPoll = async ({ force = false }: { force?: boolean } = {}) => {
+      if (cancelled) return
+
+      const now = Date.now()
+      if (!force && !shouldPollGenerationQueue({
+        hasActiveJobs,
+        isDocumentVisible: document.visibilityState === 'visible',
+        isPolling: isPollingRef.current,
+        timeSinceLastPollMs: now - lastPollAtRef.current,
+      })) {
+        return
+      }
+
+      if (isPollingRef.current) return
+
       isPollingRef.current = true
       try {
         await fetchGenerationJobs(productId)
+        lastPollAtRef.current = now
+        if (!cancelled) onPollSuccess()
+      } catch (error) {
+        if (!cancelled) onPollError(error)
       } finally {
         isPollingRef.current = false
       }
     }
 
-    void runPoll()
     if (!hasActiveJobs) {
       return () => {
         cancelled = true
       }
     }
+
+    void runPoll({ force: true })
 
     const interval = window.setInterval(() => {
       void runPoll()
@@ -54,14 +78,19 @@ function useGenerationQueuePolling({
         void runPoll()
       }
     }
+    const handleOnline = () => {
+      void runPoll()
+    }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('online', handleOnline)
     return () => {
       cancelled = true
       document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('online', handleOnline)
       window.clearInterval(interval)
     }
-  }, [fetchGenerationJobs, hasActiveJobs, productId])
+  }, [fetchGenerationJobs, hasActiveJobs, onPollError, onPollSuccess, productId])
 }
 
 export default function GlobalGenerationQueue({
@@ -80,6 +109,8 @@ export default function GlobalGenerationQueue({
   const [expanded, setExpanded] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearingFailures, setClearingFailures] = useState(false)
+  const [pollError, setPollError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const {
     activeJobs,
@@ -93,17 +124,34 @@ export default function GlobalGenerationQueue({
   } = useMemo(() => deriveGenerationQueueState(generationJobs), [generationJobs])
   const showIndeterminateOverallBar = hasActiveJobs && totals.totalCompleted === 0
 
+  useEffect(() => {
+    if (!hasActiveJobs) {
+      setExpanded(false)
+      setPollError(null)
+      setActionError(null)
+    }
+  }, [hasActiveJobs])
+
+  const handlePollError = useCallback((error: unknown) => {
+    setPollError(
+      getSafeErrorMessage(
+        error instanceof Error ? error.message : null,
+        'Generation queue could not refresh. Retrying automatically.'
+      )
+    )
+  }, [])
+
+  const handlePollSuccess = useCallback(() => {
+    setPollError(null)
+  }, [])
+
   useGenerationQueuePolling({
     productId,
     fetchGenerationJobs,
     hasActiveJobs,
+    onPollError: handlePollError,
+    onPollSuccess: handlePollSuccess,
   })
-
-  useEffect(() => {
-    if (!hasActiveJobs) {
-      setExpanded(false)
-    }
-  }, [hasActiveJobs])
 
   const handleToggleExpanded = useCallback(() => {
     setExpanded((prev) => !prev)
@@ -121,7 +169,15 @@ export default function GlobalGenerationQueue({
     if (!confirmed) return
     try {
       setClearing(true)
+      setActionError(null)
       await clearGenerationQueue(productId)
+    } catch (error) {
+      setActionError(
+        getSafeErrorMessage(
+          error instanceof Error ? error.message : null,
+          'Failed to clear generation queue. Please try again.'
+        )
+      )
     } finally {
       setClearing(false)
     }
@@ -134,7 +190,15 @@ export default function GlobalGenerationQueue({
     if (!confirmed) return
     try {
       setClearingFailures(true)
+      setActionError(null)
       await clearGenerationFailures(productId)
+    } catch (error) {
+      setActionError(
+        getSafeErrorMessage(
+          error instanceof Error ? error.message : null,
+          'Failed to clear failed jobs. Please try again.'
+        )
+      )
     } finally {
       setClearingFailures(false)
     }
@@ -157,6 +221,7 @@ export default function GlobalGenerationQueue({
     failedCount,
     totals,
   })
+  const queueNotice = actionError ?? pollError
 
   return (
     <section
@@ -221,6 +286,16 @@ export default function GlobalGenerationQueue({
           )}
         </div>
       </div>
+
+      {queueNotice && (
+        <div
+          className="mx-3 mb-3 flex items-start gap-2 rounded-lg border border-red-900/40 bg-red-950/30 px-3 py-2 text-sm text-red-200 sm:mx-4"
+          role="alert"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+          <span className="break-words">{queueNotice}</span>
+        </div>
+      )}
 
       <div id={detailsId} className="px-3 pb-4 sm:px-4">
         <div className="flex flex-col gap-1 text-xs text-zinc-400 sm:flex-row sm:items-center sm:justify-between">

@@ -21,8 +21,6 @@ import {
   MAX_BUG_REPORT_CAPTION_LENGTH,
   MAX_BUG_REPORT_DESCRIPTION_LENGTH,
   MAX_BUG_REPORT_TITLE_LENGTH,
-  normalizeBugReportMultiline,
-  normalizeBugReportSingleLine,
   parseBugReportResponse,
   releaseBugReportImagePreviews,
   stripBugReportControlChars,
@@ -42,6 +40,7 @@ export function BugReportWidget() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
   const imagesRef = useRef<SelectedBugReportImage[]>([])
+  const submitInFlightRef = useRef(false)
   const dialogTitleId = useId()
   const dialogDescriptionId = useId()
 
@@ -53,7 +52,7 @@ export function BugReportWidget() {
   }, [toast])
 
   const handleClose = () => {
-    if (isSubmitting) return
+    if (isSubmitting || submitInFlightRef.current) return
     setIsOpen(false)
   }
 
@@ -79,17 +78,30 @@ export function BugReportWidget() {
       currentCount: images.length,
       files: Array.from(files),
     })
-    const newImages = buildSelectedBugReportImages(acceptedFiles)
+    try {
+      const newImages = buildSelectedBugReportImages(acceptedFiles)
 
-    if (errors.length > 0) setToast({ message: errors.join('. '), type: 'error' })
-    if (newImages.length > 0) setImages((prev) => [...prev, ...newImages])
-    if (fileInputRef.current) fileInputRef.current.value = ''
+      if (errors.length > 0) setToast({ message: errors.join('. '), type: 'error' })
+      if (newImages.length > 0) setImages((prev) => [...prev, ...newImages])
+    } catch (error) {
+      setToast({
+        message: getSafeErrorMessage(
+          error instanceof Error ? error.message : null,
+          'Could not prepare selected screenshots. Please try again.'
+        ),
+        type: 'error',
+      })
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
   }
 
   const removeImage = (index: number) => {
     setImages((prev) => {
       const updated = [...prev]
-      releaseBugReportImagePreviews([updated[index]])
+      const removed = updated[index]
+      if (!removed) return prev
+      releaseBugReportImagePreviews([removed])
       updated.splice(index, 1)
       return updated
     })
@@ -98,6 +110,7 @@ export function BugReportWidget() {
   const updateImageCaption = (index: number, caption: string) => {
     setImages((prev) => {
       const updated = [...prev]
+      if (!updated[index]) return prev
       updated[index] = {
         ...updated[index],
         caption: clampBugReportText(stripBugReportControlChars(caption), MAX_BUG_REPORT_CAPTION_LENGTH),
@@ -108,19 +121,21 @@ export function BugReportWidget() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (submitInFlightRef.current) return
     if (!title.trim() || !description.trim()) {
       setToast({ message: 'Please provide a title and description', type: 'error' })
       return
     }
 
+    submitInFlightRef.current = true
     setIsSubmitting(true)
     try {
-      const normalizedTitle = normalizeBugReportSingleLine(title, MAX_BUG_REPORT_TITLE_LENGTH)
-      const normalizedDescription = normalizeBugReportMultiline(description, MAX_BUG_REPORT_DESCRIPTION_LENGTH)
+      // createBugReportFormData normalizes the title/description itself, so the
+      // raw field values are passed straight through here.
       const formData = createBugReportFormData({
         type,
-        title: normalizedTitle,
-        description: normalizedDescription,
+        title,
+        description,
         images,
       })
 
@@ -152,6 +167,7 @@ export function BugReportWidget() {
         type: 'error',
       })
     } finally {
+      submitInFlightRef.current = false
       setIsSubmitting(false)
     }
   }
@@ -198,7 +214,7 @@ export function BugReportWidget() {
           aria-labelledby={dialogTitleId}
           aria-describedby={dialogDescriptionId}
         >
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={handleClose} />
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={handleClose} />
 
           <div
             className="relative z-10 mx-4 flex max-h-[90vh] w-full max-w-lg flex-col overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl"

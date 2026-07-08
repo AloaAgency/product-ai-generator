@@ -26,7 +26,7 @@ function SectionCard({
   children: React.ReactNode
 }) {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+    <div id={id} className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden scroll-mt-4">
       <button
         onClick={onToggle}
         className="w-full flex items-center justify-between p-4 text-left hover:bg-zinc-800/50 transition-colors"

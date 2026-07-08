@@ -90,6 +90,28 @@ export const getLightboxDisplayName = ({
   currentIndex: number
 }) => fileName || `Variation ${variationNumber ?? currentIndex + 1}`
 
+// Format an asset's generation timestamp for the lightbox header. Returns a compact
+// label (e.g. "Jul 1, 2026") plus a full date+time for the hover tooltip, so users can
+// correlate assets with generation dates when troubleshooting billing. Returns null for
+// missing/unparseable timestamps.
+export const formatGeneratedAt = (
+  createdAt?: string | null
+): { short: string; full: string } | null => {
+  if (!createdAt) return null
+  const date = new Date(createdAt)
+  if (Number.isNaN(date.getTime())) return null
+  return {
+    short: date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
+    full: date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }),
+  }
+}
+
 export const getLightboxWarmupIndexes = (currentIndex: number) => [
   currentIndex,
   currentIndex - 1,
@@ -120,10 +142,7 @@ export const buildRegenerateUrl = ({
   image,
 }: {
   projectId?: string | null
-  image: Pick<
-    LightboxImage,
-    'productId' | 'prompt' | 'reference_set_id' | 'texture_set_id' | 'product_image_count' | 'texture_image_count'
-  >
+  image: Pick<LightboxImage, 'productId' | 'prompt' | 'reference_sets'>
 }) => {
   const safeProjectId = sanitizeRouteSegment(projectId)
   const safeProductId = sanitizeRouteSegment(image.productId)
@@ -131,10 +150,9 @@ export const buildRegenerateUrl = ({
 
   const params = new URLSearchParams()
   if (image.prompt) params.set('prompt', image.prompt)
-  if (image.reference_set_id) params.set('reference_set_id', image.reference_set_id)
-  if (image.texture_set_id) params.set('texture_set_id', image.texture_set_id)
-  if (image.product_image_count != null) params.set('product_image_count', String(image.product_image_count))
-  if (image.texture_image_count != null) params.set('texture_image_count', String(image.texture_image_count))
+  if (image.reference_sets && image.reference_sets.length > 0) {
+    params.set('reference_sets', JSON.stringify(image.reference_sets))
+  }
 
   return `/projects/${safeProjectId}/products/${safeProductId}/generate?${params.toString()}`
 }
@@ -149,6 +167,7 @@ export type LightboxKeyboardAction =
   | 'reject'
   | 'download'
   | 'requestChanges'
+  | 'copyPrompt'
   | 'delete'
   | 'blurNotes'
   | 'none'
@@ -202,6 +221,9 @@ export const getKeyboardAction = ({
     case 'c':
     case 'C':
       return { action: 'requestChanges', preventDefault: false }
+    case 'p':
+    case 'P':
+      return { action: 'copyPrompt', preventDefault: false }
     default:
       return { action: 'none', preventDefault: false }
   }

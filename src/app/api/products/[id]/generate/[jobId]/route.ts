@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { logger } from '@/lib/logger'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 
@@ -13,24 +14,27 @@ export async function GET(
   try {
     const supabase = createServiceClient()
 
-    // Fetch job
-    const { data: job, error: jobError } = await supabase
-      .from(T.generation_jobs)
-      .select('*')
-      .eq('id', jobId)
-      .eq('product_id', productId)
-      .single()
+    // Both queries key on jobId — fetch in parallel
+    const [
+      { data: job, error: jobError },
+      { data: images },
+    ] = await Promise.all([
+      supabase
+        .from(T.generation_jobs)
+        .select('*')
+        .eq('id', jobId)
+        .eq('product_id', productId)
+        .single(),
+      supabase
+        .from(T.generated_images)
+        .select('*')
+        .eq('job_id', jobId)
+        .order('variation_number', { ascending: true }),
+    ])
 
     if (jobError || !job) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 })
     }
-
-    // Fetch generated images for this job
-    const { data: images } = await supabase
-      .from(T.generated_images)
-      .select('*')
-      .eq('job_id', jobId)
-      .order('variation_number', { ascending: true })
 
     const imageItems = (images || []).filter((img) => img.media_type !== 'video')
     const videoItems = (images || []).filter((img) => img.media_type === 'video')
@@ -57,12 +61,12 @@ export async function GET(
     const signedImagesMap = new Map<string, string>(
       (signedImagesResult.data || [])
         .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+        .map((item) => [item.path!, item.signedUrl!])
     )
     const signedVideosMap = new Map<string, string>(
       (signedVideosResult.data || [])
         .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+        .map((item) => [item.path!, item.signedUrl!])
     )
 
     const signedImages = (images || []).map((img) => ({
@@ -82,7 +86,7 @@ export async function GET(
 
     return NextResponse.json({ job, images: signedImages })
   } catch (err) {
-    console.error('[JobStatus] Error:', err)
+    logger.error('[JobStatus] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -122,13 +126,13 @@ export async function DELETE(
       .eq('id', jobId)
 
     if (deleteError) {
-      console.error('[Job DELETE]', deleteError)
+      logger.error('[Job DELETE]', deleteError)
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
     return NextResponse.json({ deleted: jobId })
   } catch (err) {
-    console.error('[Job DELETE]', err)
+    logger.error('[Job DELETE]', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

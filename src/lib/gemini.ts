@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto'
+import { logger } from '@/lib/logger'
+import { redactSensitiveText } from '@/lib/redact-secrets'
 
 export type GeminiImageResolution = '2K' | '4K'
 
@@ -21,6 +23,42 @@ export interface GeminiImageResult {
   raw: unknown
 }
 
+type GeminiRequestPart =
+  | { inlineData: { mimeType: string; data: string } }
+  | { text: string }
+
+type GeminiInlineData = {
+  data?: unknown
+  mimeType?: unknown
+  mime_type?: unknown
+}
+
+type GeminiResponsePart = {
+  text?: unknown
+  inlineData?: GeminiInlineData
+  inline_data?: GeminiInlineData
+}
+
+type GeminiCandidate = {
+  content?: {
+    parts?: GeminiResponsePart[]
+  }
+  finishReason?: string
+}
+
+type GeminiApiResponse = {
+  candidates?: GeminiCandidate[]
+  data?: {
+    candidates?: GeminiCandidate[]
+  }
+  error?: {
+    message?: string
+    code?: string | number
+    status?: string | number
+  }
+  message?: string
+}
+
 const DEFAULT_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview'
 const DEFAULT_RESOLUTION = (process.env.GEMINI_IMAGE_RESOLUTION_DEFAULT as GeminiImageResolution) || '4K'
 
@@ -29,7 +67,7 @@ const resolveEndpoint = (model: string) =>
 
 const normalizeResolution = (value?: GeminiImageResolution) => (value === '2K' ? '2K' : DEFAULT_RESOLUTION)
 
-const extractInlineImage = (response: any): { mimeType: string; data: string } | null => {
+const extractInlineImage = (response: GeminiApiResponse): { mimeType: string; data: string } | null => {
   const candidates = response?.candidates || response?.data?.candidates
   if (!Array.isArray(candidates)) return null
 
@@ -39,9 +77,10 @@ const extractInlineImage = (response: any): { mimeType: string; data: string } |
 
     for (const part of parts) {
       const inline = part?.inlineData || part?.inline_data
-      if (inline?.data && (inline?.mimeType || inline?.mime_type)) {
+      const mimeType = inline?.mimeType || inline?.mime_type
+      if (typeof inline?.data === 'string' && typeof mimeType === 'string') {
         return {
-          mimeType: inline.mimeType || inline.mime_type,
+          mimeType,
           data: inline.data,
         }
       }
@@ -55,9 +94,11 @@ const MAX_RETRIES = 3
 const RETRY_DELAYS = [2000, 5000, 10000]
 
 export async function generateGeminiImage(request: GeminiImageRequest): Promise<GeminiImageResult> {
-  const apiKey = request.apiKey || process.env.GEMINI_API_KEY
+  // No env-var fallback: generation must use the requesting project's own key.
+  // Falling back to a shared/global key silently bills the wrong account.
+  const apiKey = request.apiKey
   if (!apiKey) {
-    throw new Error('Gemini API key is not configured')
+    throw new Error('No Gemini API key configured for this project. Add and activate a key in the project settings.')
   }
 
   const model = request.model || DEFAULT_MODEL
@@ -66,7 +107,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   const requestId = request.requestId || randomUUID()
 
   // Build parts array: reference images first, then text prompt
-  const parts: any[] = []
+  const parts: GeminiRequestPart[] = []
 
   // Add reference images if provided
   if (request.referenceImages?.length) {
@@ -101,11 +142,11 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       const delay = RETRY_DELAYS[attempt - 1] || RETRY_DELAYS[RETRY_DELAYS.length - 1]
-      console.log(`[Gemini] Retry attempt ${attempt}/${MAX_RETRIES} after ${delay}ms delay...`)
+      logger.debug(`[Gemini] Retry attempt ${attempt}/${MAX_RETRIES} after ${delay}ms delay...`)
       await new Promise(resolve => setTimeout(resolve, delay))
     }
 
-    console.log(`[Gemini] Calling ${model} for image generation${attempt > 0 ? ` (attempt ${attempt + 1})` : ''}...`)
+    logger.debug(`[Gemini] Calling ${model} for image generation${attempt > 0 ? ` (attempt ${attempt + 1})` : ''}...`)
     const response = await fetch(resolveEndpoint(model), {
       method: 'POST',
       headers: {
@@ -116,12 +157,18 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
       signal: request.signal,
     })
 
-    const raw = await response.json().catch(() => ({}))
+    const raw = await response.json().catch(() => ({})) as GeminiApiResponse
 
     if (!response.ok) {
-      const message = raw?.error?.message || raw?.message || response.statusText
+      // Provider error text/objects can echo back credentials supplied in the
+      // request (e.g. the x-goog-api-key value). Route everything that gets
+      // logged or surfaced through the shared redactor — the same single source
+      // of truth used by sanitizeWorkerErrorMessage / sanitizeExternalErrorMessage.
+      const rawMessage = raw?.error?.message || raw?.message || response.statusText
+      const message = redactSensitiveText(rawMessage)
       const errorCode = raw?.error?.code || raw?.error?.status || response.status
-      console.error(`[Gemini] API error (${response.status}):`, message, JSON.stringify(raw?.error || raw, null, 2))
+      const safeErrorDetail = raw?.error ? redactSensitiveText(JSON.stringify(raw.error)) : null
+      logger.error(`[Gemini] API error (${response.status}):`, message, safeErrorDetail)
 
       if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
         lastError = new Error(response.status === 429
@@ -145,19 +192,19 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
       throw new Error(message || `Gemini error ${errorCode || response.status}`)
     }
 
-    console.log(`[Gemini] Successfully received response`)
+    logger.debug(`[Gemini] Successfully received response`)
 
     const inline = extractInlineImage(raw)
     if (!inline) {
       // Log the response structure to help diagnose missing image data
       const textParts = raw?.candidates?.[0]?.content?.parts
-        ?.filter((p: any) => p.text)
-        ?.map((p: any) => p.text)
+        ?.filter((p) => typeof p.text === 'string')
+        ?.map((p) => p.text)
         ?.join(' ') || ''
       const finishReason = raw?.candidates?.[0]?.finishReason || 'unknown'
-      console.error(
+      logger.error(
         `[Gemini] Response did not include image data. finishReason=${finishReason}, ` +
-        `textResponse=${textParts.slice(0, 200)}, ` +
+        `textResponse=${redactSensitiveText(textParts).slice(0, 200)}, ` +
         `candidateCount=${raw?.candidates?.length || 0}, ` +
         `model=${model}`
       )

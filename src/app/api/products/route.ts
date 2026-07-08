@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const PLACEHOLDER_USER_ID = '00000000-0000-0000-0000-000000000000'
 
@@ -17,6 +19,7 @@ export async function GET(request: NextRequest) {
       .from(T.products)
       .select('*')
       .order('created_at', { ascending: false })
+      .limit(MAX_LIST_ROWS)
 
     if (projectId) {
       query = query.eq('project_id', projectId)
@@ -24,9 +27,10 @@ export async function GET(request: NextRequest) {
 
     const { data, error } = await query
 
-    if (error) { console.error('[Products GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Products GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    logger.error('[Products GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -34,10 +38,9 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
     const { name, description, global_style_settings, project_id } = body
 
     if (!name) {
@@ -65,9 +68,10 @@ export async function POST(request: NextRequest) {
       .select()
       .single()
 
-    if (error) { console.error('[Products POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Products POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
-  } catch {
+  } catch (err) {
+    logger.error('[Products POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

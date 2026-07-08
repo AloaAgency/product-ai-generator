@@ -1,19 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { sanitizePublicErrorMessage, sanitizeUuidArray } from '@/lib/request-guards'
+import { sanitizePublicErrorMessage, sanitizeUuidArray, parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const MAX_BULK_DELETE = 200
 
 export async function POST(request: NextRequest) {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
-    }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
 
     const { imageIds } = body as { imageIds?: string[] }
 
@@ -32,10 +29,10 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
-    // Fetch all image records
+    // Fetch all image records — only the storage paths are needed to delete.
     const { data: images, error: fetchError } = await supabase
       .from(T.generated_images)
-      .select('*')
+      .select('storage_path, thumb_storage_path, preview_storage_path')
       .in('id', sanitizedImageIds)
 
     if (fetchError) {
@@ -56,7 +53,10 @@ export async function POST(request: NextRequest) {
 
     // Delete storage files
     if (imagePaths.length > 0) {
-      await supabase.storage.from('generated-images').remove(imagePaths)
+      const { error: storageError } = await supabase.storage.from('generated-images').remove(imagePaths)
+      if (storageError) {
+        logger.error('[BulkDelete] Storage deletion failed, orphaned files may remain:', storageError)
+      }
     }
 
     // Delete DB records
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ deleted: images.length })
   } catch (err) {
-    console.error(`[BulkDelete] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[BulkDelete] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

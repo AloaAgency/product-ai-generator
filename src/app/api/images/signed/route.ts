@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { logger } from '@/lib/logger'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const MAX_BATCH_SIZE = 24
@@ -57,12 +58,12 @@ export async function POST(request: NextRequest) {
     const signedImages = new Map<string, string>(
       (signedImageResult.data || [])
         .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+        .map((item) => [item.path!, item.signedUrl!])
     )
     const signedVideos = new Map<string, string>(
       (signedVideoResult.data || [])
         .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+        .map((item) => [item.path!, item.signedUrl!])
     )
 
     const expiresAt = Date.now() + SIGNED_URL_TTL_SECONDS * 1000
@@ -91,7 +92,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ signed_urls: signedUrls })
   } catch (err) {
-    console.error('[ImagesSignedBatch] Error:', err)
+    logger.error('[ImagesSignedBatch] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

@@ -1,19 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { buildFullPrompt, MAX_STYLE_VALUE_LEN } from '@/lib/prompt-builder'
-import type { Product, Project, ReferenceSet, ReferenceImage } from '@/lib/types'
+import { buildFullPrompt, type ReferenceGroup } from '@/lib/prompt-builder'
+import { parseRequestBody } from '@/lib/request-guards'
+import type { Product, GlobalStyleSettings, ReferenceSet, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
+import { createLogger } from '@/lib/logger'
 import { processGenerationJob } from '@/lib/generation-worker'
 import { kickWorkerForJob } from '@/lib/video-job-request'
+import {
+  MAX_PROMPT_LENGTH,
+  type ReferenceSetSelection,
+  parseReferenceSetsInput,
+  resolveReferenceImageSelection,
+  clampJobsPagination,
+  validateVariationCount,
+  capStyleValue,
+  isValidDeleteScope,
+} from '@/lib/generate-route-helpers'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
 
-const MAX_PROMPT_LENGTH = 10000
-const DEFAULT_JOBS_LIMIT = 50
-const MAX_JOBS_LIMIT = 200
+const log = createLogger('Generate')
 
 export async function GET(
   request: NextRequest,
@@ -22,8 +32,7 @@ export async function GET(
   const { id: productId } = await params
   try {
     const { searchParams } = new URL(request.url)
-    const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_JOBS_LIMIT, 1), MAX_JOBS_LIMIT)
-    const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
+    const { limit, offset } = clampJobsPagination(searchParams.get('limit'), searchParams.get('offset'))
     const status = searchParams.get('status') // optional filter
 
     const supabase = createServiceClient()
@@ -44,7 +53,12 @@ export async function GET(
     }
     return NextResponse.json(data || [])
   } catch (err) {
-    console.error('[Generate GET]', err)
+    log.error('GET', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/products/generate:GET',
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -56,20 +70,16 @@ export async function POST(
   const { id: productId } = await params
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
     const {
       prompt_template_id = null,
       prompt_text,
       variation_count = 15,
       resolution = '4K',
       aspect_ratio = '16:9',
-      reference_set_id = null,
-      texture_set_id = null,
-      product_image_count = null,
-      texture_image_count = null,
+      reference_sets: referenceSetsInput,
       parallelism_override,
       batch_override,
       time_budget_ms_override,
@@ -88,40 +98,48 @@ export async function POST(
       return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
     }
 
-    const parsedVariationCount = Number(variation_count)
-    if (
-      !Number.isInteger(parsedVariationCount) ||
-      parsedVariationCount < 1 ||
-      parsedVariationCount > 100
-    ) {
+    const sanitizedVariationCount = validateVariationCount(variation_count)
+    if (sanitizedVariationCount === null) {
       return NextResponse.json(
         { error: 'variation_count must be an integer between 1 and 100' },
         { status: 400 }
       )
     }
 
-    const sanitizedVariationCount = parsedVariationCount
+    const isFixImage = Boolean(source_image_id)
+    const refSetsProvided = Array.isArray(referenceSetsInput) && referenceSetsInput.length > 0
+    let parsedRefSets: ReferenceSetSelection[] = []
+    if (refSetsProvided || !isFixImage) {
+      const parsedRefSetsResult = parseReferenceSetsInput(referenceSetsInput)
+      if ('error' in parsedRefSetsResult) {
+        return NextResponse.json({ error: parsedRefSetsResult.error }, { status: 400 })
+      }
+      parsedRefSets = parsedRefSetsResult.sets
+    }
+    const uniqueSetIds = [...new Set(parsedRefSets.map(s => s.reference_set_id))]
 
     const supabase = createServiceClient()
 
-    // Fetch product and validate source image in parallel (independent queries)
-    const refSetQuery = reference_set_id
-      ? supabase
-          .from(T.reference_sets)
-          .select('*')
-          .eq('id', reference_set_id)
-          .eq('product_id', productId)
-          .single()
-      : supabase
-          .from(T.reference_sets)
-          .select('*')
-          .eq('product_id', productId)
-          .eq('is_active', true)
-          .single()
-
-    const [productResult, refSetResult, sourceImgResult] = await Promise.all([
-      supabase.from(T.products).select('*').eq('id', productId).single(),
-      refSetQuery,
+    const [productResult, refSetsResult, refImagesResult, sourceImgResult] = await Promise.all([
+      supabase
+        .from(T.products)
+        .select(`*, ${T.projects}!fk_products_project(global_style_settings)`)
+        .eq('id', productId)
+        .single(),
+      uniqueSetIds.length > 0
+        ? supabase
+            .from(T.reference_sets)
+            .select('*')
+            .in('id', uniqueSetIds)
+            .eq('product_id', productId)
+        : Promise.resolve({ data: [], error: null }),
+      uniqueSetIds.length > 0
+        ? supabase
+            .from(T.reference_images)
+            .select('*')
+            .in('reference_set_id', uniqueSetIds)
+            .order('display_order', { ascending: true })
+        : Promise.resolve({ data: [], error: null }),
       source_image_id
         ? supabase.from(T.generated_images).select('id').eq('id', source_image_id).single()
         : Promise.resolve({ data: null, error: null }),
@@ -130,137 +148,84 @@ export async function POST(
     if (productResult.error || !productResult.data) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
-
     if (source_image_id && (sourceImgResult.error || !sourceImgResult.data)) {
-      return NextResponse.json({ error: 'Source image not found' }, { status: 400 })
+      return NextResponse.json({ error: 'Source image not found' }, { status: 404 })
+    }
+    if (refSetsResult.error) {
+      return NextResponse.json({ error: 'Failed to load reference sets' }, { status: 500 })
     }
 
-    const product = productResult.data
+    const refSetsById = new Map<string, ReferenceSet>(
+      (refSetsResult.data || []).map(rs => [rs.id, rs as ReferenceSet])
+    )
+    if (refSetsById.size !== uniqueSetIds.length) {
+      return NextResponse.json({ error: 'One or more reference sets not found for this product' }, { status: 400 })
+    }
 
-    // Find reference set: use provided ID or fall back to active set
-    let refSet: ReferenceSet | null = null
-    {
-      const { data, error } = refSetResult
-      if (error || !data) {
+    for (let i = 0; i < parsedRefSets.length; i += 1) {
+      const ps = parsedRefSets[i]
+      const rs = refSetsById.get(ps.reference_set_id)!
+      const expectedType = ps.role === 'subject' ? 'product' : 'texture'
+      if (rs.type && rs.type !== expectedType) {
         return NextResponse.json(
-          { error: reference_set_id ? 'Reference set not found' : 'No active reference set found for this product' },
+          { error: `reference_sets[${i}] role "${ps.role}" doesn't match set type "${rs.type}"` },
           { status: 400 }
         )
       }
-      refSet = data as ReferenceSet
     }
 
-    if (refSet.type && refSet.type !== 'product') {
-      return NextResponse.json(
-        { error: 'reference_set_id must be a product reference set' },
-        { status: 400 }
-      )
+    const imagesBySetId = new Map<string, ReferenceImage[]>()
+    for (const img of (refImagesResult.data || []) as ReferenceImage[]) {
+      if (!img.reference_set_id) continue
+      const arr = imagesBySetId.get(img.reference_set_id) ?? []
+      arr.push(img)
+      imagesBySetId.set(img.reference_set_id, arr)
     }
 
-    // Fetch reference images, texture set, and project styles in parallel
-    const typedProduct = product as Product
-    const [refImagesResult, textureSetResult, projectResult] = await Promise.all([
-      supabase
-        .from(T.reference_images)
-        .select('*')
-        .eq('reference_set_id', refSet.id)
-        .order('display_order', { ascending: true }),
-      texture_set_id
-        ? supabase
-            .from(T.reference_sets)
-            .select('*')
-            .eq('id', texture_set_id)
-            .eq('product_id', productId)
-            .single()
-        : Promise.resolve({ data: null, error: null }),
-      typedProduct.project_id
-        ? supabase
-            .from(T.projects)
-            .select('global_style_settings')
-            .eq('id', typedProduct.project_id)
-            .single()
-        : Promise.resolve({ data: null }),
-    ])
-
-    const referenceImages: ReferenceImage[] = refImagesResult.data || []
-
-    // Validate and resolve texture set
-    let textureSet: ReferenceSet | null = null
-    let textureImages: ReferenceImage[] = []
-    if (texture_set_id) {
-      if (textureSetResult.error || !textureSetResult.data) {
-        return NextResponse.json({ error: 'Texture set not found' }, { status: 400 })
-      }
-      textureSet = textureSetResult.data as ReferenceSet
-      if (textureSet.type && textureSet.type !== 'texture') {
-        return NextResponse.json(
-          { error: 'texture_set_id must be a texture reference set' },
-          { status: 400 }
-        )
-      }
-      const { data: texImages } = await supabase
-        .from(T.reference_images)
-        .select('*')
-        .eq('reference_set_id', textureSet.id)
-        .order('display_order', { ascending: true })
-      textureImages = texImages || []
+    const selection = resolveReferenceImageSelection(parsedRefSets, imagesBySetId)
+    if ('error' in selection) {
+      return NextResponse.json({ error: selection.error }, { status: 400 })
     }
+    const { finalCounts, finalSelectedIds } = selection
 
-    // Calculate actual image counts to use
-    const maxTotalImages = 14
-    const availableProductImages = referenceImages.length
-    const availableTextureImages = textureImages.length
-
-    let finalProductCount = product_image_count ?? availableProductImages
-    let finalTextureCount = texture_set_id ? (texture_image_count ?? availableTextureImages) : 0
-
-    // Cap to available images
-    finalProductCount = Math.min(finalProductCount, availableProductImages)
-    finalTextureCount = Math.min(finalTextureCount, availableTextureImages)
-
-    // Validate total doesn't exceed limit
-    if (finalProductCount + finalTextureCount > maxTotalImages) {
-      return NextResponse.json(
-        { error: `Total image count (${finalProductCount + finalTextureCount}) exceeds maximum of ${maxTotalImages}` },
-        { status: 400 }
-      )
+    // Parent-project styles arrive embedded via the product JOIN above, avoiding a
+    // second sequential round-trip (mirrors the suggest-prompts / build-prompt routes).
+    const typedProduct = productResult.data as Product & {
+      prodai_projects: { global_style_settings: GlobalStyleSettings } | null
     }
-
-    const projectStyles = (projectResult.data as Project | null)?.global_style_settings ?? {}
+    const projectStyles = typedProduct.prodai_projects?.global_style_settings ?? {}
     const mergedSettings = mergeStyles(projectStyles, typedProduct.global_style_settings)
 
     // Apply per-generation photographic overrides — cap at MAX_STYLE_VALUE_LEN to prevent
     // oversized or injected values from the request body reaching the AI prompt unchecked.
-    const capStyle = (v: unknown): string | undefined =>
-      typeof v === 'string' && v.trim() ? v.slice(0, MAX_STYLE_VALUE_LEN) : undefined
-    if (capStyle(overrideLens)) mergedSettings.lens = capStyle(overrideLens)
-    if (capStyle(overrideCameraHeight)) mergedSettings.camera_height = capStyle(overrideCameraHeight)
-    if (capStyle(overrideLighting)) mergedSettings.lighting = capStyle(overrideLighting)
-    if (capStyle(overrideColorGrading)) mergedSettings.color_grading = capStyle(overrideColorGrading)
-    if (capStyle(overrideStyle)) mergedSettings.style = capStyle(overrideStyle)
+    const cappedLens = capStyleValue(overrideLens)
+    const cappedCameraHeight = capStyleValue(overrideCameraHeight)
+    const cappedLighting = capStyleValue(overrideLighting)
+    const cappedColorGrading = capStyleValue(overrideColorGrading)
+    const cappedStyle = capStyleValue(overrideStyle)
+    if (cappedLens) mergedSettings.lens = cappedLens
+    if (cappedCameraHeight) mergedSettings.camera_height = cappedCameraHeight
+    if (cappedLighting) mergedSettings.lighting = cappedLighting
+    if (cappedColorGrading) mergedSettings.color_grading = cappedColorGrading
+    if (cappedStyle) mergedSettings.style = cappedStyle
 
-    // Build final prompt
-    let userPrompt = prompt_text
+    let userPrompt = prompt_text as string
     if (source_image_id) {
       userPrompt = `Using the provided source image as a base, recreate it with the following modifications: ${prompt_text}. Keep the rest of the image as close to the original as possible.`
     }
-    const finalPrompt = buildFullPrompt(
-      userPrompt,
-      mergedSettings,
-      finalProductCount,
-      finalTextureCount
-    )
 
-    // Insert job record
+    const groups: ReferenceGroup[] = parsedRefSets.map((ps, i) => ({
+      role: ps.role,
+      count: finalCounts[i],
+      label: ps.subject_label,
+    }))
+    const finalPrompt = buildFullPrompt(userPrompt, mergedSettings, groups)
+
     const { data: job, error: jobError } = await supabase
       .from(T.generation_jobs)
       .insert({
         product_id: productId,
         prompt_template_id,
-        reference_set_id: refSet.id,
-        texture_set_id: textureSet?.id ?? null,
-        product_image_count: finalProductCount,
-        texture_image_count: finalTextureCount > 0 ? finalTextureCount : null,
         final_prompt: finalPrompt,
         variation_count: sanitizedVariationCount,
         resolution,
@@ -277,6 +242,26 @@ export async function POST(
 
     if (jobError || !job) {
       return NextResponse.json({ error: 'Failed to create generation job' }, { status: 500 })
+    }
+
+    if (parsedRefSets.length > 0) {
+      const joinRows = parsedRefSets.map((ps, i) => ({
+        job_id: job.id,
+        reference_set_id: ps.reference_set_id,
+        role: ps.role,
+        display_order: i,
+        image_count: finalCounts[i],
+        selected_image_ids: finalSelectedIds[i],
+        subject_label: ps.subject_label,
+      }))
+      const { error: joinError } = await supabase
+        .from(T.generation_job_reference_sets)
+        .insert(joinRows)
+
+      if (joinError) {
+        await supabase.from(T.generation_jobs).delete().eq('id', job.id)
+        return NextResponse.json({ error: 'Failed to attach reference sets to job' }, { status: 500 })
+      }
     }
 
     const shouldRunInline =
@@ -299,7 +284,7 @@ export async function POST(
       const finalBudget = Number.isFinite(overrideBudget) && overrideBudget > 0 ? overrideBudget : timeBudgetMs
       void processGenerationJob(job.id, { batchSize: finalBatch, parallelism: finalParallel, timeBudgetMs: finalBudget }).catch(async (err) => {
         const message = err instanceof Error ? err.message : 'Inline generation job failed'
-        console.error('[Generate] Inline job failed:', err)
+        log.error('Inline job failed:', err)
         await logError({
           productId,
           errorMessage: message,
@@ -317,7 +302,7 @@ export async function POST(
 
     return NextResponse.json({ job }, { status: 201 })
   } catch (err) {
-    console.error('[Generate] Error:', err)
+    log.error('Error:', err)
     await logError({
       productId,
       errorMessage: err instanceof Error ? err.message : 'Internal server error',
@@ -335,7 +320,7 @@ export async function DELETE(
   try {
     const scope = new URL(request.url).searchParams.get('scope') || 'active'
 
-    if (!['active', 'failed', 'all', 'log'].includes(scope)) {
+    if (!isValidDeleteScope(scope)) {
       return NextResponse.json({ error: 'Invalid scope. Use "active", "failed", "all", or "log".' }, { status: 400 })
     }
 
@@ -358,7 +343,7 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        console.error('[Generate DELETE cancel]', error)
+        log.error('DELETE cancel', error)
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       cancelled = data?.length || 0
@@ -373,7 +358,7 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        console.error('[Generate DELETE failed]', error)
+        log.error('DELETE failed', error)
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       clearedFailed = data?.length || 0
@@ -389,7 +374,7 @@ export async function DELETE(
         .select('id')
 
       if (error) {
-        console.error('[Generate DELETE log]', error)
+        log.error('DELETE log', error)
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
       }
       clearedLog = data?.length || 0
@@ -397,7 +382,12 @@ export async function DELETE(
 
     return NextResponse.json({ cancelled, cleared_failed: clearedFailed, cleared_log: clearedLog })
   } catch (err) {
-    console.error('[Generate DELETE]', err)
+    log.error('DELETE', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/products/generate:DELETE',
+    })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

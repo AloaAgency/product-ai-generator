@@ -24,20 +24,7 @@ export default function Home() {
     fetchProjects()
   }, [fetchProjects])
 
-  const handleSubmitModal = useCallback(() => {
-    if (name.trim() && !creating) {
-      const fakeEvent = { preventDefault: () => {} } as React.FormEvent
-      handleCreate(fakeEvent)
-    }
-  }, [name, creating])
-
-  useModalShortcuts({
-    isOpen: showModal,
-    onClose: () => setShowModal(false),
-    onSubmit: handleSubmitModal,
-  })
-
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleCreate = useCallback(async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
     setCreating(true)
@@ -49,7 +36,20 @@ export default function Home() {
     } finally {
       setCreating(false)
     }
-  }
+  }, [name, description, createProject])
+
+  const handleSubmitModal = useCallback(() => {
+    if (name.trim() && !creating) {
+      const fakeEvent = { preventDefault: () => {} } as React.FormEvent
+      handleCreate(fakeEvent)
+    }
+  }, [name, creating, handleCreate])
+
+  useModalShortcuts({
+    isOpen: showModal,
+    onClose: () => setShowModal(false),
+    onSubmit: handleSubmitModal,
+  })
 
   return (
     <div className="min-h-screen">

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { optionalUuid, requireUuid } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const DEFAULT_PAGE_SIZE = 48
@@ -80,15 +82,17 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
-  const { projectId } = await params
+  const { projectId: rawProjectId } = await params
   const { searchParams } = request.nextUrl
   const approvalStatus = searchParams.get('approval_status')
   const mediaType = searchParams.get('media_type')
-  const productIdFilter = searchParams.get('product_id')
+  const rawProductIdFilter = searchParams.get('product_id')
   const limit = Math.min(Math.max(Number(searchParams.get('limit')) || DEFAULT_PAGE_SIZE, 1), 200)
   const offset = Math.max(Number(searchParams.get('offset')) || 0, 0)
 
   try {
+    const projectId = requireUuid(rawProjectId, 'project id')
+    const productIdFilter = optionalUuid(rawProductIdFilter, 'product id')
     const supabase = createServiceClient()
 
     let productsQuery = supabase
@@ -123,26 +127,38 @@ export async function GET(
     }
 
     const productIds = products.map((product) => product.id)
-    const countQuery = applyProjectGalleryFilters(
-      supabase.from(T.generated_images).select('id', { count: 'exact', head: true }),
-      { productIds, approvalStatus, mediaType }
-    )
-    const { count: totalCount, error: countError } = await countQuery
+
+    const scopedStatusCount = (status: string) => {
+      const q = productIds.length === 1
+        ? supabase.from(T.generated_images).select('id', { count: 'exact', head: true }).eq('product_id', productIds[0])
+        : supabase.from(T.generated_images).select('id', { count: 'exact', head: true }).in('product_id', productIds)
+      return q.eq('approval_status', status)
+    }
+
+    // All four queries are independent once we have productIds — run together to save a round-trip.
+    const [countResult, imagesResult, rejectedResult, changesResult] = await Promise.all([
+      applyProjectGalleryFilters(
+        supabase.from(T.generated_images).select('id', { count: 'exact', head: true }),
+        { productIds, approvalStatus, mediaType }
+      ),
+      applyProjectGalleryFilters(
+        supabase.from(T.generated_images).select(GALLERY_IMAGE_SELECT),
+        { productIds, approvalStatus, mediaType }
+      )
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1),
+      approvalStatus !== 'rejected' ? scopedStatusCount('rejected') : Promise.resolve({ count: null }),
+      approvalStatus !== 'request_changes' ? scopedStatusCount('request_changes') : Promise.resolve({ count: null }),
+    ])
+
+    const { count: totalCount, error: countError } = countResult
+    const { data: images, error: imagesError } = imagesResult as {
+      data: GalleryImageRecord[] | null
+      error: { message: string } | null
+    }
 
     if (countError) {
       return NextResponse.json({ error: 'Failed to count images' }, { status: 500 })
-    }
-
-    const imagesQuery = applyProjectGalleryFilters(
-      supabase.from(T.generated_images).select(GALLERY_IMAGE_SELECT),
-      { productIds, approvalStatus, mediaType }
-    )
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1)
-
-    const { data: images, error: imagesError } = await imagesQuery as {
-      data: GalleryImageRecord[] | null
-      error: { message: string } | null
     }
 
     if (imagesError) {
@@ -173,21 +189,18 @@ export async function GET(
     const previewPaths = imageItems
       .map((img) => img.preview_storage_path)
       .filter(Boolean) as string[]
-    const fallbackPaths = imageItems
-      .filter((img) => !img.thumb_storage_path && !img.preview_storage_path && img.storage_path)
+    const fallbackOriginalPaths = imageItems
+      .filter((img) => !img.thumb_storage_path && !img.preview_storage_path)
       .map((img) => img.storage_path)
       .filter(Boolean) as string[]
 
-    const lightweightImagePaths = Array.from(new Set([...thumbPaths, ...previewPaths, ...fallbackPaths]))
+    const lightweightImagePaths = Array.from(new Set([...thumbPaths, ...previewPaths, ...fallbackOriginalPaths]))
 
     const videoItems = (images || []).filter((img) => img.media_type === 'video')
-    const videoPaths = videoItems
-      .map((video) => video.storage_path)
-      .filter(Boolean) as string[]
     const videoThumbPaths = videoItems
       .map((video) => video.thumb_storage_path)
       .filter(Boolean) as string[]
-    const allVideoBucketPaths = Array.from(new Set([...videoPaths, ...videoThumbPaths]))
+    const allVideoBucketPaths = Array.from(new Set(videoThumbPaths))
 
     const [signedImageResult, signedVideoResult] = await Promise.all([
       lightweightImagePaths.length > 0
@@ -199,21 +212,25 @@ export async function GET(
     ])
 
     if (signedImageResult.error) {
-      console.error('[ProjectGallery] Failed to sign image URLs:', signedImageResult.error.message)
+      logger.error('[ProjectGallery] Failed to sign image URLs:', signedImageResult.error.message)
     }
     if (signedVideoResult.error) {
-      console.error('[ProjectGallery] Failed to sign video URLs:', signedVideoResult.error.message)
+      logger.error('[ProjectGallery] Failed to sign video URLs:', signedVideoResult.error.message)
     }
 
     const signedImageBucket = new Map<string, string>(
-      (signedImageResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+      (signedImageResult.data || []).flatMap((item) => (
+        typeof item?.signedUrl === 'string' && typeof item?.path === 'string'
+          ? [[item.path, item.signedUrl] as const]
+          : []
+      ))
     )
     const signedVideos = new Map<string, string>(
-      (signedVideoResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+      (signedVideoResult.data || []).flatMap((item) => (
+        typeof item?.signedUrl === 'string' && typeof item?.path === 'string'
+          ? [[item.path, item.signedUrl] as const]
+          : []
+      ))
     )
 
     const productImageMap = new Map<string, Array<GalleryImageRecord & {
@@ -233,10 +250,8 @@ export async function GET(
       productImageMap.get(image.product_id)!.push({
         ...image,
         public_url: image.media_type === 'video'
-          ? (image.storage_path ? (signedVideos.get(image.storage_path) ?? null) : null)
-          : (!image.thumb_storage_path && !image.preview_storage_path && image.storage_path
-              ? (signedImageBucket.get(image.storage_path) ?? null)
-              : null),
+          ? null
+          : (image.storage_path ? (signedImageBucket.get(image.storage_path) ?? null) : null),
         preview_public_url: image.media_type === 'video'
           ? null
           : (image.preview_storage_path ? (signedImageBucket.get(image.preview_storage_path) ?? null) : null),
@@ -257,19 +272,6 @@ export async function GET(
       ? result
       : result.filter((product) => product.images.length > 0)
 
-    const scopedStatusCount = async (status: string) => {
-      const query = productIds.length === 1
-        ? supabase.from(T.generated_images).select('id', { count: 'exact', head: true }).eq('product_id', productIds[0])
-        : supabase.from(T.generated_images).select('id', { count: 'exact', head: true }).in('product_id', productIds)
-
-      return query.eq('approval_status', status)
-    }
-
-    const [rejectedResult, changesResult] = await Promise.all([
-      approvalStatus !== 'rejected' ? scopedStatusCount('rejected') : Promise.resolve({ count: null }),
-      approvalStatus !== 'request_changes' ? scopedStatusCount('request_changes') : Promise.resolve({ count: null }),
-    ])
-
     const total = totalCount ?? (images || []).length
 
     return NextResponse.json({
@@ -282,7 +284,7 @@ export async function GET(
       request_changes_count: changesResult.count ?? 0,
     })
   } catch (err) {
-    console.error('[ProjectGallery] Error:', err)
+    logger.error('[ProjectGallery] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

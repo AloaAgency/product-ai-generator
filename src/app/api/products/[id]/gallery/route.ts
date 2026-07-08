@@ -8,6 +8,7 @@ import {
   sanitizeApprovalStatus,
   sanitizePublicErrorMessage,
 } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const DEFAULT_PAGE_SIZE = 48
@@ -103,11 +104,6 @@ export async function GET(
       supabase.from(T.generated_images).select('id', { count: 'exact', head: true }),
       { productId, sceneId, approvalStatus, mediaType }
     )
-    const { count: totalCount, error: countError } = await countQuery
-
-    if (countError) {
-      return NextResponse.json({ error: 'Failed to count images' }, { status: 500 })
-    }
 
     let imagesQuery = applyImageFilters(
       supabase.from(T.generated_images).select(GALLERY_IMAGE_SELECT),
@@ -126,10 +122,20 @@ export async function GET(
 
     imagesQuery = imagesQuery.range(offset, offset + limit - 1)
 
-    const { data: images, error: imagesError } = await imagesQuery as {
-      data: GalleryImageRecord[] | null
-      error: { message: string } | null
+    // Count and page-fetch are independent — run them in one round-trip instead of serially.
+    const [{ count: totalCount, error: countError }, imagesResult] = await Promise.all([
+      countQuery,
+      imagesQuery as Promise<{
+        data: GalleryImageRecord[] | null
+        error: { message: string } | null
+      }>,
+    ])
+
+    if (countError) {
+      return NextResponse.json({ error: 'Failed to count images' }, { status: 500 })
     }
+
+    const { data: images, error: imagesError } = imagesResult
 
     if (imagesError) {
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
@@ -139,24 +145,52 @@ export async function GET(
       new Set((images || []).map((image) => image.job_id).filter((value): value is string => Boolean(value)))
     )
 
-    const { data: jobs, error: jobsError } = jobIds.length > 0
-      ? await supabase
-          .from(T.generation_jobs)
-          .select('id, prompt_template_id, final_prompt, reference_set_id, texture_set_id, product_image_count, texture_image_count')
-          .eq('product_id', productId)
-          .in('id', jobIds)
-      : { data: [], error: null }
+    const [jobsResult, jobRefSetsResult] = await Promise.all([
+      jobIds.length > 0
+        ? supabase
+            .from(T.generation_jobs)
+            .select('id, prompt_template_id, final_prompt')
+            .eq('product_id', productId)
+            .in('id', jobIds)
+        : Promise.resolve({ data: [], error: null }),
+      jobIds.length > 0
+        ? supabase
+            .from(T.generation_job_reference_sets)
+            .select('job_id, reference_set_id, role, display_order, image_count, subject_label')
+            .in('job_id', jobIds)
+            .order('display_order', { ascending: true })
+        : Promise.resolve({ data: [], error: null }),
+    ])
 
-    if (jobsError) {
+    if (jobsResult.error) {
       return NextResponse.json({ error: 'Failed to fetch job metadata' }, { status: 500 })
     }
+    if (jobRefSetsResult.error) {
+      return NextResponse.json({ error: 'Failed to fetch job reference sets' }, { status: 500 })
+    }
 
-    const jobTemplateMap = new Map((jobs || []).map((job) => [job.id, job.prompt_template_id]))
-    const jobPromptMap = new Map((jobs || []).map((job) => [job.id, job.final_prompt as string | null]))
-    const jobRefSetMap = new Map((jobs || []).map((job) => [job.id, job.reference_set_id as string | null]))
-    const jobTextureSetMap = new Map((jobs || []).map((job) => [job.id, job.texture_set_id as string | null]))
-    const jobProductImageCountMap = new Map((jobs || []).map((job) => [job.id, job.product_image_count as number | null]))
-    const jobTextureImageCountMap = new Map((jobs || []).map((job) => [job.id, job.texture_image_count as number | null]))
+    type JobRefSetEntry = {
+      reference_set_id: string
+      role: 'subject' | 'texture'
+      display_order: number
+      image_count: number | null
+      subject_label: string | null
+    }
+    const jobs = jobsResult.data || []
+    const jobTemplateMap = new Map(jobs.map((job) => [job.id, job.prompt_template_id]))
+    const jobPromptMap = new Map(jobs.map((job) => [job.id, job.final_prompt as string | null]))
+    const jobRefSetsMap = new Map<string, JobRefSetEntry[]>()
+    for (const row of (jobRefSetsResult.data || []) as Array<JobRefSetEntry & { job_id: string }>) {
+      const arr = jobRefSetsMap.get(row.job_id) ?? []
+      arr.push({
+        reference_set_id: row.reference_set_id,
+        role: row.role,
+        display_order: row.display_order,
+        image_count: row.image_count,
+        subject_label: row.subject_label,
+      })
+      jobRefSetsMap.set(row.job_id, arr)
+    }
 
     const imageItems = (images || []).filter((img) => img.media_type !== 'video')
     const thumbPaths = imageItems
@@ -165,20 +199,17 @@ export async function GET(
     const previewPaths = imageItems
       .map((img) => img.preview_storage_path)
       .filter(Boolean) as string[]
-    const fallbackPaths = imageItems
-      .filter((img) => !img.thumb_storage_path && !img.preview_storage_path && img.storage_path)
+    const fallbackOriginalPaths = imageItems
+      .filter((img) => !img.thumb_storage_path && !img.preview_storage_path)
       .map((img) => img.storage_path)
       .filter(Boolean) as string[]
-    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...previewPaths, ...fallbackPaths]))
+    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...previewPaths, ...fallbackOriginalPaths]))
 
     const videoItems = (images || []).filter((img) => img.media_type === 'video')
-    const videoPaths = videoItems
-      .map((video) => video.storage_path)
-      .filter(Boolean) as string[]
     const videoThumbPaths = videoItems
       .map((video) => video.thumb_storage_path)
       .filter(Boolean) as string[]
-    const allVideoBucketPaths = Array.from(new Set([...videoPaths, ...videoThumbPaths]))
+    const allVideoBucketPaths = Array.from(new Set(videoThumbPaths))
 
     const [signedImageResult, signedVideoResult] = await Promise.all([
       allImageBucketPaths.length > 0
@@ -190,30 +221,32 @@ export async function GET(
     ])
 
     if (signedImageResult.error) {
-      console.error('[Gallery] Failed to sign image URLs:', signedImageResult.error.message)
+      logger.error('[Gallery] Failed to sign image URLs:', signedImageResult.error.message)
     }
     if (signedVideoResult.error) {
-      console.error('[Gallery] Failed to sign video URLs:', signedVideoResult.error.message)
+      logger.error('[Gallery] Failed to sign video URLs:', signedVideoResult.error.message)
     }
 
     const signedImageBucket = new Map<string, string>(
-      (signedImageResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+      (signedImageResult.data || []).flatMap((item) => (
+        typeof item?.signedUrl === 'string' && typeof item?.path === 'string'
+          ? [[item.path, item.signedUrl] as const]
+          : []
+      ))
     )
     const signedVideos = new Map<string, string>(
-      (signedVideoResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
+      (signedVideoResult.data || []).flatMap((item) => (
+        typeof item?.signedUrl === 'string' && typeof item?.path === 'string'
+          ? [[item.path, item.signedUrl] as const]
+          : []
+      ))
     )
 
     const signedImages = (images || []).map((img) => ({
       ...img,
       public_url: img.media_type === 'video'
-        ? (img.storage_path ? (signedVideos.get(img.storage_path) ?? null) : null)
-        : (!img.thumb_storage_path && !img.preview_storage_path && img.storage_path
-            ? (signedImageBucket.get(img.storage_path) ?? null)
-            : null),
+        ? null
+        : (img.storage_path ? (signedImageBucket.get(img.storage_path) ?? null) : null),
       preview_public_url: img.media_type === 'video'
         ? null
         : (img.preview_storage_path ? (signedImageBucket.get(img.preview_storage_path) ?? null) : null),
@@ -222,10 +255,7 @@ export async function GET(
         : (img.thumb_storage_path ? (signedImageBucket.get(img.thumb_storage_path) ?? null) : null),
       prompt_template_id: img.job_id ? (jobTemplateMap.get(img.job_id) ?? null) : null,
       prompt: img.job_id ? (jobPromptMap.get(img.job_id) ?? null) : null,
-      reference_set_id: img.job_id ? (jobRefSetMap.get(img.job_id) ?? null) : null,
-      texture_set_id: img.job_id ? (jobTextureSetMap.get(img.job_id) ?? null) : null,
-      product_image_count: img.job_id ? (jobProductImageCountMap.get(img.job_id) ?? null) : null,
-      texture_image_count: img.job_id ? (jobTextureImageCountMap.get(img.job_id) ?? null) : null,
+      reference_sets: img.job_id ? (jobRefSetsMap.get(img.job_id) ?? []) : [],
     }))
 
     return NextResponse.json({
@@ -236,7 +266,7 @@ export async function GET(
       has_more: offset + signedImages.length < (totalCount ?? signedImages.length),
     })
   } catch (err) {
-    console.error(`[Gallery] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[Gallery] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

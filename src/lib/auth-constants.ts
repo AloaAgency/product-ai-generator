@@ -4,14 +4,47 @@ import type { NextRequest } from 'next/server'
 export const AUTH_COOKIE_NAME = 'site-auth'
 
 /**
+ * XOR-based timing-resistant string comparison.
+ *
+ * JavaScript's `===` exits on the first differing character, leaking
+ * information about how "close" two strings are via timing. This function
+ * always iterates over every character of `expected`, so execution time
+ * is independent of where a mismatch occurs.
+ *
+ * Not a cryptographic primitive — for that, use Node's `timingSafeEqual`
+ * (see server-secrets.ts). However, this implementation works in both Node.js
+ * and the Edge Runtime (no `crypto` import required) and eliminates the most
+ * obvious timing side-channel.
+ */
+export function timingResistantEqual(provided: string, expected: string): boolean {
+  const n = expected.length
+  const pLen = provided.length
+  // Accumulate length mismatch into diff so we never return early based on length.
+  let diff = pLen !== n ? 1 : 0
+  for (let i = 0; i < n; i++) {
+    // Use 0 for out-of-bounds indices in `provided` instead of the modulo-wrap
+    // trick, which relied on silent NaN→0 coercion when provided is empty.
+    diff |= (i < pLen ? provided.charCodeAt(i) : 0) ^ expected.charCodeAt(i)
+  }
+  return diff === 0
+}
+
+/**
  * Returns true when the request carries the correct ADMIN_SECRET header.
- * Used by internal admin endpoints that are already behind site-password auth.
+ *
+ * Edge Runtime-compatible version using XOR-based timing-resistant comparison.
+ * Node.js API routes must use `isAdminAuthorizedNode` from server-secrets.ts
+ * instead, which uses `crypto.timingSafeEqual` for a stronger guarantee.
+ * This function is intentionally kept Edge Runtime-safe for future middleware use.
+ *
  * Fails closed: if ADMIN_SECRET is not configured, all requests are denied.
  */
 export function isAdminAuthorized(request: NextRequest): boolean {
   const adminSecret = process.env.ADMIN_SECRET
   if (!adminSecret) return false
-  return request.headers.get('x-admin-secret') === adminSecret
+  const provided = request.headers.get('x-admin-secret') ?? ''
+  if (provided.length === 0) return false
+  return timingResistantEqual(provided, adminSecret)
 }
 
 /**
@@ -37,7 +70,5 @@ export async function deriveAuthToken(password: string): Promise<string> {
     ['sign'],
   )
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode('site-auth-v1'))
-  return Array.from(new Uint8Array(signature))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
+  return Array.from(new Uint8Array(signature), b => b.toString(16).padStart(2, '0')).join('')
 }

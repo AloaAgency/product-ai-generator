@@ -1,22 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import Anthropic from '@anthropic-ai/sdk'
+import { createAnthropicClient } from '@/lib/anthropic-client'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
-import { buildRefinedPromptUserMessage } from '@/lib/prompt-builder'
+import { buildRefinedPromptUserMessage, safeTextFromContent } from '@/lib/prompt-builder'
+import { parseRequestBody } from '@/lib/request-guards'
 import type { GlobalStyleSettings } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
+import { logger } from '@/lib/logger'
+
+const anthropic = createAnthropicClient()
 
 export async function POST(request: NextRequest) {
   let product_id: string | undefined
 
-  let body: { product_id?: string; user_prompt?: string }
-  try {
-    body = await request.json()
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 })
-  }
+  // parseRequestBody rejects non-object bodies (null/array/primitive) with a 400
+  // instead of letting a later `body.product_id` access throw into the 500 catch.
+  const parsed = await parseRequestBody<{ product_id?: string; user_prompt?: string }>(request)
+  if (!parsed.ok) return parsed.response
+  const body = parsed.body
 
   try {
     product_id = body.product_id
@@ -54,7 +57,6 @@ export async function POST(request: NextRequest) {
 
     const userMessage = buildRefinedPromptUserMessage(product.name, product.description, settings, user_prompt)
 
-    const anthropic = new Anthropic()
     const response = await anthropic.messages.create({
       model: CLAUDE_FAST_MODEL.name,
       max_tokens: 4096,
@@ -63,14 +65,13 @@ export async function POST(request: NextRequest) {
       messages: [{ role: 'user', content: userMessage }],
     })
 
-    const text =
-      response.content[0].type === 'text' ? response.content[0].text : ''
+    const text = safeTextFromContent(response.content)
 
     return NextResponse.json({ refined_prompt: text.trim() })
   } catch (err) {
     // Log the full error internally but never echo raw error messages back to
     // the client — they can contain API keys or internal query details.
-    console.error('[BuildPrompt] Error:', err)
+    logger.error('[BuildPrompt] Error:', err instanceof Error ? err.message : String(err))
     await logError({
       productId: product_id,
       errorMessage: err instanceof Error ? err.message : 'Internal server error',

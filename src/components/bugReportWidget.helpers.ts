@@ -82,20 +82,23 @@ export const buildBugReportSubmission = ({
   imageCount: String(images.length),
 })
 
-export const parseBugReportResponse = (raw: string) => {
+export const buildSelectedBugReportImages = (files: File[]): SelectedBugReportImage[] => {
+  const images: SelectedBugReportImage[] = []
+
   try {
-    return JSON.parse(raw) as { success?: boolean; message?: string } | null
-  } catch {
-    return null
+    for (const file of files) {
+      images.push({
+        file,
+        preview: URL.createObjectURL(file),
+        caption: '',
+      })
+    }
+    return images
+  } catch (error) {
+    releaseBugReportImagePreviews(images)
+    throw error
   }
 }
-
-export const buildSelectedBugReportImages = (files: File[]): SelectedBugReportImage[] =>
-  files.map((file) => ({
-    file,
-    preview: URL.createObjectURL(file),
-    caption: '',
-  }))
 
 export const releaseBugReportImagePreviews = (images: Pick<SelectedBugReportImage, 'preview'>[]) => {
   images.forEach((image) => URL.revokeObjectURL(image.preview))
@@ -128,4 +131,12 @@ export const createBugReportFormData = ({
   })
   formData.append('imageCount', submission.imageCount)
   return formData
+}
+
+export const parseBugReportResponse = (raw: string) => {
+  try {
+    return JSON.parse(raw) as { success?: boolean; message?: string } | null
+  } catch {
+    return null
+  }
 }

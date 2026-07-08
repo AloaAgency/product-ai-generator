@@ -3,8 +3,31 @@
 import { use, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Image as ImageIcon, Video } from 'lucide-react'
-import { ImageGenerateTab } from './_components/ImageGenerateTab'
+import { ImageGenerateTab, type InitialReferenceSetSelection } from './_components/ImageGenerateTab'
 import { VideoGenerateTab } from './_components/VideoGenerateTab'
+
+function parseInitialReferenceSets(raw: string | null): InitialReferenceSetSelection[] | undefined {
+  if (!raw) return undefined
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return undefined
+    const result: InitialReferenceSetSelection[] = []
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object') continue
+      const refId = typeof item.reference_set_id === 'string' ? item.reference_set_id : null
+      const role = item.role === 'subject' || item.role === 'texture' ? item.role : null
+      if (!refId || !role) continue
+      const imageCount = Number.isFinite(Number(item.image_count)) && Number(item.image_count) > 0
+        ? Number(item.image_count)
+        : null
+      const subjectLabel = typeof item.subject_label === 'string' ? item.subject_label : null
+      result.push({ reference_set_id: refId, role, image_count: imageCount, subject_label: subjectLabel })
+    }
+    return result.length > 0 ? result : undefined
+  } catch {
+    return undefined
+  }
+}
 
 export default function GeneratePage({
   params,
@@ -14,10 +37,8 @@ export default function GeneratePage({
   const { id } = use(params)
   const searchParams = useSearchParams()
   const initialPrompt = searchParams.get('prompt') ?? undefined
-  const initialRefSetId = searchParams.get('reference_set_id') ?? undefined
-  const initialTextureSetId = searchParams.get('texture_set_id') ?? undefined
-  const initialProductImageCount = searchParams.get('product_image_count') ?? undefined
-  const initialTextureImageCount = searchParams.get('texture_image_count') ?? undefined
+  const initialTemplateId = searchParams.get('template') ?? undefined
+  const initialReferenceSets = parseInitialReferenceSets(searchParams.get('reference_sets'))
   const [activeTab, setActiveTab] = useState<'image' | 'video'>('image')
 
   return (
@@ -55,10 +76,8 @@ export default function GeneratePage({
         <ImageGenerateTab
           productId={id}
           initialPrompt={initialPrompt}
-          initialRefSetId={initialRefSetId}
-          initialTextureSetId={initialTextureSetId}
-          initialProductImageCount={initialProductImageCount}
-          initialTextureImageCount={initialTextureImageCount}
+          initialTemplateId={initialTemplateId}
+          initialReferenceSets={initialReferenceSets}
         />
       ) : (
         <VideoGenerateTab productId={id} />

@@ -1,24 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import Anthropic from '@anthropic-ai/sdk'
-import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
+import { generateSceneTitle } from '@/lib/prompt-builder'
+import { parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
-const anthropic = new Anthropic()
-
-async function generateSceneTitle(promptText: string): Promise<string> {
-  try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_FAST_MODEL.name,
-      max_tokens: 50,
-      system: 'Generate a short (3-6 word) descriptive title for this product photography scene. Output ONLY the title.',
-      messages: [{ role: 'user', content: promptText }],
-    })
-    return response.content[0].type === 'text' ? response.content[0].text.trim() : ''
-  } catch {
-    return ''
-  }
-}
+// Must match the limits enforced by the POST route on the same table
+const MAX_NAME_LENGTH = 500
+const MAX_PROMPT_LENGTH = 10000
 
 export async function PATCH(
   request: NextRequest,
@@ -27,7 +16,26 @@ export async function PATCH(
   try {
     const { id: productId, promptId } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
+
+    if (body.name !== undefined) {
+      if (typeof body.name !== 'string' || body.name.trim().length === 0) {
+        return NextResponse.json({ error: 'name must be a non-empty string' }, { status: 400 })
+      }
+      if (body.name.length > MAX_NAME_LENGTH) {
+        return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
+      }
+    }
+    if (body.prompt_text !== undefined) {
+      if (typeof body.prompt_text !== 'string' || body.prompt_text.trim().length === 0) {
+        return NextResponse.json({ error: 'prompt_text must be a non-empty string' }, { status: 400 })
+      }
+      if (body.prompt_text.length > MAX_PROMPT_LENGTH) {
+        return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+      }
+    }
 
     const updates: Record<string, unknown> = {}
     if (body.name !== undefined) updates.name = body.name
@@ -48,9 +56,10 @@ export async function PATCH(
       .select()
       .single()
 
-    if (error) { console.error('[Prompt PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Prompt PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    logger.error('[Prompt PATCH] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -69,9 +78,10 @@ export async function DELETE(
       .eq('id', promptId)
       .eq('product_id', productId)
 
-    if (error) { console.error('[Prompt DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Prompt DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
-  } catch {
+  } catch (err) {
+    logger.error('[Prompt DELETE] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

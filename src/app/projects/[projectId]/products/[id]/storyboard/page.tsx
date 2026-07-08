@@ -3,6 +3,7 @@
 import { use, useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { api } from '@/lib/api-client'
 import type { Storyboard as StoryboardRecord, StoryboardScene } from '@/lib/types'
 import {
   Film,
@@ -30,15 +31,6 @@ type SignedImageUrls = {
 
 type Storyboard = StoryboardRecord
 
-const api = async (url: string, options?: RequestInit) => {
-  const res = await fetch(url, options)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || res.statusText)
-  }
-  return res.json()
-}
-
 // ---------------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------------
@@ -49,7 +41,9 @@ export default function StoryboardPage({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { id } = use(params)
-  const { galleryImages, loadingGallery, fetchGallery } = useAppStore()
+  const galleryImages = useAppStore((s) => s.galleryImages)
+  const loadingGallery = useAppStore((s) => s.loadingGallery)
+  const fetchGallery = useAppStore((s) => s.fetchGallery)
   const galleryImageItems = useMemo(
     () => galleryImages.filter((img) => img.media_type !== 'video'),
     [galleryImages]
@@ -774,18 +768,26 @@ function SceneCard({
   const [localEndPrompt, setLocalEndPrompt] = useState(scene.end_frame_prompt || '')
   const [localMotionPrompt, setLocalMotionPrompt] = useState(scene.motion_prompt || '')
   const [localModel, setLocalModel] = useState(scene.generation_model || 'veo3')
-  const [showGenMenu, setShowGenMenu] = useState(false)
+  const sceneSyncKey = JSON.stringify([
+    scene.title || '',
+    scene.prompt_text || '',
+    scene.end_frame_prompt || '',
+    scene.motion_prompt || '',
+    scene.generation_model || 'veo3',
+  ])
+  const [syncedSceneKey, setSyncedSceneKey] = useState(sceneSyncKey)
   const [showVideos, setShowVideos] = useState(false)
   const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null)
 
   // Sync local state when scene updates from server
-  useEffect(() => {
+  if (sceneSyncKey !== syncedSceneKey) {
+    setSyncedSceneKey(sceneSyncKey)
     setLocalTitle(scene.title || '')
     setLocalPrompt(scene.prompt_text || '')
     setLocalEndPrompt(scene.end_frame_prompt || '')
     setLocalMotionPrompt(scene.motion_prompt || '')
     setLocalModel(scene.generation_model || 'veo3')
-  }, [scene.title, scene.prompt_text, scene.end_frame_prompt, scene.motion_prompt, scene.generation_model])
+  }
 
   const saveField = (field: string, value: string | boolean) => {
     onUpdate({ [field]: value } as Partial<StoryboardScene>)

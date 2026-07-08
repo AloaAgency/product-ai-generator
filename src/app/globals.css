@@ -2,7 +2,7 @@
 
 :root {
   --background: #09090b;
-  --foreground: #fafafa;
+  --foreground: #f4f4f5;
 }
 
 @theme inline {
@@ -29,4 +29,14 @@ body {
 
 .animate-pulse-bar {
   animation: pulse-bar 1.5s ease-in-out infinite;
+}
+
+/* Horizontally scrollable toolbars without a visible scrollbar (used by mobile
+   button rows and thumbnail strips so controls never wrap or overflow). */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
 }

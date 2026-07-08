@@ -1,22 +1,95 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { timingSafeEqual } from 'crypto'
 import { AUTH_COOKIE_NAME, deriveAuthToken } from '@/lib/auth-constants'
+import { secretsEqual } from '@/lib/server-secrets'
+import { loginClientKey, loginRateLimiter } from '@/lib/login-rate-limit'
+import { logger } from '@/lib/logger'
 
-/** Compare two strings in constant time to mitigate timing attacks. */
-function safeCompare(a: string, b: string): boolean {
-  try {
-    const bufA = Buffer.from(a, 'utf8')
-    const bufB = Buffer.from(b, 'utf8')
-    if (bufA.length !== bufB.length) {
-      // Still run the comparison on equally-sized buffers so execution time
-      // doesn't reveal which side is shorter.
-      timingSafeEqual(bufA, bufA)
-      return false
-    }
-    return timingSafeEqual(bufA, bufB)
-  } catch {
-    return false
+// Hard cap on input sizes accepted by the login endpoint.
+// A legitimate password will never approach these limits; rejecting early
+// prevents DoS via expensive HMAC computation on oversized payloads.
+const MAX_PASSWORD_BYTES = 1024   // ~1 KiB — far above any real password
+const MAX_REDIRECT_LENGTH = 2048  // characters, not bytes
+
+// Session lifetime for the auth cookie. Made configurable so a deployment can
+// enforce its own session policy (shorter for security-sensitive tenants,
+// longer for convenience) without a code change; clamped to a sane range and
+// defaulting to the historical 7 days when unset or invalid.
+const DEFAULT_SESSION_TTL_DAYS = 7
+const MIN_SESSION_TTL_DAYS = 1
+const MAX_SESSION_TTL_DAYS = 365
+
+function sessionMaxAgeSeconds(): number {
+  const raw = Number(process.env.SITE_AUTH_TTL_DAYS)
+  const days = Number.isFinite(raw) && raw >= MIN_SESSION_TTL_DAYS
+    ? Math.min(Math.floor(raw), MAX_SESSION_TTL_DAYS)
+    : DEFAULT_SESSION_TTL_DAYS
+  return days * 24 * 60 * 60
+}
+
+/** Auth responses must never be cached by a shared proxy — they carry per-user
+ *  state (Set-Cookie, error flags). Apply no-store uniformly. */
+function noStore(response: NextResponse): NextResponse {
+  response.headers.set('Cache-Control', 'no-store')
+  return response
+}
+
+// Cached derivation Promise — mirrors the pattern in middleware.ts.
+// SITE_PASSWORD is immutable per isolate, so the derived cookie value never
+// changes. Computing it once at module load means successful logins get a
+// cache hit instead of paying the async Web Crypto cost on every request.
+let _cachedTokenPromise: Promise<string> | null = null
+
+function getCachedToken(password: string): Promise<string> {
+  if (_cachedTokenPromise === null) {
+    const pending = deriveAuthToken(password)
+    // A rejected derivation must not be cached for the isolate's lifetime —
+    // otherwise a transient Web Crypto fault at warm-up would make every
+    // subsequent correct-password login fail until the isolate restarts.
+    // Clear the slot so the next login retries; the current caller still sees
+    // the rejection. Attaching the handler here also keeps the module-load
+    // warm-up call below from surfacing as an unhandled promise rejection.
+    pending.catch(() => {
+      if (_cachedTokenPromise === pending) _cachedTokenPromise = null
+    })
+    _cachedTokenPromise = pending
   }
+  return _cachedTokenPromise
+}
+
+if (process.env.SITE_PASSWORD) {
+  void getCachedToken(process.env.SITE_PASSWORD)
+}
+
+/**
+ * Validate the user-supplied redirect path, returning '/' for anything unsafe.
+ *
+ * A prefix check alone (`startsWith('/') && !startsWith('//')`) is NOT enough:
+ * the WHATWG URL parser treats backslashes as slashes and strips tab/newline
+ * characters in http(s) URLs, so values like "/\evil.com" or "/\t/evil.com"
+ * pass the prefix check yet resolve to a foreign origin — an open redirect.
+ * Defend by resolving the candidate against the request URL and verifying the
+ * origin is unchanged, then re-emit the normalized pathname + search.
+ */
+function sanitizeRedirectPath(rawRedirect: string, requestUrl: string): string {
+  const trimmed = rawRedirect.slice(0, MAX_REDIRECT_LENGTH)
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return '/'
+  try {
+    const resolved = new URL(trimmed, requestUrl)
+    if (resolved.origin !== new URL(requestUrl).origin) return '/'
+    return resolved.pathname + resolved.search
+  } catch {
+    return '/'
+  }
+}
+
+/**
+ * Direct browser navigation to /api/login (bookmark, typed URL, back/forward
+ * history) previously got a bare 405 — the form only ever POSTs here. Redirect
+ * to the app root instead: authenticated users land on the app, everyone else
+ * gets the login gate rendered by the middleware.
+ */
+export function GET(request: NextRequest) {
+  return noStore(NextResponse.redirect(new URL('/', request.url), 303))
 }
 
 export async function POST(request: NextRequest) {
@@ -24,11 +97,31 @@ export async function POST(request: NextRequest) {
   // than falling back to a well-known hardcoded credential.
   const PASSWORD = process.env.SITE_PASSWORD
   if (!PASSWORD) {
-    console.error('[Login] SITE_PASSWORD is not set — all logins denied')
-    return new NextResponse(null, { status: 503 })
+    logger.error('[Login] SITE_PASSWORD is not set — all logins denied')
+    return noStore(new NextResponse(null, { status: 503 }))
   }
 
-  const formData = await request.formData()
+  // Brute-force throttle: once a client exceeds the failed-attempt cap, reject
+  // with 429 + Retry-After before doing any further work. Checked up front so a
+  // throttled attacker can't keep paying for form parsing or HMAC comparison.
+  const clientKey = loginClientKey(request.headers)
+  const limit = loginRateLimiter.check(clientKey)
+  if (limit.limited) {
+    return noStore(new NextResponse(null, {
+      status: 429,
+      headers: { 'Retry-After': String(limit.retryAfterSeconds) },
+    }))
+  }
+
+  // Malformed Content-Type or body (e.g. application/json sent to a form
+  // endpoint) causes formData() to throw. Catch it and return 400 rather than
+  // letting Next.js surface an opaque 500 for a client-side mistake.
+  let formData: FormData
+  try {
+    formData = await request.formData()
+  } catch {
+    return noStore(new NextResponse(null, { status: 400 }))
+  }
   // formData.get() returns string | File | null — guard against File objects
   // (e.g. multipart abuse) before passing to safeCompare.
   const rawPassword = formData.get('password')
@@ -36,24 +129,41 @@ export async function POST(request: NextRequest) {
   const rawRedirect = formData.get('redirect')
   const redirectPath = typeof rawRedirect === 'string' ? rawRedirect : '/'
 
-  // Validate redirect path: must be a simple relative path starting with /
-  // and NOT a protocol-relative URL (//host) to prevent open-redirect attacks.
-  const safeRedirect =
-    redirectPath.startsWith('/') && !redirectPath.startsWith('//')
-      ? redirectPath
-      : '/'
-
-  if (safeCompare(password, PASSWORD)) {
-    const response = NextResponse.redirect(new URL(safeRedirect, request.url), 303)
-    response.cookies.set(AUTH_COOKIE_NAME, await deriveAuthToken(PASSWORD), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: '/',
-    })
-    return response
+  // Reject oversized passwords before doing any crypto work.
+  if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
+    return noStore(new NextResponse(null, { status: 400 }))
   }
+
+  const safeRedirect = sanitizeRedirectPath(redirectPath, request.url)
+
+  if (secretsEqual(password, PASSWORD)) {
+    // Successful auth clears the client's failed-attempt counter so a user who
+    // mistyped a few times before getting it right starts fresh.
+    loginRateLimiter.reset(clientKey)
+    // Deriving the cookie token uses Web Crypto and can fail (transiently) even
+    // though the password was correct. Return 503 — the same "service not able
+    // to authenticate right now" signal as the missing-SITE_PASSWORD path —
+    // instead of letting the rejection escape as an opaque 500.
+    let cookieToken: string
+    try {
+      cookieToken = await getCachedToken(PASSWORD)
+    } catch (err) {
+      logger.error('[Login] Failed to derive auth cookie token', err instanceof Error ? err.message : String(err))
+      return noStore(new NextResponse(null, { status: 503 }))
+    }
+    const response = NextResponse.redirect(new URL(safeRedirect, request.url), 303)
+    response.cookies.set(AUTH_COOKIE_NAME, cookieToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      maxAge: sessionMaxAgeSeconds(),
+      path: '/', // Site-password auth gates the whole app, so the cookie must cover every route.
+    })
+    return noStore(response)
+  }
+
+  // Count this failure toward the brute-force ceiling.
+  loginRateLimiter.recordFailure(clientKey)
 
   // Slow brute-force attempts with a fixed artificial delay before responding.
   // This doesn't require shared state and doesn't reveal whether the password
@@ -63,8 +173,8 @@ export async function POST(request: NextRequest) {
   // Wrong password — redirect back to the same page to show login with error
   const errorUrl = new URL(safeRedirect, request.url)
   errorUrl.searchParams.set('error', '1')
-  return new NextResponse(null, {
+  return noStore(new NextResponse(null, {
     status: 303,
     headers: { Location: errorUrl.pathname + errorUrl.search },
-  })
+  }))
 }

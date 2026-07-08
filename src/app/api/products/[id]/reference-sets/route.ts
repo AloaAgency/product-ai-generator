@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const MAX_NAME_LENGTH = 500
 const MAX_DESCRIPTION_LENGTH = 5000
@@ -18,10 +20,12 @@ export async function GET(
       .select('*')
       .eq('product_id', id)
       .order('display_order', { ascending: true })
+      .limit(MAX_LIST_ROWS)
 
-    if (error) { console.error('[ReferenceSets GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[ReferenceSets GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    logger.error('[ReferenceSets GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -33,7 +37,9 @@ export async function POST(
   try {
     const { id: product_id } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
     const { name, description, type = 'product' } = body
 
     if (!name) {
@@ -57,7 +63,7 @@ export async function POST(
       .eq('product_id', product_id)
       .eq('type', type)
 
-    if (countError) { console.error('[ReferenceSets POST count]', countError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (countError) { logger.error('[ReferenceSets POST count]', countError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     // Only auto-activate for product sets (not texture sets)
     const isFirst = (count ?? 0) === 0 && type === 'product'
@@ -75,9 +81,10 @@ export async function POST(
       .select()
       .single()
 
-    if (error) { console.error('[ReferenceSets POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[ReferenceSets POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
-  } catch {
+  } catch (err) {
+    logger.error('[ReferenceSets POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

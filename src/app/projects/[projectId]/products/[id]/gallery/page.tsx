@@ -4,12 +4,18 @@ import { use, useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
-import { GalleryContextMenu, type ContextMenuAction } from '@/components/GalleryContextMenu'
+import { GalleryContextMenu, type ContextMenuAction, type ContextMenuMediaType } from '@/components/GalleryContextMenu'
+import { CreateVideoModal } from '@/components/CreateVideoModal'
+import { SquareGrid } from '@/components/SquareGrid'
 import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
+import { FallbackImage } from '@/components/FallbackImage'
 import type { PromptTemplate } from '@/lib/types'
 import {
+  AlertCircle,
   ArrowLeft,
   ArrowUpDown,
+  ChevronLeft,
+  ChevronRight,
   Filter,
   Download,
   ImageIcon,
@@ -25,6 +31,9 @@ import {
   Check,
 } from 'lucide-react'
 import Link from 'next/link'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { logger } from '@/lib/logger'
+import { api, uploadToSignedUrl, cleanupImageRecord } from '@/lib/api-client'
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'request_changes'
 type SortOption = 'newest' | 'oldest' | 'variation'
@@ -51,7 +60,11 @@ export default function GalleryPage({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { projectId, id } = use(params)
+  const router = useRouter()
+  const searchParams = useSearchParams()
 
+  const products = useAppStore((state) => state.products)
+  const fetchProducts = useAppStore((state) => state.fetchProducts)
   const galleryImages = useAppStore((state) => state.galleryImages)
   const galleryTotal = useAppStore((state) => state.galleryTotal)
   const galleryHasMore = useAppStore((state) => state.galleryHasMore)
@@ -68,7 +81,7 @@ export default function GalleryPage({
   const [mediaFilter, setMediaFilter] = useState<'all' | 'image' | 'video'>('all')
   const [jobFilter, setJobFilter] = useState<string>('all')
   const [sortOption, setSortOption] = useState<SortOption>('newest')
-  const [groupByScene, setGroupByScene] = useState(false)
+  const [groupByScene, setGroupByScene] = useState(searchParams.get('group') === 'scene')
   const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null)
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
@@ -82,8 +95,16 @@ export default function GalleryPage({
 
   const [uploadingGallery, setUploadingGallery] = useState(false)
   const galleryFileInputRef = useRef<HTMLInputElement>(null)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null; mediaType: ContextMenuMediaType } | null>(null)
+  const [videoModal, setVideoModal] = useState<{ imageId: string; previewUrl: string | null; sourcePrompt: string | null } | null>(null)
+  const [toast, setToast] = useState<{ type: 'info' | 'error'; message: string } | null>(null)
   const loadMoreRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!toast) return
+    const timer = setTimeout(() => setToast(null), 6000)
+    return () => clearTimeout(timer)
+  }, [toast])
 
   useEffect(() => {
     signedUrlsRef.current = signedUrlsById
@@ -126,16 +147,27 @@ export default function GalleryPage({
       // Upload each file to its signed URL
       const fileArray = Array.from(fileList)
       const uploadedImageIds: string[] = []
+      const failedFileNames: string[] = []
       for (let i = 0; i < results.length; i++) {
         const result = results[i]
-        if (!result.signed_url) continue
         const file = fileArray[i]
-        await fetch(result.signed_url, {
-          method: 'PUT',
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
-          body: file,
+        if (!result.signed_url) {
+          failedFileNames.push(file.name)
+          continue
+        }
+        try {
+          await uploadToSignedUrl(result.signed_url, file, file.type)
+          if (result.image?.id) uploadedImageIds.push(result.image.id)
+        } catch {
+          failedFileNames.push(file.name)
+          if (result.image?.id) await cleanupImageRecord(result.image.id)
+        }
+      }
+      if (failedFileNames.length > 0) {
+        setToast({
+          type: 'error',
+          message: `Failed to upload ${failedFileNames.length} of ${results.length} file(s): ${failedFileNames.join(', ')}`,
         })
-        if (result.image?.id) uploadedImageIds.push(result.image.id)
       }
       // Generate thumbnails for uploaded images
       if (uploadedImageIds.length > 0) {
@@ -143,12 +175,21 @@ export default function GalleryPage({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ image_ids: uploadedImageIds }),
-        }).catch(() => {})
+        }).then((res) => {
+          if (!res.ok) throw new Error(`generate-thumbs responded ${res.status}`)
+        }).catch((err) => {
+          logger.error('[GalleryUpload] Thumbnail generation failed:', err)
+          setToast({ type: 'error', message: 'Images uploaded, but thumbnail generation failed. Previews may be missing.' })
+        })
       }
       // Refresh gallery
       await fetchGallery(id, { sort: sortOption })
     } catch (err) {
-      console.error('[GalleryUpload] Error:', err)
+      logger.error('[GalleryUpload] Error:', err)
+      setToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Upload failed',
+      })
     } finally {
       setUploadingGallery(false)
       if (galleryFileInputRef.current) galleryFileInputRef.current.value = ''
@@ -158,11 +199,40 @@ export default function GalleryPage({
   useEffect(() => {
     fetchGallery(id, { sort: sortOption })
     fetchGenerationJobs(id)
-    fetch(`/api/products/${id}/prompts`)
-      .then((r) => r.json())
+    api(`/api/products/${id}/prompts`)
       .then((data) => { if (Array.isArray(data)) setPromptTemplates(data) })
-      .catch(() => {})
+      .catch((err) => {
+        logger.error('[Gallery] Failed to load prompt templates:', err)
+        setToast({ type: 'error', message: 'Failed to load prompt templates' })
+      })
   }, [id, sortOption, fetchGallery, fetchGenerationJobs])
+
+  useEffect(() => {
+    fetchProducts(projectId)
+  }, [projectId, fetchProducts])
+
+  const projectProducts = useMemo(
+    () => products.filter((p) => p.project_id === projectId),
+    [products, projectId]
+  )
+  const currentProductIndex = useMemo(
+    () => projectProducts.findIndex((p) => p.id === id),
+    [projectProducts, id]
+  )
+  const prevProductId = currentProductIndex > 0 ? projectProducts[currentProductIndex - 1].id : null
+  const nextProductId =
+    currentProductIndex >= 0 && currentProductIndex < projectProducts.length - 1
+      ? projectProducts[currentProductIndex + 1].id
+      : null
+
+  const navigateToProduct = useCallback(
+    (productId: string) => {
+      if (productId && productId !== id) {
+        router.push(`/projects/${projectId}/products/${productId}/gallery`)
+      }
+    },
+    [router, projectId, id]
+  )
 
   // Unique job IDs for filter dropdown
   const jobIds = useMemo(() => {
@@ -179,17 +249,7 @@ export default function GalleryPage({
   // Filtered images
   const filteredImages = useMemo(() => {
     return galleryImages.filter((img) => {
-      if (statusFilter === 'all') {
-        // "All" excludes rejected and request_changes
-        const imgStatus = img.approval_status ?? 'pending'
-        if (imgStatus === 'rejected' || imgStatus === 'request_changes') return false
-      } else if (statusFilter === 'rejected') {
-        const imgStatus = img.approval_status ?? 'pending'
-        if (imgStatus !== 'rejected') return false
-      } else if (statusFilter === 'request_changes') {
-        const imgStatus = img.approval_status ?? 'pending'
-        if (imgStatus !== 'request_changes') return false
-      } else {
+      if (statusFilter !== 'all') {
         const imgStatus = img.approval_status ?? 'pending'
         if (imgStatus !== statusFilter) return false
       }
@@ -268,13 +328,10 @@ export default function GalleryPage({
         variation_number: img.variation_number,
         approval_status: img.approval_status ?? 'pending',
         notes: img.notes,
+        created_at: img.created_at,
         prompt: img.prompt ?? null,
         productId: id,
-        // Job settings for regeneration
-        reference_set_id: (imgAny.reference_set_id as string) ?? null,
-        texture_set_id: (imgAny.texture_set_id as string) ?? null,
-        product_image_count: (imgAny.product_image_count as number) ?? null,
-        texture_image_count: (imgAny.texture_image_count as number) ?? null,
+        reference_sets: (imgAny.reference_sets as LightboxImage['reference_sets']) ?? null,
       }
     })
   }, [imageOnly, signedUrlsById, id])
@@ -322,7 +379,10 @@ export default function GalleryPage({
       body: JSON.stringify({ image_ids: pendingIds }),
     })
       .then(async (res) => {
-        if (!res.ok) return {}
+        if (!res.ok) {
+          setToast({ type: 'error', message: 'Failed to load image previews. Some images may not display.' })
+          return {}
+        }
         const data = await res.json() as { signed_urls?: Record<string, SignedImageUrls> }
         const updates = data.signed_urls ?? {}
         if (Object.keys(updates).length > 0) {
@@ -397,6 +457,19 @@ export default function GalleryPage({
         if (idx !== -1) setLightboxIndex(idx)
         break
       }
+      case 'create_video': {
+        const signed = await ensureSignedUrls(imageId)
+        const previewUrl =
+          img.thumb_public_url ??
+          img.preview_public_url ??
+          img.public_url ??
+          signed?.thumb_signed_url ??
+          signed?.preview_signed_url ??
+          signed?.signed_url ??
+          null
+        setVideoModal({ imageId, previewUrl, sourcePrompt: img.prompt ?? null })
+        break
+      }
       case 'approve':
         await updateImageApproval(imageId, img.approval_status === 'approved' ? null : 'approved')
         break
@@ -423,7 +496,7 @@ export default function GalleryPage({
           document.body.removeChild(link)
           URL.revokeObjectURL(blobUrl)
         } catch (err) {
-          console.error('Download failed for image', imageId, err)
+          logger.error('Download failed for image', imageId, err)
         }
         break
       }
@@ -502,41 +575,72 @@ export default function GalleryPage({
         URL.revokeObjectURL(blobUrl)
         await new Promise((resolve) => setTimeout(resolve, 300))
       } catch (err) {
-        console.error('Download failed for image', img.id, err)
+        logger.error('Download failed for image', img.id, err)
       }
     }
   }
 
+  const handlePlayVideo = useCallback(async (imageId: string, fallbackUrl: string | null) => {
+    if (fallbackUrl) {
+      setPlayingVideoUrl(fallbackUrl)
+      return
+    }
+
+    const signed = await ensureSignedUrls(imageId)
+    if (signed?.signed_url) {
+      setPlayingVideoUrl(signed.signed_url)
+    }
+  }, [ensureSignedUrls])
+
   useEffect(() => {
     let isMounted = true
     let prevHadActive = false
+    let prevProgressSignature = ''
 
     const hasActiveJobs = () => {
       const { generationJobs } = useAppStore.getState()
       return generationJobs.some((job) => job.status === 'pending' || job.status === 'running')
     }
 
+    const getProgressSignature = () => {
+      const { generationJobs } = useAppStore.getState()
+      return generationJobs
+        .filter((job) => job.status === 'pending' || job.status === 'running')
+        .map((job) => `${job.id}:${job.status}:${job.completed_count}:${job.failed_count}`)
+        .join('|')
+    }
+
     const poll = async () => {
+      // Don't poll while the tab is backgrounded — nothing is visible to update
+      // and it wastes network/CPU. We refresh immediately when the tab returns.
+      if (document.visibilityState !== 'visible') return
       await fetchGenerationJobs(id)
       const hasActive = hasActiveJobs()
+      const progressSignature = getProgressSignature()
       if (!isMounted) return
-      if (hasActive) {
+      if (hasActive && progressSignature !== prevProgressSignature) {
         await fetchGallery(id, { sort: sortOption })
       } else if (prevHadActive && !hasActive) {
         await fetchGallery(id, { sort: sortOption })
       }
       prevHadActive = hasActive
+      prevProgressSignature = progressSignature
     }
 
     const interval = setInterval(() => {
       void poll()
     }, 5000)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void poll()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     void poll()
 
     return () => {
       isMounted = false
       clearInterval(interval)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [id, sortOption, fetchGallery, fetchGenerationJobs])
 
@@ -591,14 +695,46 @@ export default function GalleryPage({
       {/* Header */}
       <div className="border-b border-zinc-800 px-4 sm:px-6 py-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <Link
               href={`/projects/${projectId}/products/${id}`}
               className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
             >
               <ArrowLeft className="h-5 w-5" />
             </Link>
-            <h1 className="text-xl font-semibold">Image Gallery</h1>
+            <button
+              type="button"
+              onClick={() => prevProductId && navigateToProduct(prevProductId)}
+              disabled={!prevProductId}
+              aria-label="Previous product"
+              className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-zinc-400 transition-colors"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            {projectProducts.length > 0 && currentProductIndex !== -1 ? (
+              <select
+                value={id}
+                onChange={(e) => navigateToProduct(e.target.value)}
+                className="max-w-[260px] truncate rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-base font-semibold text-zinc-100 outline-none focus:border-zinc-500"
+              >
+                {projectProducts.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <h1 className="text-xl font-semibold">Image Gallery</h1>
+            )}
+            <button
+              type="button"
+              onClick={() => nextProductId && navigateToProduct(nextProductId)}
+              disabled={!nextProductId}
+              aria-label="Next product"
+              className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-zinc-400 transition-colors"
+            >
+              <ChevronRight className="h-5 w-5" />
+            </button>
             <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm text-zinc-400">
               {galleryTotal > filteredImages.length ? `${filteredImages.length} of ${galleryTotal}` : filteredImages.length} image{galleryTotal !== 1 ? 's' : ''}
             </span>
@@ -791,7 +927,7 @@ export default function GalleryPage({
                     {group.images.length}
                   </span>
                 </div>
-                <VirtualizedSquareGrid
+                <SquareGrid
                   items={group.images}
                   getItemKey={(img) => img.id}
                   renderItem={(img) => {
@@ -811,11 +947,11 @@ export default function GalleryPage({
                         }}
                         onContextMenu={(e) => {
                           e.preventDefault()
-                          setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status })
+                          setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status, mediaType: (img.media_type as ContextMenuMediaType) ?? 'image' })
                         }}
                         onMouseEnter={() => warmLightboxAssets(img.id)}
                         onFocus={() => warmLightboxAssets(img.id)}
-                        className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
+                        className={`group relative h-full w-full overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
                           isSelected
                             ? 'border-blue-500 ring-2 ring-blue-500'
                             : isRejected
@@ -825,13 +961,17 @@ export default function GalleryPage({
                                 : 'border-zinc-800 hover:border-zinc-600'
                         }`}
                       >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={img.thumb_public_url ?? img.preview_public_url ?? img.public_url ?? undefined}
+                        <FallbackImage
+                          sources={[img.thumb_public_url, img.preview_public_url, img.public_url]}
                           alt={`Variation ${img.variation_number}`}
                           loading="lazy"
                           decoding="async"
                           className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                          fallback={(
+                            <div className="flex h-full w-full items-center justify-center">
+                              <ImageIcon className="h-8 w-8 text-zinc-600" />
+                            </div>
+                          )}
                         />
                         {selectMode && (
                           <div className="absolute top-2 left-2 z-10">
@@ -879,8 +1019,8 @@ export default function GalleryPage({
                     onClick={() => {
                       if (selectMode) {
                         toggleImageSelection(img.id)
-                      } else if (isVideo && img.public_url) {
-                        setPlayingVideoUrl(img.public_url)
+                      } else if (isVideo) {
+                        void handlePlayVideo(img.id, img.public_url)
                       } else {
                         if (imageIndex !== -1) setLightboxIndex(imageIndex)
                       }
@@ -888,7 +1028,7 @@ export default function GalleryPage({
                     onContextMenu={(e) => {
                       if (isVideo) return
                       e.preventDefault()
-                      setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status })
+                      setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status, mediaType: 'image' })
                     }}
                     onMouseEnter={() => {
                       if (!isVideo) warmLightboxAssets(img.id)
@@ -896,7 +1036,7 @@ export default function GalleryPage({
                     onFocus={() => {
                       if (!isVideo) warmLightboxAssets(img.id)
                     }}
-                    className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
+                    className={`group relative h-full w-full overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
                       isSelected
                         ? 'border-blue-500 ring-2 ring-blue-500'
                         : isRejected
@@ -908,24 +1048,18 @@ export default function GalleryPage({
                   >
                     {isVideo ? (
                       <>
-                        {img.thumb_public_url ? (
-                          /* eslint-disable-next-line @next/next/no-img-element */
-                          <img
-                            src={img.thumb_public_url}
-                            alt="Video thumbnail"
-                            loading="lazy"
-                            decoding="async"
-                            className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                          />
-                        ) : (
-                          <video
-                            src={`${img.public_url}#t=0.1`}
-                            preload="metadata"
-                            muted
-                            playsInline
-                            className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                          />
-                        )}
+                        <FallbackImage
+                          sources={[img.thumb_public_url]}
+                          alt="Video thumbnail"
+                          loading="lazy"
+                          decoding="async"
+                          className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                          fallback={(
+                            <div className="flex h-full w-full items-center justify-center">
+                              <Video className="h-8 w-8 text-zinc-600" />
+                            </div>
+                          )}
+                        />
                         <div className="absolute inset-0 flex items-center justify-center">
                           <div className="rounded-full bg-black/50 p-3">
                             <Play className="h-6 w-6 text-white fill-white" />
@@ -933,13 +1067,17 @@ export default function GalleryPage({
                         </div>
                       </>
                     ) : (
-                      /* eslint-disable-next-line @next/next/no-img-element */
-                      <img
-                        src={img.thumb_public_url ?? img.preview_public_url ?? img.public_url ?? undefined}
+                      <FallbackImage
+                        sources={[img.thumb_public_url, img.preview_public_url, img.public_url]}
                         alt={`Variation ${img.variation_number}`}
                         loading="lazy"
                         decoding="async"
                         className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                        fallback={(
+                          <div className="flex h-full w-full items-center justify-center">
+                            <ImageIcon className="h-8 w-8 text-zinc-600" />
+                          </div>
+                        )}
                       />
                     )}
                     {selectMode && (
@@ -1047,9 +1185,41 @@ export default function GalleryPage({
           y={contextMenu.y}
           imageId={contextMenu.imageId}
           approvalStatus={contextMenu.approvalStatus}
+          mediaType={contextMenu.mediaType}
           onAction={handleContextMenuAction}
           onClose={() => setContextMenu(null)}
         />
+      )}
+
+      {/* Turn-into-video modal */}
+      {videoModal && (
+        <CreateVideoModal
+          productId={id}
+          imageId={videoModal.imageId}
+          previewUrl={videoModal.previewUrl}
+          sourcePrompt={videoModal.sourcePrompt}
+          onClose={() => setVideoModal(null)}
+          onQueued={(message) => setToast({ type: 'info', message })}
+        />
+      )}
+
+      {/* Transient toast */}
+      {toast && (
+        <div className="fixed bottom-4 left-1/2 z-[120] -translate-x-1/2 px-4" role="status" aria-live="polite">
+          <div className={`flex items-center gap-3 rounded-lg border bg-zinc-900 px-4 py-3 text-sm text-zinc-100 shadow-xl shadow-black/50 ${toast.type === 'error' ? 'border-red-700/60' : 'border-purple-700/50'}`}>
+            {toast.type === 'error'
+              ? <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+              : <Video className="h-4 w-4 shrink-0 text-purple-400" />}
+            <span className="flex-1">{toast.message}</span>
+            <button
+              onClick={() => setToast(null)}
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+              aria-label="Dismiss"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Lightbox */}

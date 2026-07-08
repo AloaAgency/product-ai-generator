@@ -28,6 +28,8 @@ const mockDownload = vi.fn()
 const mockUpload = vi.fn()
 const mockRemove = vi.fn()
 const mockDbUpdate = vi.fn()
+// Captures the payload passed to .update() so tests can assert on field names.
+let capturedDbUpdatePayload: Record<string, unknown> | undefined
 
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: () => ({
@@ -39,9 +41,12 @@ vi.mock('@/lib/supabase/server', () => ({
       }),
     },
     from: (_table: string) => ({
-      update: (_data: unknown) => ({
-        eq: (_col: string, _val: string) => mockDbUpdate(),
-      }),
+      update: (data: Record<string, unknown>) => {
+        capturedDbUpdatePayload = data
+        return {
+          eq: (_col: string, _val: string) => mockDbUpdate(),
+        }
+      },
     }),
   }),
 }))
@@ -76,6 +81,7 @@ const FAKE_STORAGE_PATH = 'org/product/ref-image.png'
 /** Reset all mocks before each test */
 beforeEach(() => {
   vi.clearAllMocks()
+  capturedDbUpdatePayload = undefined
 })
 
 // ---------------------------------------------------------------------------
@@ -94,8 +100,7 @@ describe('processReferenceImageCompression — download failures', () => {
     expect(result.wasCompressed).toBe(false)
     expect(result.originalSize).toBe(0)
     expect(result.compressedSize).toBe(0)
-    expect(result.error).toMatch(/Download failed/)
-    expect(result.error).toContain('object not found')
+    expect(result.error).toBe('object not found')
     expect(result.imageId).toBe(FAKE_IMAGE_ID)
   })
 
@@ -105,8 +110,7 @@ describe('processReferenceImageCompression — download failures', () => {
     const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
 
     expect(result.wasCompressed).toBe(false)
-    expect(result.error).toMatch(/Download failed/)
-    expect(result.error).toContain('no data')
+    expect(result.error).toBe('Download failed')
   })
 })
 
@@ -168,8 +172,7 @@ describe('processReferenceImageCompression — upload failure', () => {
     const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
 
     expect(result.wasCompressed).toBe(false)
-    expect(result.error).toMatch(/Upload failed/)
-    expect(result.error).toContain('bucket quota exceeded')
+    expect(result.error).toBe('bucket quota exceeded')
     expect(result.imageId).toBe(FAKE_IMAGE_ID)
     expect(result.originalSize).toBe(7)
     expect(result.compressedSize).toBe(15)
@@ -212,8 +215,7 @@ describe('processReferenceImageCompression — DB update failure', () => {
     const result = await processReferenceImageCompression(FAKE_IMAGE_ID, originalPath)
 
     expect(result.wasCompressed).toBe(true)
-    expect(result.error).toMatch(/DB update failed/)
-    expect(result.error).toContain('FK violation')
+    expect(result.error).toBe('FK violation')
   })
 
   it('still includes newStoragePath in the result even when DB update fails', async () => {
@@ -273,6 +275,145 @@ describe('processReferenceImageCompression — happy path', () => {
       expect.any(Buffer),
       expect.objectContaining({ contentType: 'image/webp' })
     )
+  })
+
+  it('updates the DB record with storage_path, mime_type, and file_size fields', async () => {
+    await processReferenceImageCompression(FAKE_IMAGE_ID, originalPath)
+    expect(capturedDbUpdatePayload).toEqual({
+      storage_path: expectedNewPath,
+      mime_type: 'image/webp',
+      file_size: 800_000,
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Compression error path
+// ---------------------------------------------------------------------------
+
+describe('processReferenceImageCompression — compression failure', () => {
+  it('returns wasCompressed=false with the error message when compression throws', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('valid-png'), error: null })
+    mockCompress.mockRejectedValue(new Error('unsupported format'))
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('unsupported format')
+    expect(result.imageId).toBe(FAKE_IMAGE_ID)
+  })
+
+  it('reports originalSize and compressedSize equal to the buffer length on compression error', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('valid-png-data'), error: null })
+    mockCompress.mockRejectedValue(new Error('pixel bomb detected'))
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(result.originalSize).toBeGreaterThan(0)
+    expect(result.originalSize).toBe(result.compressedSize)
+  })
+
+  it('does not attempt upload or DB update when compression throws', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('data'), error: null })
+    mockCompress.mockRejectedValue(new Error('compression error'))
+
+    await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockUpload).not.toHaveBeenCalled()
+    expect(mockDbUpdate).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a non-Error rejection as "Compression failed"', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('data'), error: null })
+    mockCompress.mockRejectedValue('string-error')
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+    expect(result.error).toBe('Compression failed')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Transient-error retry behaviour
+// ---------------------------------------------------------------------------
+
+describe('processReferenceImageCompression — transient-error retries', () => {
+  it('retries a transient download error and succeeds on a later attempt', async () => {
+    mockDownload
+      .mockResolvedValueOnce({ data: null, error: { message: 'network timeout' } })
+      .mockResolvedValueOnce({ data: makeBlob('png-data'), error: null })
+    mockCompress.mockResolvedValue({
+      buffer: Buffer.from('png-data'),
+      mimeType: 'image/png',
+      extension: 'png',
+      originalSize: 8,
+      compressedSize: 8,
+      wasCompressed: false,
+    })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(2)
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBeUndefined()
+  })
+
+  it('does NOT retry a deterministic (non-transient) download error', async () => {
+    mockDownload.mockResolvedValue({ data: null, error: { message: 'object not found' } })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(1)
+    expect(result.error).toBe('object not found')
+  })
+
+  it('gives up after the max attempts when a transient download error persists', async () => {
+    mockDownload.mockResolvedValue({ data: null, error: { message: 'service unavailable (503)' } })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(3)
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('service unavailable (503)')
+  })
+
+  it('retries a transient upload error and succeeds on a later attempt', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('big-png'), error: null })
+    mockCompress.mockResolvedValue({
+      buffer: Buffer.from('compressed-webp'),
+      mimeType: 'image/webp',
+      extension: 'webp',
+      originalSize: 200,
+      compressedSize: 50,
+      wasCompressed: true,
+    })
+    mockUpload
+      .mockResolvedValueOnce({ error: { message: 'ECONNRESET' } })
+      .mockResolvedValueOnce({ error: null })
+    mockDbUpdate.mockResolvedValue({ error: null })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, 'org/product/ref-image.png')
+
+    expect(mockUpload).toHaveBeenCalledTimes(2)
+    expect(result.wasCompressed).toBe(true)
+    expect(result.error).toBeUndefined()
+  })
+
+  it('does NOT retry a deterministic upload error (quota)', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('big-png'), error: null })
+    mockCompress.mockResolvedValue({
+      buffer: Buffer.from('compressed-webp'),
+      mimeType: 'image/webp',
+      extension: 'webp',
+      originalSize: 200,
+      compressedSize: 50,
+      wasCompressed: true,
+    })
+    mockUpload.mockResolvedValue({ error: { message: 'bucket quota exceeded' } })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, 'org/product/ref-image.png')
+
+    expect(mockUpload).toHaveBeenCalledTimes(1)
+    expect(result.error).toBe('bucket quota exceeded')
   })
 })
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { logger } from '@/lib/logger'
 
 const SIGNED_URL_TTL = 6 * 60 * 60
 
@@ -20,7 +21,7 @@ export async function GET(
       .order('created_at', { ascending: false })
 
     if (error) {
-      console.error('[SceneVideos GET]', error)
+      logger.error('[SceneVideos GET]', error)
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
@@ -32,7 +33,7 @@ export async function GET(
         .createSignedUrls(paths, SIGNED_URL_TTL)
       if (signed) {
         signedMap = new Map(
-          signed.filter((s) => s?.signedUrl && s?.path).map((s) => [s.path!, s.signedUrl])
+          signed.filter((s) => s?.signedUrl && s?.path).map((s) => [s.path!, s.signedUrl!])
         )
       }
     }
@@ -44,7 +45,7 @@ export async function GET(
 
     return NextResponse.json({ videos: result })
   } catch (err) {
-    console.error('[SceneVideos] Error:', err)
+    logger.error('[SceneVideos] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

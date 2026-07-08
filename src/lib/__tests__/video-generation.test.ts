@@ -8,6 +8,7 @@ import {
   getVeoConfig,
   getVeoVideoUri,
   pollVeoOperation,
+  VideoJobCancelledError,
 } from '../video-generation'
 
 afterEach(() => {
@@ -286,19 +287,45 @@ describe('pollVeoOperation', () => {
       pollVeoOperation('https://veo.example.test', 'operations/slow', 'api-key', 250, 1_000)
     ).rejects.toThrow(/Veo generation timed out after 1s/)
   })
+
+  it('stops polling with VideoJobCancelledError when the job is cancelled', async () => {
+    let polls = 0
+    vi.spyOn(global, 'fetch').mockImplementation(async () => {
+      polls += 1
+      return createJsonResponse({ done: false })
+    })
+    vi.spyOn(global, 'setTimeout').mockImplementation(((
+      callback: (...args: unknown[]) => void
+    ) => {
+      callback()
+      return 0 as unknown as ReturnType<typeof setTimeout>
+    }) as typeof setTimeout)
+
+    // First check reports not cancelled, second reports cancelled.
+    const answers = [false, true]
+    const shouldCancel = async () => answers.shift() ?? true
+
+    await expect(
+      pollVeoOperation('https://veo.example.test', 'operations/cancel', 'api-key', 250, 60_000, shouldCancel)
+    ).rejects.toThrow(VideoJobCancelledError)
+    expect(polls).toBe(1)
+  })
 })
 
 describe('getVeoConfig', () => {
-  it('trims configured values and falls back past blank overrides', async () => {
+  it('trims configured values and rejects blank project keys without env fallback', async () => {
     await withEnv({
+      // Env keys must NOT be used as a fallback — that would bill the wrong
+      // account (see the per-project key enforcement in getVeoConfig).
       GOOGLE_AI_API_KEY: '  env-api-key  ',
       GEMINI_API_KEY: '  ',
       VEO_API_BASE_URL: '  https://veo.example.test/base/  ',
       VEO_MODEL: '  veo-custom  ',
     }, async () => {
-      const config = getVeoConfig('   ')
+      expect(() => getVeoConfig('   ')).toThrow(/No Google AI API key configured/)
 
-      expect(config.apiKey).toBe('env-api-key')
+      const config = getVeoConfig('  project-api-key  ')
+      expect(config.apiKey).toBe('project-api-key')
       expect(config.baseUrl).toBe('https://veo.example.test/base')
       expect(config.model).toBe('veo-custom')
     })
@@ -323,50 +350,90 @@ describe('getLtxConfig', () => {
   })
 })
 
+const VEO_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
+
+function veoOperationWithUri(uri: string) {
+  return {
+    done: true,
+    response: {
+      generateVideoResponse: {
+        generatedSamples: [{ video: { uri } }],
+      },
+    },
+  }
+}
+
 describe('getVeoVideoUri', () => {
   it('sanitizes provider errors before surfacing them', () => {
     expect(() => getVeoVideoUri({
       error: {
         message: 'request failed with token=abc123 and Bearer secret-value',
       },
-    })).toThrow(/token=\[redacted\]/)
+    }, VEO_BASE_URL)).toThrow(/token=\[redacted\]/)
 
     expect(() => getVeoVideoUri({
       error: {
         message: 'request failed with token=abc123 and Bearer secret-value',
       },
-    })).toThrow(/Bearer \[redacted\]/)
+    }, VEO_BASE_URL)).toThrow(/Bearer \[redacted\]/)
   })
-})
 
-describe('getVeoVideoUri', () => {
   it('surfaces operation errors and rejects malformed responses', () => {
-    expect(() => getVeoVideoUri({ error: { message: 'Permission denied' } })).toThrow(
+    expect(() => getVeoVideoUri({ error: { message: 'Permission denied' } }, VEO_BASE_URL)).toThrow(
       /Veo operation error: Permission denied/
     )
-    expect(() => getVeoVideoUri({ done: true, response: {} })).toThrow(
+    expect(() => getVeoVideoUri({ done: true, response: {} }, VEO_BASE_URL)).toThrow(
       /No video URI in Veo response/
     )
     expect(() =>
-      getVeoVideoUri({
-        done: true,
-        response: {
-          generateVideoResponse: {
-            generatedSamples: [{ video: { uri: 'http://example.com/video.mp4' } }],
-          },
-        },
-      })
+      getVeoVideoUri(
+        veoOperationWithUri('http://generativelanguage.googleapis.com/video.mp4'),
+        VEO_BASE_URL
+      )
     ).toThrow(/Invalid video URI in Veo response/)
     expect(
-      getVeoVideoUri({
-        done: true,
-        response: {
-          generateVideoResponse: {
-            generatedSamples: [{ video: { uri: 'https://example.com/video.mp4' } }],
-          },
-        },
-      })
-    ).toBe('https://example.com/video.mp4')
+      getVeoVideoUri(
+        veoOperationWithUri('https://generativelanguage.googleapis.com/v1beta/files/abc:download'),
+        VEO_BASE_URL
+      )
+    ).toBe('https://generativelanguage.googleapis.com/v1beta/files/abc:download')
+  })
+
+  // The download request carries the project's API key in an x-goog-api-key
+  // header and follows redirects, so only Google-owned hosts (or the
+  // configured base host, e.g. a proxy) may appear in the video URI.
+  it('rejects video URIs on hosts that must not receive the API key', () => {
+    expect(() =>
+      getVeoVideoUri(veoOperationWithUri('https://evil.example.com/video.mp4'), VEO_BASE_URL)
+    ).toThrow(/Untrusted video URI host in Veo response/)
+    // Suffix match must respect the dot boundary — a lookalike registration
+    // like evilgoogleapis.com is not a Google host.
+    expect(() =>
+      getVeoVideoUri(veoOperationWithUri('https://evilgoogleapis.com/video.mp4'), VEO_BASE_URL)
+    ).toThrow(/Untrusted video URI host in Veo response/)
+  })
+
+  it('accepts Google-owned hosts and the configured base host', () => {
+    expect(
+      getVeoVideoUri(
+        veoOperationWithUri('https://storage.googleusercontent.com/video.mp4'),
+        VEO_BASE_URL
+      )
+    ).toBe('https://storage.googleusercontent.com/video.mp4')
+    // A deployment pointing VEO_API_BASE_URL at a proxy may serve downloads
+    // from that same proxy host.
+    expect(
+      getVeoVideoUri(
+        veoOperationWithUri('https://veo-proxy.example.test/video.mp4'),
+        'https://veo-proxy.example.test/v1beta'
+      )
+    ).toBe('https://veo-proxy.example.test/video.mp4')
+    expect(() =>
+      getVeoVideoUri(
+        veoOperationWithUri('https://other.example.test/video.mp4'),
+        'https://veo-proxy.example.test/v1beta'
+      )
+    ).toThrow(/Untrusted video URI host in Veo response/)
   })
 })
 

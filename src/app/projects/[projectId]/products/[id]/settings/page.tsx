@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useAppStore } from '@/lib/store'
 import { Save, CheckCircle, Settings, Camera, Palette, Trash2, FolderOpen, Plus, Download, Upload, ChevronDown, FileText } from 'lucide-react'
 import type { GlobalStyleSettings, SettingsTemplate } from '@/lib/types'
+import { normalizeGoogleApiKeySettings } from '@/lib/google-api-keys'
 
 function SectionCard({
   id,
@@ -24,7 +25,7 @@ function SectionCard({
   children: React.ReactNode
 }) {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+    <div id={id} className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden scroll-mt-4">
       <button
         onClick={onToggle}
         className="w-full flex items-center justify-between p-4 text-left hover:bg-zinc-800/50 transition-colors"
@@ -92,11 +93,18 @@ export default function ProductSettingsPage({
 }) {
   const { projectId, id } = use(params)
   const router = useRouter()
-  const {
-    currentProduct, projects, fetchProduct, fetchProjects, updateProduct, deleteProduct,
-    settingsTemplates, fetchSettingsTemplates, createSettingsTemplate, updateSettingsTemplate,
-    deleteSettingsTemplate, activateSettingsTemplate,
-  } = useAppStore()
+  const currentProduct = useAppStore((s) => s.currentProduct)
+  const projects = useAppStore((s) => s.projects)
+  const fetchProduct = useAppStore((s) => s.fetchProduct)
+  const fetchProjects = useAppStore((s) => s.fetchProjects)
+  const updateProduct = useAppStore((s) => s.updateProduct)
+  const deleteProduct = useAppStore((s) => s.deleteProduct)
+  const settingsTemplates = useAppStore((s) => s.settingsTemplates)
+  const fetchSettingsTemplates = useAppStore((s) => s.fetchSettingsTemplates)
+  const createSettingsTemplate = useAppStore((s) => s.createSettingsTemplate)
+  const updateSettingsTemplate = useAppStore((s) => s.updateSettingsTemplate)
+  const deleteSettingsTemplate = useAppStore((s) => s.deleteSettingsTemplate)
+  const activateSettingsTemplate = useAppStore((s) => s.activateSettingsTemplate)
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -129,7 +137,7 @@ export default function ProductSettingsPage({
       initializedForId.current = id
       setName(currentProduct.name)
       setDescription(currentProduct.description || '')
-      setSettings(currentProduct.global_style_settings || {})
+      setSettings(normalizeGoogleApiKeySettings(currentProduct.global_style_settings || {}))
       const defaults = currentProduct.global_style_settings || {}
       setDefaultVariationInput(
         typeof defaults.default_variation_count === 'number'
@@ -153,10 +161,11 @@ export default function ProductSettingsPage({
     setSaving(true)
     setSaved(false)
     try {
+      const normalizedSettings = normalizeGoogleApiKeySettings(settings)
       const updates: Parameters<typeof updateProduct>[1] = {
         name,
         description: description || undefined,
-        global_style_settings: settings,
+        global_style_settings: normalizedSettings,
       }
       if (selectedProjectId !== projectId) {
         updates.project_id = selectedProjectId

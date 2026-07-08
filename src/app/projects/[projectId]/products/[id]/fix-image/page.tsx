@@ -13,6 +13,7 @@ import {
   Upload,
 } from 'lucide-react'
 import type { GeneratedImage } from '@/lib/types'
+import { api, uploadToSignedUrl, cleanupImageRecord } from '@/lib/api-client'
 
 export default function FixImagePage({
   params,
@@ -23,26 +24,21 @@ export default function FixImagePage({
   const searchParams = useSearchParams()
   const sourceImageIdParam = searchParams.get('sourceImageId')
 
-  const {
-    referenceSets,
-    currentJob,
-    currentProduct,
-    fetchReferenceSets,
-    startGeneration,
-    fetchJobStatus,
-    updateImageApproval,
-    deleteImage,
-  } = useAppStore()
+  const referenceSets = useAppStore((s) => s.referenceSets)
+  const currentJob = useAppStore((s) => s.currentJob)
+  const currentProduct = useAppStore((s) => s.currentProduct)
+  const fetchReferenceSets = useAppStore((s) => s.fetchReferenceSets)
+  const startGeneration = useAppStore((s) => s.startGeneration)
+  const fetchJobStatus = useAppStore((s) => s.fetchJobStatus)
+  const updateImageApproval = useAppStore((s) => s.updateImageApproval)
+  const deleteImage = useAppStore((s) => s.deleteImage)
 
   // Source image state
   const [sourceImageId, setSourceImageId] = useState<string | null>(null)
   const [sourceImageUrl, setSourceImageUrl] = useState<string | null>(null)
   const [sourceImageLoading, setSourceImageLoading] = useState(false)
+  const [sourceImageError, setSourceImageError] = useState<string | null>(null)
   const [showSourcePicker, setShowSourcePicker] = useState(false)
-
-  // Supplemental reference images
-  const [refImages, setRefImages] = useState<{ id: string; thumbUrl: string | null }[]>([])
-  const [showRefPicker, setShowRefPicker] = useState(false)
 
   // Change description
   const [changeDescription, setChangeDescription] = useState('')
@@ -95,13 +91,15 @@ export default function FixImagePage({
   useEffect(() => {
     if (!sourceImageIdParam || sourceImageId) return
     setSourceImageLoading(true)
-    fetch(`/api/images/${sourceImageIdParam}/signed`)
-      .then((r) => r.json())
+    setSourceImageError(null)
+    api(`/api/images/${sourceImageIdParam}/signed`)
       .then((data) => {
         setSourceImageId(sourceImageIdParam)
         setSourceImageUrl(data.thumb_signed_url || data.preview_signed_url || data.signed_url || null)
       })
-      .catch(() => {})
+      .catch(() => {
+        setSourceImageError('Failed to load the source image. Pick it again from the gallery.')
+      })
       .finally(() => setSourceImageLoading(false))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceImageIdParam])
@@ -129,6 +127,8 @@ export default function FixImagePage({
       }
       setGenerating(false)
     }
+    // Only react to status transitions, not every poll update to the job object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentJob?.status])
 
   const parseVariationCount = (value: string) => {
@@ -149,7 +149,14 @@ export default function FixImagePage({
         variation_count: variationCountValue,
         resolution,
         aspect_ratio: aspectRatio,
-        reference_set_id: selectedRefSetId || undefined,
+        reference_sets: selectedRefSetId
+          ? [{
+              reference_set_id: selectedRefSetId,
+              role: 'subject',
+              image_count: null,
+              subject_label: null,
+            }]
+          : [],
         source_image_id: sourceImageId,
       })
       setActiveJobId(job.id)
@@ -172,6 +179,7 @@ export default function FixImagePage({
       variation_number: img.variation_number,
       approval_status: img.approval_status ?? 'pending',
       notes: img.notes,
+      created_at: img.created_at,
       productId,
     }))
   }, [currentJob?.images, signedUrlsById, productId])
@@ -211,6 +219,11 @@ export default function FixImagePage({
       {/* Source Image */}
       <section className="space-y-3">
         <h2 className="text-sm font-semibold text-zinc-300">Source Image <span className="text-red-400">*</span></h2>
+        {sourceImageError && (
+          <div className="rounded-lg border border-red-800 bg-red-950/60 px-3 py-2 text-sm text-red-300">
+            {sourceImageError}
+          </div>
+        )}
         <div className="flex items-start gap-4">
           {sourceImageId && sourceImageUrl ? (
             <div className="relative w-48 h-48 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800">
@@ -500,6 +513,7 @@ function SourceImagePicker({
   const [galleryImages, setGalleryImages] = useState<GeneratedImage[]>([])
   const [loadingGallery, setLoadingGallery] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -530,6 +544,7 @@ function SourceImagePicker({
     const file = e.target.files?.[0]
     if (!file) return
     setUploading(true)
+    setUploadError(null)
     try {
       const res = await fetch(`/api/products/${productId}/gallery/upload`, {
         method: 'POST',
@@ -548,17 +563,19 @@ function SourceImagePicker({
       if (!firstResult || firstResult.error || !firstResult.signed_url || !firstResult.image?.id) {
         throw new Error(firstResult?.error || 'Failed to prepare upload')
       }
-      const putRes = await fetch(firstResult.signed_url, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        body: file,
-      })
-      if (!putRes.ok) throw new Error('File upload failed')
+      try {
+        await uploadToSignedUrl(firstResult.signed_url, file, file.type)
+      } catch (err) {
+        await cleanupImageRecord(firstResult.image.id)
+        throw err
+      }
       // Fetch a signed download URL so the thumbnail can be displayed
       const signedRes = await fetch(`/api/images/${firstResult.image.id}/signed`)
       const signedData = signedRes.ok ? await signedRes.json() : null
       const thumbUrl = signedData?.thumb_signed_url || signedData?.preview_signed_url || signedData?.signed_url || null
       onSelect(firstResult.image.id, thumbUrl)
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -633,6 +650,11 @@ function SourceImagePicker({
           </div>
         ) : (
           <div className="py-8 flex flex-col items-center gap-3">
+            {uploadError && (
+              <div className="rounded-lg border border-red-800 bg-red-950/60 px-3 py-2 text-sm text-red-300">
+                {uploadError}
+              </div>
+            )}
             <input
               ref={fileInputRef}
               type="file"

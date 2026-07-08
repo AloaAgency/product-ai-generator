@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { requireUuid, parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params
+    const { id: rawId } = await params
+    const id = requireUuid(rawId, 'product id')
     const supabase = createServiceClient()
 
     const { data, error } = await supabase
@@ -18,7 +21,8 @@ export async function GET(
 
     if (error) return NextResponse.json({ error: 'Not found' }, { status: 404 })
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    logger.error('[Product GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -28,12 +32,12 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params
+    const { id: rawId } = await params
+    const id = requireUuid(rawId, 'product id')
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
 
     const updates: Record<string, unknown> = {}
     if (body.name !== undefined) updates.name = body.name
@@ -48,9 +52,10 @@ export async function PATCH(
       .select()
       .single()
 
-    if (error) { console.error('[Product PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Product PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    logger.error('[Product PATCH] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -60,7 +65,8 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params
+    const { id: rawId } = await params
+    const id = requireUuid(rawId, 'product id')
     const supabase = createServiceClient()
 
     const { error } = await supabase
@@ -68,9 +74,10 @@ export async function DELETE(
       .delete()
       .eq('id', id)
 
-    if (error) { console.error('[Product DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Product DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
-  } catch {
+  } catch (err) {
+    logger.error('[Product DELETE] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

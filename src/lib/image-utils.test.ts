@@ -21,6 +21,9 @@ import {
   compressReferenceImage,
   createThumbnail,
   createPreview,
+  createThumbnailAndPreview,
+  extractVideoThumbnail,
+  assertImageDimensions,
 } from './image-utils'
 
 // ---------------------------------------------------------------------------
@@ -125,6 +128,14 @@ describe('resolveExtension', () => {
   it('is case-sensitive — "image/JPEG" does NOT match', () => {
     // Verifies exact contract; callers are expected to normalise case.
     expect(resolveExtension('image/JPEG')).toBe('png')
+  })
+
+  it('returns "heic" for image/heic', () => {
+    expect(resolveExtension('image/heic')).toBe('heic')
+  })
+
+  it('returns "heic" for image/heif', () => {
+    expect(resolveExtension('image/heif')).toBe('heic')
   })
 })
 
@@ -412,6 +423,72 @@ describe('compressReferenceImage', () => {
     const garbage = Buffer.from('this is definitely not an image format at all')
     await expect(compressReferenceImage(garbage)).rejects.toThrow()
   })
+
+  it('throws when image dimensions exceed the per-side limit (pixel bomb guard)', async () => {
+    // Sharp's create helper lets us synthesize an image with huge declared
+    // dimensions without actually allocating the full bitmap in the test.
+    // 33 000 px exceeds the 32 768 px per-side ceiling.
+    const huge = await sharp({
+      create: { width: 33_000, height: 100, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    })
+      .png()
+      .toBuffer()
+    await expect(compressReferenceImage(huge)).rejects.toThrow(
+      /dimensions.*exceed maximum/i
+    )
+  })
+
+  it('throws at the exact MAX_SAFE_INPUT_DIMENSION boundary (pixel bomb guard)', async () => {
+    // A 32 768-px wide image passes the old `>` check but should be rejected.
+    // Decoded at 32 768×100 RGBA that is ~13 MB, but the guard fires before
+    // any decode, so the test is cheap to run.
+    const atLimit = await sharp({
+      create: { width: 32_768, height: 100, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    })
+      .png()
+      .toBuffer()
+    await expect(compressReferenceImage(atLimit)).rejects.toThrow(
+      /dimensions.*exceed maximum/i
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// assertImageDimensions — memory-safety guard (pure, no bitmap allocation)
+//
+// Tested directly with plain numbers so the total-area branch can be exercised
+// without materialising a multi-hundred-megapixel bitmap in the test process.
+// ---------------------------------------------------------------------------
+
+describe('assertImageDimensions', () => {
+  it('accepts an image comfortably within both limits', () => {
+    expect(() => assertImageDimensions(4096, 4096, 'test')).not.toThrow()
+  })
+
+  it('rejects when a single axis reaches the per-side ceiling', () => {
+    expect(() => assertImageDimensions(32_768, 100, 'test')).toThrow(
+      /dimensions.*exceed maximum/i
+    )
+  })
+
+  it('rejects when the total area exceeds the max even though each axis is in-range', () => {
+    // 20000 × 20000 = 400 MP: both axes are below the 32 768 per-side ceiling
+    // yet the decoded area (~1.6 GB as RGBA) is a memory bomb.
+    expect(() => assertImageDimensions(20_000, 20_000, 'test')).toThrow(
+      /area.*exceeds maximum decodable area/i
+    )
+  })
+
+  it('accepts a large-but-thin image whose total area stays under the ceiling', () => {
+    // 30000 × 8000 = 240 MP < 268,402,689, and neither axis hits 32 768.
+    expect(() => assertImageDimensions(30_000, 8_000, 'test')).not.toThrow()
+  })
+
+  it('includes the provided context in the thrown message', () => {
+    expect(() => assertImageDimensions(20_000, 20_000, 'myContext')).toThrow(
+      /^myContext:/
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -452,6 +529,12 @@ describe('createThumbnail', () => {
     const result = await createThumbnail(src)
     expect(result.buffer.length).toBeGreaterThan(0)
   })
+
+  it('throws when given an empty buffer', async () => {
+    await expect(createThumbnail(Buffer.alloc(0))).rejects.toThrow(
+      'resizeToWebP: buffer is empty'
+    )
+  })
 })
 
 describe('createPreview', () => {
@@ -481,5 +564,67 @@ describe('createPreview', () => {
     const result = await createPreview(src, 800)
     const meta = await sharp(result.buffer).metadata()
     expect(meta.width).toBe(800)
+  })
+
+  it('throws when given an empty buffer', async () => {
+    await expect(createPreview(Buffer.alloc(0))).rejects.toThrow(
+      'resizeToWebP: buffer is empty'
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// createThumbnailAndPreview — parallel generation
+// ---------------------------------------------------------------------------
+
+describe('createThumbnailAndPreview', () => {
+  it('resolves to a [thumbnail, preview] tuple — both WebP', async () => {
+    const src = await makePng({ width: 2000, height: 1500 })
+    const [thumb, preview] = await createThumbnailAndPreview(src)
+    expect(thumb.mimeType).toBe('image/webp')
+    expect(thumb.extension).toBe('webp')
+    expect(preview.mimeType).toBe('image/webp')
+    expect(preview.extension).toBe('webp')
+  })
+
+  it('thumbnail is 480px wide and preview is 1600px wide', async () => {
+    const src = await makePng({ width: 3000, height: 2000 })
+    const [thumb, preview] = await createThumbnailAndPreview(src)
+    const thumbMeta = await sharp(thumb.buffer).metadata()
+    const previewMeta = await sharp(preview.buffer).metadata()
+    expect(thumbMeta.width).toBe(480)
+    expect(previewMeta.width).toBe(1600)
+  })
+
+  it('both outputs are non-empty buffers', async () => {
+    const src = await makePng({ width: 1000, height: 800 })
+    const [thumb, preview] = await createThumbnailAndPreview(src)
+    expect(thumb.buffer.length).toBeGreaterThan(0)
+    expect(preview.buffer.length).toBeGreaterThan(0)
+  })
+
+  it('does not enlarge thumbnail beyond original when image is small', async () => {
+    const src = await makePng({ width: 200, height: 150 })
+    const [thumb] = await createThumbnailAndPreview(src)
+    const meta = await sharp(thumb.buffer).metadata()
+    expect(meta.width).toBeLessThanOrEqual(200)
+  })
+
+  it('throws when given an empty buffer', async () => {
+    await expect(createThumbnailAndPreview(Buffer.alloc(0))).rejects.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// extractVideoThumbnail — guard tests (no ffmpeg required)
+// The empty-buffer guard fires before ensureFfmpegPath(), so these tests
+// run without a real video file or ffmpeg binary.
+// ---------------------------------------------------------------------------
+
+describe('extractVideoThumbnail', () => {
+  it('throws when given an empty buffer', async () => {
+    await expect(extractVideoThumbnail(Buffer.alloc(0))).rejects.toThrow(
+      'extractVideoThumbnail: buffer is empty'
+    )
   })
 })

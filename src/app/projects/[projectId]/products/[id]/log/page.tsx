@@ -19,6 +19,7 @@ import {
   Search,
   X,
 } from 'lucide-react'
+import { logger } from '@/lib/logger'
 
 const STATUS_CONFIG: Record<
   GenerationJob['status'],
@@ -42,13 +43,11 @@ export default function LogPage({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { id: productId } = use(params)
-  const {
-    generationJobs,
-    loadingJobs,
-    fetchGenerationJobs,
-    deleteGenerationJob,
-    clearGenerationLog,
-  } = useAppStore()
+  const generationJobs = useAppStore((s) => s.generationJobs)
+  const loadingJobs = useAppStore((s) => s.loadingJobs)
+  const fetchGenerationJobs = useAppStore((s) => s.fetchGenerationJobs)
+  const deleteGenerationJob = useAppStore((s) => s.deleteGenerationJob)
+  const clearGenerationLog = useAppStore((s) => s.clearGenerationLog)
 
   const [statusFilter, setStatusFilter] = useState<GenerationJob['status'] | 'all'>('all')
   const [typeFilter, setTypeFilter] = useState<GenerationJob['job_type'] | 'all'>('all')
@@ -91,7 +90,7 @@ export default function LogPage({
       await deleteGenerationJob(productId, jobId)
       if (expandedId === jobId) setExpandedId(null)
     } catch (err) {
-      console.error('Failed to delete job', err)
+      logger.error('Failed to delete job', err)
     } finally {
       setDeletingId(null)
     }
@@ -103,7 +102,7 @@ export default function LogPage({
       await clearGenerationLog(productId)
       setConfirmClear(false)
     } catch (err) {
-      console.error('Failed to clear log', err)
+      logger.error('Failed to clear log', err)
     } finally {
       setClearing(false)
     }

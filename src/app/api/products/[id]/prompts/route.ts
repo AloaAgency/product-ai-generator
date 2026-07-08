@@ -1,29 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import Anthropic from '@anthropic-ai/sdk'
-import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
-import { SCENE_TITLE_SYSTEM_PROMPT, MAX_USER_PROMPT_LEN } from '@/lib/prompt-builder'
-
-const anthropic = new Anthropic()
+import { generateSceneTitle } from '@/lib/prompt-builder'
+import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 const MAX_NAME_LENGTH = 500
 const MAX_PROMPT_LENGTH = 10000
-
-async function generateSceneTitle(promptText: string): Promise<string> {
-  try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_FAST_MODEL.name,
-      max_tokens: 50,
-      system: SCENE_TITLE_SYSTEM_PROMPT,
-      // Truncate to MAX_USER_PROMPT_LEN — consistent with /api/ai/scene-title
-      messages: [{ role: 'user', content: promptText.slice(0, MAX_USER_PROMPT_LEN) }],
-    })
-    return response.content[0].type === 'text' ? response.content[0].text.trim() : ''
-  } catch {
-    return ''
-  }
-}
 
 export async function GET(
   request: NextRequest,
@@ -38,10 +21,12 @@ export async function GET(
       .select('*')
       .eq('product_id', id)
       .order('created_at', { ascending: false })
+      .limit(MAX_LIST_ROWS)
 
-    if (error) { console.error('[Prompts GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Prompts GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
-  } catch {
+  } catch (err) {
+    logger.error('[Prompts GET] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -53,7 +38,9 @@ export async function POST(
   try {
     const { id: product_id } = await params
     const supabase = createServiceClient()
-    const body = await request.json()
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
     const { name, prompt_text, tags, prompt_type } = body
 
     if (!name || !prompt_text) {
@@ -78,10 +65,10 @@ export async function POST(
       .select()
       .single()
 
-    if (error) { console.error('[Prompts POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Prompts POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     // Generate scene title asynchronously then update
-    const sceneTitle = await generateSceneTitle(prompt_text)
+    const sceneTitle = await generateSceneTitle(prompt_text as string)
     if (sceneTitle) {
       const { data: updated } = await supabase
         .from(T.prompt_templates)
@@ -93,7 +80,8 @@ export async function POST(
     }
 
     return NextResponse.json(data, { status: 201 })
-  } catch {
+  } catch (err) {
+    logger.error('[Prompts POST] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

@@ -5,7 +5,9 @@ import {
   requireUuid,
   sanitizeApprovalStatus,
   sanitizePublicErrorMessage,
+  parseRequestBody,
 } from '@/lib/request-guards'
+import { logger } from '@/lib/logger'
 
 export async function PATCH(
   request: NextRequest,
@@ -14,13 +16,9 @@ export async function PATCH(
   try {
     const { imageId } = await params
     const sanitizedImageId = requireUuid(imageId, 'image id')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
-    }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
 
     const updates: Record<string, unknown> = {}
 
@@ -57,7 +55,7 @@ export async function PATCH(
 
     return NextResponse.json({ image })
   } catch (err) {
-    console.error(`[ImagePatch] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[ImagePatch] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -71,10 +69,10 @@ export async function DELETE(
     const sanitizedImageId = requireUuid(imageId, 'image id')
     const supabase = createServiceClient()
 
-    // Fetch the image record first
+    // Fetch the image record first — only the storage paths are needed to delete.
     const { data: image, error: fetchError } = await supabase
       .from(T.generated_images)
-      .select('*')
+      .select('storage_path, thumb_storage_path, preview_storage_path')
       .eq('id', sanitizedImageId)
       .single()
 
@@ -94,7 +92,7 @@ export async function DELETE(
       if (storageError) {
         // Log but continue — the DB record must still be deleted to prevent stale data.
         // Orphaned storage files can be cleaned up via the backfill admin route.
-        console.error('[ImageDelete] Storage deletion failed, orphaned files may remain:', storageError)
+        logger.error('[ImageDelete] Storage deletion failed, orphaned files may remain:', storageError)
       }
     }
 
@@ -110,7 +108,7 @@ export async function DELETE(
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error(`[ImageDelete] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[ImageDelete] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
