@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { slugify, extractVideoThumbnail, buildThumbnailPath } from '@/lib/image-utils'
 import { resolveGoogleApiKey } from '@/lib/google-api-keys'
+import { sanitizePublicErrorMessage } from '@/lib/request-guards'
 import type { GlobalStyleSettings } from '@/lib/types'
 import { isLtxModel, normalizeDurationValue, parsePositiveNumber } from '@/lib/video-constants'
 
@@ -104,20 +105,11 @@ function getTrimmedStringOrNull(value: unknown) {
 }
 
 function sanitizeExternalErrorMessage(
-  value: string,
+  value: unknown,
   fallback: string,
   maxLength = 240
 ) {
-  const normalized = value
-    .replace(/\s+/g, ' ')
-    .replace(/(Bearer\s+)[^\s,;]+/gi, '$1[redacted]')
-    .replace(/([?&](?:access_token|api[_-]?key|authorization|signature|sig|token|x-amz-[^=]+|x-goog-[^=]+)=)[^&\s]+/gi, '$1[redacted]')
-    .replace(/((?:api[_-]?key|authorization|secret|signature|token)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
-    .trim()
-
-  if (!normalized) return fallback
-  if (normalized.length <= maxLength) return normalized
-  return `${normalized.slice(0, maxLength - 3)}...`
+  return sanitizePublicErrorMessage(value, { fallback, maxLength })
 }
 
 function createExternalServiceError(context: string, detail: string) {
@@ -139,6 +131,10 @@ async function getResponseErrorMessage(response: Response) {
 
 function getPositiveNumberOrDefault(value: unknown, fallback: number) {
   return parsePositiveNumber(value) ?? fallback
+}
+
+function getConfiguredBaseUrl(value: unknown, fallback: string) {
+  return (getTrimmedStringOrNull(value) || fallback).replace(/\/$/, '')
 }
 
 function validateVideoPrompt(prompt: string) {
@@ -398,7 +394,7 @@ export function getVeoConfig(apiKeyOverride?: string | null): VeoConfig {
 
   return {
     apiKey,
-    baseUrl: getTrimmedStringOrNull(process.env.VEO_API_BASE_URL) || DEFAULT_VEO_API_BASE_URL,
+    baseUrl: getConfiguredBaseUrl(process.env.VEO_API_BASE_URL, DEFAULT_VEO_API_BASE_URL),
     model: getTrimmedStringOrNull(process.env.VEO_MODEL) || DEFAULT_VEO_MODEL,
     pollIntervalMs: getPositiveNumberOrDefault(
       process.env.VEO_POLL_INTERVAL_MS,
@@ -807,7 +803,7 @@ async function generateWithVeo3(
   frameRefs: FrameRefs,
   settings: SceneVideoSettings,
   apiKeyOverride?: string | null
-) : Promise<VideoGenerationResult> {
+): Promise<VideoGenerationResult> {
   const config = getVeoConfig(apiKeyOverride)
   const { instance, parameters } = await buildVeoRequestParts(prompt, frameRefs, settings, config.model)
   logVeoParameters(config, parameters)
@@ -832,7 +828,7 @@ export function getLtxConfig(settings: SceneVideoSettings): LtxConfig {
 
   return {
     apiKey,
-    baseUrl: (getTrimmedStringOrNull(process.env.LTX_API_BASE_URL) || DEFAULT_LTX_API_BASE_URL).replace(/\/$/, ''),
+    baseUrl: getConfiguredBaseUrl(process.env.LTX_API_BASE_URL, DEFAULT_LTX_API_BASE_URL),
     model: getTrimmedStringOrNull(process.env.LTX_MODEL) || DEFAULT_LTX_MODEL,
     resolution: settings.resolution
       || getTrimmedStringOrNull(process.env.LTX_RESOLUTION)

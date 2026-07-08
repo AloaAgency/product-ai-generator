@@ -293,7 +293,7 @@ describe('getVeoConfig', () => {
     await withEnv({
       GOOGLE_AI_API_KEY: '  env-api-key  ',
       GEMINI_API_KEY: '  ',
-      VEO_API_BASE_URL: '  https://veo.example.test/base  ',
+      VEO_API_BASE_URL: '  https://veo.example.test/base/  ',
       VEO_MODEL: '  veo-custom  ',
     }, async () => {
       const config = getVeoConfig('   ')
