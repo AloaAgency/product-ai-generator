@@ -83,7 +83,7 @@ export const resolveExtension = (mimeType: string): string => {
 
 /**
  * Build a descriptive filename for generated product images
- * Format: product-{variation:02d}-{slugified-prompt}-{timestamp}.{ext}
+ * Format: gen-{variation:02d}-{slugified-prompt}-{timestamp}.{ext}
  */
 export const buildImageFileName = (
   variationNumber: number,
@@ -182,16 +182,22 @@ export function assertImageDimensions(w: number, h: number, context: string): vo
   }
 }
 
-// Reads only the image header (fast) to guard against pixel bombs: files whose
-// compressed size passes the buffer check but whose decoded dimensions would
-// exhaust available memory. Must be called before any Sharp decode pipeline.
-async function assertInputDimensions(buffer: Buffer, context: string): Promise<void> {
-  let meta: sharp.Metadata
+// Reads only the image header (fast) — no pixel data is decoded. Wraps Sharp's
+// metadata() so every validation path in this module reports an unreadable
+// file with the same contextualised message.
+async function readImageMetadata(buffer: Buffer, context: string): Promise<sharp.Metadata> {
   try {
-    meta = await sharp(buffer).metadata()
+    return await sharp(buffer).metadata()
   } catch {
     throw new Error(`${context}: could not read image metadata (file may be corrupt or unsupported)`)
   }
+}
+
+// Guards against pixel bombs: files whose compressed size passes the buffer
+// check but whose decoded dimensions would exhaust available memory. Must be
+// called before any Sharp decode pipeline.
+async function assertInputDimensions(buffer: Buffer, context: string): Promise<void> {
+  const meta = await readImageMetadata(buffer, context)
   assertImageDimensions(meta.width ?? 0, meta.height ?? 0, context)
 }
 
@@ -296,6 +302,18 @@ export type CompressResult = {
   wasCompressed: boolean
 }
 
+// Result for the two "keep the original" paths (already within limits, or
+// re-encoding did not shrink the file). A single constructor keeps the
+// mime/extension mapping identical between them.
+const passthroughResult = (buffer: Buffer, format: string): CompressResult => ({
+  buffer,
+  mimeType: FORMAT_MIME_MAP[format] ?? 'application/octet-stream',
+  extension: format,
+  originalSize: buffer.length,
+  compressedSize: buffer.length,
+  wasCompressed: false,
+})
+
 /**
  * Compress a reference image if it exceeds size/dimension thresholds.
  * Returns the original buffer unchanged when already within limits.
@@ -303,15 +321,11 @@ export type CompressResult = {
 export const compressReferenceImage = async (buffer: Buffer): Promise<CompressResult> => {
   assertBufferSize(buffer, 'compressReferenceImage')
   const originalSize = buffer.length
-  let meta: sharp.Metadata
-  try {
-    meta = await sharp(buffer).metadata()
-  } catch {
-    throw new Error('compressReferenceImage: could not read image metadata (file may be corrupt or unsupported)')
-  }
+  const meta = await readImageMetadata(buffer, 'compressReferenceImage')
   if (!meta.format || !ALLOWED_REF_FORMATS.has(meta.format)) {
     throw new Error(`compressReferenceImage: unsupported format '${meta.format ?? 'unknown'}'`)
   }
+  const format = meta.format
   const w = meta.width ?? 0
   const h = meta.height ?? 0
   assertImageDimensions(w, h, 'compressReferenceImage')
@@ -320,14 +334,7 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   const needsCompress = originalSize > REF_MAX_FILE_SIZE
 
   if (!needsResize && !needsCompress) {
-    return {
-      buffer,
-      mimeType: (meta.format && FORMAT_MIME_MAP[meta.format]) ?? 'application/octet-stream',
-      extension: meta.format ?? 'bin',
-      originalSize,
-      compressedSize: originalSize,
-      wasCompressed: false,
-    }
+    return passthroughResult(buffer, format)
   }
 
   // Always rotate first to honour EXIF orientation before any resize operation.
@@ -352,14 +359,7 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   // produce a larger output, which would inflate storage and trigger a needless
   // DB update without any benefit.
   if (compressed.length >= originalSize) {
-    return {
-      buffer,
-      mimeType: (meta.format && FORMAT_MIME_MAP[meta.format]) ?? 'application/octet-stream',
-      extension: meta.format ?? 'bin',
-      originalSize,
-      compressedSize: originalSize,
-      wasCompressed: false,
-    }
+    return passthroughResult(buffer, format)
   }
 
   return {
@@ -395,7 +395,7 @@ function runFfmpegExtract(inputPath: string, outputPath: string): Promise<void> 
  */
 export const extractVideoThumbnail = async (
   videoBuffer: Buffer,
-  width = 480
+  width = THUMB_WIDTH
 ): Promise<ImageResult> => {
   assertBufferSize(videoBuffer, 'extractVideoThumbnail')
 
