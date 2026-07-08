@@ -319,7 +319,7 @@ describe('getVeoConfig', () => {
       // account (see the per-project key enforcement in getVeoConfig).
       GOOGLE_AI_API_KEY: '  env-api-key  ',
       GEMINI_API_KEY: '  ',
-      VEO_API_BASE_URL: '  https://veo.example.test/base  ',
+      VEO_API_BASE_URL: '  https://veo.example.test/base/  ',
       VEO_MODEL: '  veo-custom  ',
     }, async () => {
       expect(() => getVeoConfig('   ')).toThrow(/No Google AI API key configured/)
