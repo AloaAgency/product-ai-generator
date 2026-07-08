@@ -572,20 +572,28 @@ async function resolveSceneGeminiApiKey(
   supabase: ReturnType<typeof createServiceClient>,
   productId: string
 ) {
-  const { data: product } = await supabase
+  const { data: product, error: productError } = await supabase
     .from(T.products)
     .select('project_id, global_style_settings')
     .eq('id', productId)
     .single<ProductRecord>()
 
+  if (productError || !product) {
+    throw new Error(`Failed to load product settings: ${productError?.message || 'product not found'}`)
+  }
+
   const geminiApiKey = resolveGoogleApiKey(product?.global_style_settings ?? null)
   if (geminiApiKey || !product?.project_id) return geminiApiKey
 
-  const { data: project } = await supabase
+  const { data: project, error: projectError } = await supabase
     .from(T.projects)
     .select('global_style_settings')
     .eq('id', product.project_id)
     .single<ProjectRecord>()
+
+  if (projectError) {
+    throw new Error(`Failed to load project settings: ${projectError.message}`)
+  }
 
   return resolveGoogleApiKey(project?.global_style_settings ?? null)
 }
@@ -637,13 +645,13 @@ async function loadSceneGenerationContext(
   sceneId: string,
   model?: string
 ): Promise<SceneGenerationContext> {
-  const scenePromise = loadSceneOrThrow(supabase, productId, sceneId)
-  const geminiApiKeyPromise = resolveSceneGeminiApiKey(supabase, productId)
-  const scene = await scenePromise
+  const scene = await loadSceneOrThrow(supabase, productId, sceneId)
   const resolvedModel = model || scene.generation_model || 'veo3'
 
   const [geminiApiKey, frameRefs] = await Promise.all([
-    geminiApiKeyPromise,
+    isVeoModel(resolvedModel)
+      ? resolveSceneGeminiApiKey(supabase, productId)
+      : Promise.resolve(undefined),
     resolveFrameRefs(supabase, scene, resolvedModel),
   ])
 

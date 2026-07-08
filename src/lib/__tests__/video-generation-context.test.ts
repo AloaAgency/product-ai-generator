@@ -203,11 +203,44 @@ describe('generateSceneVideo context loading', () => {
     expect(supabase.sceneSelectColumns).toContain('product_id')
     expect(supabase.sceneEqFilters).toContainEqual(['id', 'scene-1'])
     expect(supabase.sceneEqFilters).toContainEqual(['product_id', 'product-1'])
+    expect(supabase.client.from).not.toHaveBeenCalledWith(T.products)
     expect(supabase.generatedImageInserts[0]).toMatchObject({
       product_id: 'product-1',
       job_id: 'job-1',
       media_type: 'video',
       scene_id: 'scene-1',
     })
+  })
+
+  it('surfaces product settings lookup errors for Veo jobs before starting generation', async () => {
+    const supabase = createSupabaseMock({
+      scene: buildSceneFixture({
+        generation_model: 'veo3',
+        video_resolution: '1080p',
+      }),
+      product: null,
+      productError: { message: 'database unavailable' },
+    })
+    createServiceClientMock.mockReturnValue(supabase.client)
+    const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response('{}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    )
+
+    await withEnv(
+      {
+        GOOGLE_AI_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+      },
+      async () => {
+        await expect(
+          generateSceneVideo('product-1', 'scene-1', 'veo3', 'job-1')
+        ).rejects.toThrow(/Failed to load product settings: database unavailable/)
+      }
+    )
+
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
