@@ -22,6 +22,7 @@ const DEFAULT_LTX_DURATION_SECONDS = 8
 const DEFAULT_LTX_RESOLUTION = '1920x1080'
 const SCENE_SELECT_COLUMNS = [
   'id',
+  'product_id',
   'title',
   'motion_prompt',
   'generation_model',
@@ -550,12 +551,14 @@ async function downloadVeoVideo(videoUri: string, apiKey: string) {
 
 async function loadSceneOrThrow(
   supabase: ReturnType<typeof createServiceClient>,
+  productId: string,
   sceneId: string
 ): Promise<SceneWithMotionPrompt> {
   const { data: scene, error: sceneErr } = await supabase
     .from(T.storyboard_scenes)
     .select(SCENE_SELECT_COLUMNS)
     .eq('id', sceneId)
+    .eq('product_id', productId)
     .single<SceneRecord>()
 
   if (sceneErr || !scene) throw new Error('Scene not found')
@@ -634,7 +637,7 @@ async function loadSceneGenerationContext(
   sceneId: string,
   model?: string
 ): Promise<SceneGenerationContext> {
-  const scenePromise = loadSceneOrThrow(supabase, sceneId)
+  const scenePromise = loadSceneOrThrow(supabase, productId, sceneId)
   const geminiApiKeyPromise = resolveSceneGeminiApiKey(supabase, productId)
   const scene = await scenePromise
   const resolvedModel = model || scene.generation_model || 'veo3'
