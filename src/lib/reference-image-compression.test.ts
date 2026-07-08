@@ -323,9 +323,20 @@ describe('processReferenceImageCompression — compression failure', () => {
     expect(mockDbUpdate).not.toHaveBeenCalled()
   })
 
-  it('surfaces a non-Error rejection as "Compression failed"', async () => {
+  it('sanitizes and surfaces a non-Error (string) rejection', async () => {
+    // sanitizePublicErrorMessage accepts unknown — string rejections are
+    // surfaced (sanitized) rather than being dropped for the generic fallback,
+    // matching how every other call site in the codebase invokes it.
     mockDownload.mockResolvedValue({ data: makeBlob('data'), error: null })
     mockCompress.mockRejectedValue('string-error')
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+    expect(result.error).toBe('string-error')
+  })
+
+  it('falls back to "Compression failed" for a rejection with no usable message', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('data'), error: null })
+    mockCompress.mockRejectedValue('')
 
     const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
     expect(result.error).toBe('Compression failed')

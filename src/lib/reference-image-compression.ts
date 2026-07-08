@@ -48,11 +48,11 @@ function isRetriableStorageError(message: string | null | undefined): boolean {
  * exception before a response is formed) are treated the same way. Returns the
  * final result (successful or not) so existing error-mapping logic is unchanged.
  */
-async function withStorageRetry<T extends { error: { message?: string } | null }>(
-  op: () => PromiseLike<T>,
+async function withStorageRetry<TResult extends { error: { message?: string } | null }>(
+  op: () => PromiseLike<TResult>,
   label: string
-): Promise<T> {
-  let lastResult: T | undefined
+): Promise<TResult> {
+  let lastResult: TResult | undefined
   for (let attempt = 0; attempt < STORAGE_MAX_ATTEMPTS; attempt++) {
     try {
       const result = await op()
@@ -75,7 +75,7 @@ async function withStorageRetry<T extends { error: { message?: string } | null }
     }
   }
   // Unreachable in practice: the loop always returns on the final attempt.
-  return lastResult as T
+  return lastResult as TResult
 }
 
 export type CompressionResult =
@@ -118,7 +118,7 @@ export async function processReferenceImageCompression(
       wasCompressed: false,
       originalSize: 0,
       compressedSize: 0,
-      error: sanitizePublicErrorMessage(downloadError?.message ?? 'Download failed', { fallback: 'Download failed' }),
+      error: sanitizePublicErrorMessage(downloadError?.message, { fallback: 'Download failed' }),
     }
   }
 
@@ -131,9 +131,7 @@ export async function processReferenceImageCompression(
       wasCompressed: false,
       originalSize: 0,
       compressedSize: 0,
-      error: err instanceof Error
-        ? sanitizePublicErrorMessage(err.message, { fallback: 'Buffer conversion failed' })
-        : 'Buffer conversion failed',
+      error: sanitizePublicErrorMessage(err, { fallback: 'Buffer conversion failed' }),
     }
   }
 
@@ -146,9 +144,7 @@ export async function processReferenceImageCompression(
       wasCompressed: false,
       originalSize: buffer.length,
       compressedSize: buffer.length,
-      error: err instanceof Error
-        ? sanitizePublicErrorMessage(err.message, { fallback: 'Compression failed' })
-        : 'Compression failed',
+      error: sanitizePublicErrorMessage(err, { fallback: 'Compression failed' }),
     }
   }
 
@@ -180,7 +176,7 @@ export async function processReferenceImageCompression(
       wasCompressed: false,
       originalSize: result.originalSize,
       compressedSize: result.compressedSize,
-      error: sanitizePublicErrorMessage(uploadError?.message ?? 'Upload failed', { fallback: 'Upload failed' }),
+      error: sanitizePublicErrorMessage(uploadError.message, { fallback: 'Upload failed' }),
     }
   }
 
@@ -208,7 +204,7 @@ export async function processReferenceImageCompression(
       originalSize: result.originalSize,
       compressedSize: result.compressedSize,
       newStoragePath,
-      error: sanitizePublicErrorMessage(dbError?.message ?? 'DB update failed', { fallback: 'DB update failed' }),
+      error: sanitizePublicErrorMessage(dbError.message, { fallback: 'DB update failed' }),
     }
   }
 
