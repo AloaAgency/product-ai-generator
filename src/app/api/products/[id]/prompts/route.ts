@@ -46,10 +46,17 @@ export async function POST(
     if (!name || !prompt_text) {
       return NextResponse.json({ error: 'name and prompt_text are required' }, { status: 400 })
     }
-    if (typeof name === 'string' && name.length > MAX_NAME_LENGTH) {
+    // Type-check before the length checks — the PATCH route on this table
+    // enforces string-only name/prompt_text, and skipping the check here would
+    // let a non-string (number/array/object) bypass the length limits entirely
+    // and reach the insert below.
+    if (typeof name !== 'string' || typeof prompt_text !== 'string') {
+      return NextResponse.json({ error: 'name and prompt_text must be strings' }, { status: 400 })
+    }
+    if (name.length > MAX_NAME_LENGTH) {
       return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
     }
-    if (typeof prompt_text === 'string' && prompt_text.length > MAX_PROMPT_LENGTH) {
+    if (prompt_text.length > MAX_PROMPT_LENGTH) {
       return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
     }
 
@@ -68,7 +75,7 @@ export async function POST(
     if (error) { logger.error('[Prompts POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     // Generate scene title asynchronously then update
-    const sceneTitle = await generateSceneTitle(prompt_text as string)
+    const sceneTitle = await generateSceneTitle(prompt_text)
     if (sceneTitle) {
       const { data: updated } = await supabase
         .from(T.prompt_templates)

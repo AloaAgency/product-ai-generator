@@ -54,6 +54,11 @@ export function validateSuggestionCount(raw: unknown): number | null {
  * Used by the /api/products/[id]/prompts routes for inline title generation.
  */
 export async function generateSceneTitle(promptText: string): Promise<string> {
+  // The Anthropic API rejects empty message content with a 400, so a blank (or
+  // non-string, since callers read prompt_text from a request body) input would
+  // burn a full API round-trip plus SDK retries just to land in the catch below.
+  // Short-circuit to the same empty-title result instead.
+  if (typeof promptText !== 'string' || !promptText.trim()) return ''
   try {
     const response = await anthropic.messages.create({
       model: CLAUDE_FAST_MODEL.name,
@@ -164,7 +169,12 @@ function subjectName(label: string, subjectIndex: number, totalSubjects: number)
 }
 
 function buildReferenceRule(groups: ReferenceGroup[], customRule: string | undefined): string | null {
-  if (customRule) return customRule.slice(0, MAX_STYLE_VALUE_LEN)
+  // Whitespace-only counts as unset — same convention as custom_suffix in
+  // buildFullPrompt and mergeStyles — so it falls through to the generated
+  // per-image mapping instead of emitting a bare "REFERENCE RULE:" line while
+  // suppressing the real rule.
+  const trimmedRule = customRule?.trim()
+  if (trimmedRule) return trimmedRule.slice(0, MAX_STYLE_VALUE_LEN)
 
   const active = groups.filter(g => g.count > 0)
   if (active.length === 0) return null
@@ -220,13 +230,19 @@ export function buildFullPrompt(
 ): string {
   const parts: string[] = []
 
-  // Mandatory style requirements block — truncate each value to match the allowlist guard
-  // in buildStyleBlock so both prompt-assembly paths enforce identical payload limits.
+  // Mandatory style requirements block — same per-value treatment as buildStyleBlock
+  // (skip non-strings, trim, skip whitespace-only, truncate) so both prompt-assembly
+  // paths enforce identical payload limits. The non-string guard matters because
+  // settings come from a DB JSON column: a stray non-string value would make
+  // .slice() throw here even though the type says string | undefined.
   const cap = (v: string | undefined) => v?.slice(0, MAX_STYLE_VALUE_LEN) ?? ''
   const styleLines: string[] = []
   for (const [key, label] of FULL_PROMPT_STYLE_FIELDS) {
     const value = settings[key]
-    if (value) styleLines.push(`• ${label}: ${cap(value)}`)
+    if (typeof value !== 'string') continue
+    const trimmed = value.trim()
+    if (!trimmed) continue
+    styleLines.push(`• ${label}: ${trimmed.slice(0, MAX_STYLE_VALUE_LEN)}`)
   }
 
   if (styleLines.length > 0) {
