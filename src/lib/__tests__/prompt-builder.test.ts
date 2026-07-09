@@ -1,10 +1,19 @@
-import { describe, it, expect } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+
+// Mock the Anthropic client factory so generateSceneTitle can be exercised
+// without a real API key or network call. The module under test constructs its
+// client at import time, so the mock must be registered before the import.
+const mockMessagesCreate = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/anthropic-client', () => ({
+  createAnthropicClient: () => ({ messages: { create: mockMessagesCreate } }),
+}))
 
 import {
   buildFullPrompt,
   buildPromptSuggestionSystemPrompt,
   buildRefinedPromptUserMessage,
   buildStyleBlock,
+  generateSceneTitle,
   MAX_PRODUCT_DESC_LEN,
   MAX_PRODUCT_NAME_LEN,
   MAX_STYLE_VALUE_LEN,
@@ -281,6 +290,40 @@ describe('buildFullPrompt', () => {
     const prompt = buildFullPrompt('shot', { lens: '50mm' }, [{ role: 'subject', count: 1 }])
     const parts = prompt.split('\n\n')
     expect(parts.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('skips whitespace-only style values, matching buildStyleBlock', () => {
+    // mergeStyles only filters whitespace-only product overrides — a blank
+    // project-level value still reaches buildFullPrompt and must not render
+    // as an empty "• Lens:" bullet.
+    const prompt = buildFullPrompt('shot', { lens: '   ', lighting: 'softbox' }, [{ role: 'subject', count: 1 }])
+    expect(prompt).not.toContain('Lens')
+    expect(prompt).toContain('• Lighting: softbox')
+  })
+
+  it('trims style values before rendering them as bullets', () => {
+    const prompt = buildFullPrompt('shot', { lens: '  85mm  ' }, [{ role: 'subject', count: 1 }])
+    expect(prompt).toContain('• Lens: 85mm\n')
+  })
+
+  it('ignores non-string style values from the DB JSON column without throwing', () => {
+    const prompt = buildFullPrompt(
+      'shot',
+      { lens: 42 as unknown as string, lighting: 'softbox' },
+      [{ role: 'subject', count: 1 }]
+    )
+    expect(prompt).not.toContain('42')
+    expect(prompt).toContain('• Lighting: softbox')
+  })
+
+  it('treats a whitespace-only reference_rule as unset and falls back to the generated rule', () => {
+    const prompt = buildFullPrompt('shot', { reference_rule: '   ' }, [{ role: 'subject', count: 2 }])
+    expect(prompt).toContain('REFERENCE RULE: Images 1–2 are the product')
+  })
+
+  it('trims a custom reference_rule before rendering it', () => {
+    const prompt = buildFullPrompt('shot', { reference_rule: '  Use image 1 only.  ' }, [{ role: 'subject', count: 1 }])
+    expect(prompt).toContain('REFERENCE RULE: Use image 1 only.\n')
   })
 })
 
@@ -655,5 +698,51 @@ describe('validateSuggestionCount', () => {
     expect(validateSuggestionCount(Infinity)).toBeNull()
     expect(validateSuggestionCount(null)).toBeNull()
     expect(validateSuggestionCount(undefined)).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// generateSceneTitle — blank-input short-circuit and AI failure fallback
+// ---------------------------------------------------------------------------
+
+describe('generateSceneTitle', () => {
+  beforeEach(() => {
+    mockMessagesCreate.mockReset()
+  })
+
+  it('returns the trimmed text from a successful response', async () => {
+    mockMessagesCreate.mockResolvedValue({ content: [{ type: 'text', text: '  Sunset Beach Shot \n' }] })
+    await expect(generateSceneTitle('A bottle on a beach at sunset')).resolves.toBe('Sunset Beach Shot')
+  })
+
+  it('returns an empty string for empty input without calling the API', async () => {
+    // Empty message content is a guaranteed Anthropic 400 — the guard must
+    // short-circuit instead of burning a round-trip that ends in the catch.
+    await expect(generateSceneTitle('')).resolves.toBe('')
+    expect(mockMessagesCreate).not.toHaveBeenCalled()
+  })
+
+  it('returns an empty string for whitespace-only input without calling the API', async () => {
+    await expect(generateSceneTitle('   \n  ')).resolves.toBe('')
+    expect(mockMessagesCreate).not.toHaveBeenCalled()
+  })
+
+  it('returns an empty string for non-string input without throwing', async () => {
+    // Callers read prompt_text from a request body; a non-string must not make
+    // .trim()/.slice() throw before the try block can catch it.
+    await expect(generateSceneTitle(42 as unknown as string)).resolves.toBe('')
+    expect(mockMessagesCreate).not.toHaveBeenCalled()
+  })
+
+  it('returns an empty string when the API call fails', async () => {
+    mockMessagesCreate.mockRejectedValue(new Error('overloaded'))
+    await expect(generateSceneTitle('A valid prompt')).resolves.toBe('')
+  })
+
+  it('truncates the prompt to MAX_USER_PROMPT_LEN before sending it', async () => {
+    mockMessagesCreate.mockResolvedValue({ content: [{ type: 'text', text: 'Title' }] })
+    await generateSceneTitle('P'.repeat(MAX_USER_PROMPT_LEN + 500))
+    const sent = mockMessagesCreate.mock.calls[0]?.[0]?.messages?.[0]?.content
+    expect(sent).toHaveLength(MAX_USER_PROMPT_LEN)
   })
 })
