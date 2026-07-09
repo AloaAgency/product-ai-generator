@@ -740,8 +740,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchProject: async (id) => {
     const projectId = requireUuid(id, 'project id')
     if (updateSliceScope('currentProject', projectId)) {
-      sliceScopes.set('errorLogs', projectId)
-      set({ currentProject: null, errorLogs: [] })
+      const errorLogsScopeChanged = updateSliceScope('errorLogs', projectId)
+      set({
+        currentProject: null,
+        errorLogs: [],
+        ...(errorLogsScopeChanged ? { loadingErrorLogs: false } : {}),
+      })
     }
     const requestKey = buildRequestKey('currentProject', projectId)
     const requestVersion = beginTrackedRequest(requestKey)

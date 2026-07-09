@@ -75,6 +75,7 @@ describe('useAppStore async scope guards', () => {
   beforeEach(() => {
     useAppStore.setState({
       projects: [],
+      currentProject: null,
       products: [],
       currentProduct: null,
       referenceSets: [],
@@ -90,6 +91,8 @@ describe('useAppStore async scope guards', () => {
       loadingGalleryMore: false,
       settingsTemplates: [],
       loadingSettingsTemplates: false,
+      errorLogs: [],
+      loadingErrorLogs: false,
       aiLoading: false,
     })
   })
@@ -498,6 +501,42 @@ describe('useAppStore async scope guards', () => {
 
     expect(useAppStore.getState().currentProduct?.id).toBe(productB)
     expect(useAppStore.getState().currentJob?.id).toBe(generationJobB)
+  })
+
+  it('clears stale error-log loading when project navigation supersedes a pending fetch', async () => {
+    const pendingErrorLogsA = deferred<Response>()
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/error-logs?project_id=${productA}`) {
+        return pendingErrorLogsA.promise
+      }
+      if (url === `/api/projects/${productB}`) {
+        return Promise.resolve(jsonResponse({ id: productB, name: 'Project B' }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    const errorLogsPromise = useAppStore.getState().fetchErrorLogs(productA)
+    expect(useAppStore.getState().loadingErrorLogs).toBe(true)
+
+    await useAppStore.getState().fetchProject(productB)
+    expect(useAppStore.getState().currentProject?.id).toBe(productB)
+    expect(useAppStore.getState().errorLogs).toEqual([])
+    expect(useAppStore.getState().loadingErrorLogs).toBe(false)
+
+    pendingErrorLogsA.resolve(jsonResponse([{
+      id: '99999999-9999-4999-8999-999999999999',
+      project_id: productA,
+      product_id: null,
+      error_message: 'Old project error',
+      error_source: null,
+      error_context: null,
+      created_at: '2026-07-06T00:00:00.000Z',
+    }]))
+    await errorLogsPromise
+
+    expect(useAppStore.getState().errorLogs).toEqual([])
+    expect(useAppStore.getState().loadingErrorLogs).toBe(false)
   })
 
   it('rejects malformed image update responses without mutating gallery state', async () => {
