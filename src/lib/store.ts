@@ -1609,6 +1609,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   updateImageApproval: async (imageId, approval_status, notes) => {
     const scopedImageId = requireUuid(imageId, 'image id')
+    const activeGalleryScope = getActiveSliceScope('gallery')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
     const updated = getNestedRecordPayload<Record<string, unknown>>(
       await api(`/api/images/${buildApiPath(scopedImageId)}`, {
         method: 'PATCH',
@@ -1621,10 +1623,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       'image',
       'Failed to update image'
     ) as Partial<GeneratedImage>
-    const activeGalleryScope = getActiveSliceScope('gallery')
-    const activeCurrentJobScope = getActiveSliceScope('currentJob')
-    if (activeGalleryScope) invalidateTrackedRequest(activeGalleryScope)
-    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
+    invalidateRequestKeys(activeGalleryScope, activeCurrentJobScope)
     set((s) => ({
       galleryImages: mergeUpdatedImage(s.galleryImages, scopedImageId, updated),
       currentJob: s.currentJob?.images
@@ -1637,9 +1636,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   deleteImage: async (imageId) => {
     const scopedImageId = requireUuid(imageId, 'image id')
+    const activeGalleryScope = getActiveSliceScope('gallery')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
     await api(`/api/images/${buildApiPath(scopedImageId)}`, { method: 'DELETE' })
     const idSet = new Set([scopedImageId])
-    invalidateRequestKeys(getActiveSliceScope('gallery'), getActiveSliceScope('currentJob'))
+    invalidateRequestKeys(activeGalleryScope, activeCurrentJobScope)
     set((s) => ({
       ...updateGalleryStateAfterRemoval(s, idSet),
       currentJob: s.currentJob?.images
@@ -1652,13 +1653,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   bulkDeleteImages: async (imageIds) => {
     const sanitizedIds = sanitizeUuidArray(imageIds, 'image id')
+    const activeGalleryScope = getActiveSliceScope('gallery')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
     await api('/api/images/bulk-delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ imageIds: sanitizedIds }),
     })
     const idSet = new Set(sanitizedIds)
-    invalidateRequestKeys(getActiveSliceScope('gallery'), getActiveSliceScope('currentJob'))
+    invalidateRequestKeys(activeGalleryScope, activeCurrentJobScope)
     set((s) => ({
       ...updateGalleryStateAfterRemoval(s, idSet),
       currentJob: s.currentJob?.images

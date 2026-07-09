@@ -9,6 +9,7 @@ const settingsTemplateA = '44444444-4444-4444-8444-444444444444'
 const referenceImageA = '55555555-5555-4555-8555-555555555555'
 const generationJobA = '66666666-6666-4666-8666-666666666666'
 const generatedImageA = '77777777-7777-4777-8777-777777777777'
+const generatedImageB = '88888888-8888-4888-8888-888888888888'
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -25,6 +26,27 @@ const deferred = <T>() => {
   })
   return { promise, resolve, reject }
 }
+
+const makeGeneratedImage = (overrides: Partial<GeneratedImage> = {}): GeneratedImage => ({
+  id: generatedImageA,
+  job_id: generationJobA,
+  variation_number: 1,
+  storage_path: 'images/a.png',
+  public_url: null,
+  thumb_storage_path: null,
+  thumb_public_url: null,
+  preview_storage_path: null,
+  preview_public_url: null,
+  mime_type: 'image/png',
+  file_size: 1,
+  approval_status: 'pending',
+  notes: null,
+  media_type: 'image',
+  scene_id: null,
+  scene_name: null,
+  created_at: '2026-07-06T00:00:00.000Z',
+  ...overrides,
+})
 
 describe('useAppStore async scope guards', () => {
   beforeEach(() => {
@@ -440,6 +462,78 @@ describe('useAppStore async scope guards', () => {
       useAppStore.getState().updateImageApproval(generatedImageA, 'approved')
     ).rejects.toThrow('Failed to update image')
     expect(useAppStore.getState().galleryImages).toEqual([image])
+  })
+
+  it.each([
+    {
+      name: 'approval update',
+      method: 'PATCH',
+      url: `/api/images/${generatedImageA}`,
+      start: () => useAppStore.getState().updateImageApproval(generatedImageA, 'approved'),
+      response: () => jsonResponse({ image: { id: generatedImageA, approval_status: 'approved' } }),
+    },
+    {
+      name: 'image delete',
+      method: 'DELETE',
+      url: `/api/images/${generatedImageA}`,
+      start: () => useAppStore.getState().deleteImage(generatedImageA),
+      response: () => jsonResponse({ success: true }),
+    },
+    {
+      name: 'bulk image delete',
+      method: 'POST',
+      url: '/api/images/bulk-delete',
+      start: () => useAppStore.getState().bulkDeleteImages([generatedImageA]),
+      response: () => jsonResponse({ success: true }),
+    },
+  ])('does not let a late $name invalidate a new gallery fetch', async (testCase) => {
+    const imageA = makeGeneratedImage()
+    const imageB = makeGeneratedImage({
+      id: generatedImageB,
+      storage_path: 'images/b.png',
+    })
+    const pendingMutation = deferred<Response>()
+    const pendingGalleryB = deferred<Response>()
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productB}`) {
+        return Promise.resolve(jsonResponse({ id: productB, name: 'Product B' }))
+      }
+      if (url.startsWith(`/api/products/${productA}/gallery?`)) {
+        return Promise.resolve(jsonResponse({ images: [imageA], total: 1, has_more: false }))
+      }
+      if (url.startsWith(`/api/products/${productB}/gallery?`)) {
+        return pendingGalleryB.promise
+      }
+      if (url === testCase.url && method === testCase.method) {
+        return pendingMutation.promise
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGallery(productA)
+    expect(useAppStore.getState().galleryImages).toEqual([imageA])
+
+    const mutationPromise = testCase.start()
+    await useAppStore.getState().fetchProduct(productB)
+    const galleryBPromise = useAppStore.getState().fetchGallery(productB)
+
+    pendingMutation.resolve(testCase.response())
+    await mutationPromise
+
+    pendingGalleryB.resolve(jsonResponse({ images: [imageB], total: 1, has_more: false }))
+    await galleryBPromise
+
+    expect(useAppStore.getState().currentProduct?.id).toBe(productB)
+    expect(useAppStore.getState().galleryImages).toEqual([imageB])
+    expect(useAppStore.getState().galleryTotal).toBe(1)
+    expect(useAppStore.getState().loadingGallery).toBe(false)
   })
 
   it('clears ai loading when build-prompt returns malformed JSON', async () => {
