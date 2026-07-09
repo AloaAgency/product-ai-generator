@@ -175,6 +175,14 @@ const getActiveSliceScope = (slice: string) => {
   return scope
 }
 
+const getActiveProductRequestScope = (slice: string, productId: string) => {
+  const scope = getActiveSliceScope(slice)
+  if (!scope) return null
+
+  const productScope = buildRequestKey(slice, productId)
+  return scope === productScope || scope.startsWith(`${productScope}:`) ? scope : null
+}
+
 const extractErrorMessage = (value: unknown): string | null => {
   if (typeof value !== 'string') return null
   const message = value.trim().replace(/\s+/g, ' ')
@@ -1505,7 +1513,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const scopedProductId = requireUuid(productId, 'product id')
     await api(`/api/products/${buildApiPath(scopedProductId)}/generate?scope=log`, { method: 'DELETE' })
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
-    invalidateRequestKeys(generationJobsRequestKey, getActiveSliceScope('currentJob'))
+    invalidateRequestKeys(generationJobsRequestKey, getActiveProductRequestScope('currentJob', scopedProductId))
     if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
       set((s) => ({
         generationJobs: s.generationJobs.filter((j) => j.status === 'pending' || j.status === 'running'),

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppStore } from './store'
-import type { GeneratedImage } from './types'
+import type { GeneratedImage, GenerationJob } from './types'
 
 const productA = '11111111-1111-4111-8111-111111111111'
 const productB = '22222222-2222-4222-8222-222222222222'
@@ -8,6 +8,7 @@ const referenceSetA = '33333333-3333-4333-8333-333333333333'
 const settingsTemplateA = '44444444-4444-4444-8444-444444444444'
 const referenceImageA = '55555555-5555-4555-8555-555555555555'
 const generationJobA = '66666666-6666-4666-8666-666666666666'
+const generationJobB = '66666666-6666-4666-8666-777777777777'
 const generatedImageA = '77777777-7777-4777-8777-777777777777'
 const generatedImageB = '88888888-8888-4888-8888-888888888888'
 
@@ -45,6 +46,28 @@ const makeGeneratedImage = (overrides: Partial<GeneratedImage> = {}): GeneratedI
   scene_id: null,
   scene_name: null,
   created_at: '2026-07-06T00:00:00.000Z',
+  ...overrides,
+})
+
+const makeGenerationJob = (overrides: Partial<GenerationJob> = {}): GenerationJob => ({
+  id: generationJobA,
+  product_id: productA,
+  prompt_template_id: null,
+  final_prompt: 'Make a product image',
+  variation_count: 1,
+  resolution: '2K',
+  aspect_ratio: '1:1',
+  status: 'completed',
+  completed_count: 1,
+  failed_count: 0,
+  error_message: null,
+  generation_model: 'gemini',
+  job_type: 'image',
+  scene_id: null,
+  source_image_id: null,
+  created_at: '2026-07-06T00:00:00.000Z',
+  started_at: null,
+  completed_at: '2026-07-06T00:01:00.000Z',
   ...overrides,
 })
 
@@ -427,6 +450,54 @@ describe('useAppStore async scope guards', () => {
       })
     ).rejects.toThrow('Failed to start generation')
     expect(useAppStore.getState().generationJobs).toEqual([])
+  })
+
+  it('does not let a late generation-log clear invalidate a new current-job fetch', async () => {
+    const jobA = makeGenerationJob()
+    const jobB = makeGenerationJob({
+      id: generationJobB,
+      product_id: productB,
+    })
+    const pendingClearLog = deferred<Response>()
+    const pendingJobB = deferred<Response>()
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productB}`) {
+        return Promise.resolve(jsonResponse({ id: productB, name: 'Product B' }))
+      }
+      if (url === `/api/products/${productA}/generate/${generationJobA}`) {
+        return Promise.resolve(jsonResponse({ job: jobA, images: [] }))
+      }
+      if (url === `/api/products/${productB}/generate/${generationJobB}`) {
+        return pendingJobB.promise
+      }
+      if (url === `/api/products/${productA}/generate?scope=log` && method === 'DELETE') {
+        return pendingClearLog.promise
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchJobStatus(productA, generationJobA)
+    expect(useAppStore.getState().currentJob?.id).toBe(generationJobA)
+
+    const clearLogPromise = useAppStore.getState().clearGenerationLog(productA)
+    await useAppStore.getState().fetchProduct(productB)
+    const jobBPromise = useAppStore.getState().fetchJobStatus(productB, generationJobB)
+
+    pendingClearLog.resolve(jsonResponse({ success: true }))
+    await clearLogPromise
+
+    pendingJobB.resolve(jsonResponse({ job: jobB, images: [] }))
+    await jobBPromise
+
+    expect(useAppStore.getState().currentProduct?.id).toBe(productB)
+    expect(useAppStore.getState().currentJob?.id).toBe(generationJobB)
   })
 
   it('rejects malformed image update responses without mutating gallery state', async () => {
