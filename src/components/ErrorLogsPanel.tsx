@@ -35,6 +35,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
             'Failed to load error logs. Please try again.'
           )
         )
+        setExpanded(true)
       }
     })
     return () => {
@@ -66,6 +67,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
           'Failed to clear error logs. Please try again.'
         )
       )
+      setExpanded(true)
     } finally {
       setClearing(false)
     }
@@ -95,10 +97,11 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
           'Failed to refresh error logs. Please try again.'
         )
       )
+      setExpanded(true)
     })
   }, [fetchErrorLogs, projectId])
 
-  if (!shouldShowErrorLogsPanel(errorLogs.length, loadingErrorLogs)) return null
+  if (!shouldShowErrorLogsPanel(errorLogs.length, loadingErrorLogs, panelError)) return null
 
   return (
     <div className="mb-4 rounded-lg border border-red-900/40 bg-red-950/20">
