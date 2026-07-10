@@ -397,6 +397,95 @@ describe('middleware — transient token-derivation failure recovers', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Config matcher — which paths run the middleware at all
+//
+// The matcher is compiled by Next.js (path-to-regexp), so middleware() unit
+// tests above cannot catch a matcher regression: a path the matcher excludes
+// never reaches the middleware in production no matter what the function does.
+// The middleware is the ONLY auth layer for API routes (handlers use the
+// service-role client with no auth checks), so a matcher hole is a full auth
+// bypass. These tests compile the matcher patterns the same way Next does for
+// the two shapes used in middleware.ts and pin the coverage contract.
+// ---------------------------------------------------------------------------
+
+describe('middleware — config matcher coverage', () => {
+  let matchers: string[]
+
+  beforeEach(async () => {
+    vi.resetModules()
+    const mod = await import('@/middleware')
+    matchers = mod.config.matcher
+  })
+
+  /**
+   * Mirror how path-to-regexp compiles the two matcher shapes used in
+   * middleware.ts. Deliberately NOT a general implementation — it throws on
+   * anything else so a new matcher shape forces this helper to be updated.
+   */
+  function matcherToRegExp(pattern: string): RegExp {
+    if (pattern === '/api/:path*') {
+      // `:path*` = zero or more path segments after the literal prefix.
+      return /^\/api(?:\/[^/]+)*$/
+    }
+    const customRegexpParam = pattern.match(/^\/\((.*)\)$/)
+    if (customRegexpParam) {
+      // `/(<regex>)` = a single parameter whose custom regexp spans the whole
+      // remaining path.
+      return new RegExp(`^/(${customRegexpParam[1]})$`)
+    }
+    throw new Error(`Unsupported matcher shape in test helper: ${pattern}`)
+  }
+
+  function middlewareRuns(pathname: string): boolean {
+    return matchers.some((pattern) => matcherToRegExp(pattern).test(pathname))
+  }
+
+  it('runs on plain API routes', () => {
+    expect(middlewareRuns('/api/products')).toBe(true)
+    expect(middlewareRuns('/api/error-logs')).toBe(true)
+  })
+
+  it('runs on API paths ending in a static-asset extension — dynamic segments like /api/products/[id] match them, so excluding them would bypass auth entirely', () => {
+    expect(middlewareRuns('/api/products/x.css')).toBe(true)
+    expect(middlewareRuns('/api/images/123.js')).toBe(true)
+    expect(middlewareRuns('/api/projects/abc.png')).toBe(true)
+    expect(middlewareRuns('/api/products/x.css/gallery')).toBe(true)
+  })
+
+  it('runs on the public-by-design API paths (middleware itself exempts them, not the matcher)', () => {
+    expect(middlewareRuns('/api/login')).toBe(true)
+    expect(middlewareRuns('/api/worker/generate')).toBe(true)
+  })
+
+  it('runs on page routes', () => {
+    expect(middlewareRuns('/')).toBe(true)
+    expect(middlewareRuns('/dashboard')).toBe(true)
+    expect(middlewareRuns('/products/123/gallery')).toBe(true)
+  })
+
+  it('runs on public files without an excluded extension (e.g. the .md sample prompts)', () => {
+    expect(middlewareRuns('/sample-prompts.md')).toBe(true)
+  })
+
+  it('skips Next.js internals and known static assets', () => {
+    expect(middlewareRuns('/_next/static/chunks/main.js')).toBe(false)
+    expect(middlewareRuns('/_next/image')).toBe(false)
+    expect(middlewareRuns('/favicon.ico')).toBe(false)
+    expect(middlewareRuns('/robots.txt')).toBe(false)
+    expect(middlewareRuns('/globe.svg')).toBe(false)
+  })
+
+  it('still gates paths that merely contain (but do not start with) an internal prefix', () => {
+    expect(middlewareRuns('/foo/_next/static/x.js')).toBe(false) // ends in .js — asset exclusion
+    expect(middlewareRuns('/foo/_next/static/page')).toBe(true)
+  })
+
+  it('documents the residual page-shell exposure: extension-suffixed PAGE paths skip the gate (shell only — all data sits behind gated /api routes)', () => {
+    expect(middlewareRuns('/products/x.css')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // SITE_PASSWORD not configured — fail-closed
 // ---------------------------------------------------------------------------
 
