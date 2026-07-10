@@ -9,6 +9,7 @@ import {
   getGenerationQueueOutputLabel,
   getGenerationQueueSummary,
   shouldPollGenerationQueue,
+  shouldShowGenerationQueuePanel,
   shouldShowIndeterminateJobProgress,
 } from '../globalGenerationQueue.helpers.js'
 
@@ -173,6 +174,33 @@ test('queue display helpers keep summary and progress labels aligned with queue 
       totals: { totalCompleted: 0, totalVariations: 0 },
     }),
     '2 failed'
+  )
+  assert.equal(
+    shouldShowGenerationQueuePanel({
+      loadingJobs: true,
+      generationJobCount: 0,
+      hasActiveJobs: false,
+      failedCount: 0,
+    }),
+    true
+  )
+  assert.equal(
+    shouldShowGenerationQueuePanel({
+      loadingJobs: false,
+      generationJobCount: 2,
+      hasActiveJobs: false,
+      failedCount: 2,
+    }),
+    true
+  )
+  assert.equal(
+    shouldShowGenerationQueuePanel({
+      loadingJobs: false,
+      generationJobCount: 0,
+      hasActiveJobs: false,
+      failedCount: 0,
+    }),
+    false
   )
 })
 
