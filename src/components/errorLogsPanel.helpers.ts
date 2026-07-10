@@ -26,5 +26,8 @@ export const getNextVisibleErrorLogCount = (
   pageSize = ERROR_LOGS_PAGE_SIZE
 ) => Math.min(totalCount, visibleCount + pageSize)
 
-export const shouldShowErrorLogsPanel = (errorLogCount: number, loadingErrorLogs: boolean) =>
-  errorLogCount > 0 || loadingErrorLogs
+export const shouldShowErrorLogsPanel = (
+  errorLogCount: number,
+  loadingErrorLogs: boolean,
+  panelError?: string | null
+) => errorLogCount > 0 || loadingErrorLogs || Boolean(panelError)

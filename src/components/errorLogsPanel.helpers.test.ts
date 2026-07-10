@@ -65,5 +65,6 @@ describe('errorLogsPanel.helpers', () => {
     expect(shouldShowErrorLogsPanel(0, false)).toBe(false)
     expect(shouldShowErrorLogsPanel(0, true)).toBe(true)
     expect(shouldShowErrorLogsPanel(2, false)).toBe(true)
+    expect(shouldShowErrorLogsPanel(0, false, 'Failed to load error logs.')).toBe(true)
   })
 })

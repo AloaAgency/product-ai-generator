@@ -10,6 +10,7 @@ import {
   isActiveStatus,
   POLL_MS,
   shouldPollGenerationQueue,
+  shouldShowGenerationQueuePanel,
   shouldShowIndeterminateJobProgress,
 } from './globalGenerationQueue.helpers'
 
@@ -136,6 +137,33 @@ describe('globalGenerationQueue.helpers — summary and labels', () => {
         failedCount: 0,
       })
     ).toBe('No active generations')
+  })
+
+  it('keeps the queue panel visible for initial loading and failures-only states', () => {
+    expect(
+      shouldShowGenerationQueuePanel({
+        loadingJobs: true,
+        generationJobCount: 0,
+        hasActiveJobs: false,
+        failedCount: 0,
+      })
+    ).toBe(true)
+    expect(
+      shouldShowGenerationQueuePanel({
+        loadingJobs: false,
+        generationJobCount: 2,
+        hasActiveJobs: false,
+        failedCount: 2,
+      })
+    ).toBe(true)
+    expect(
+      shouldShowGenerationQueuePanel({
+        loadingJobs: false,
+        generationJobCount: 0,
+        hasActiveJobs: false,
+        failedCount: 0,
+      })
+    ).toBe(false)
   })
 
   it('keeps showing prior counts while refreshing an already-populated queue', () => {

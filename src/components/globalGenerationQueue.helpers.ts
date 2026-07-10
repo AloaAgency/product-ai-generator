@@ -145,6 +145,18 @@ export const getGenerationQueueOutputLabel = ({
   return failedCount ? `${failedCount} failed` : '0 outputs'
 }
 
+export const shouldShowGenerationQueuePanel = ({
+  loadingJobs,
+  generationJobCount,
+  hasActiveJobs,
+  failedCount,
+}: {
+  loadingJobs: boolean
+  generationJobCount: number
+  hasActiveJobs: boolean
+  failedCount: number
+}) => hasActiveJobs || failedCount > 0 || (loadingJobs && generationJobCount === 0)
+
 export const shouldShowIndeterminateJobProgress = (job: Pick<GenerationJob, 'status' | 'completed_count'>) =>
   job.status === 'pending' || (job.status === 'running' && (job.completed_count ?? 0) === 0)
 

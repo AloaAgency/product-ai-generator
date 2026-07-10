@@ -12,6 +12,7 @@ import {
   getGenerationJobProgress,
   POLL_MS,
   shouldPollGenerationQueue,
+  shouldShowGenerationQueuePanel,
   shouldShowIndeterminateJobProgress,
 } from './globalGenerationQueue.helpers'
 import { getSafeErrorMessage, getSafeQueueErrorMessage } from './errorDisplay.helpers'
@@ -123,6 +124,13 @@ export default function GlobalGenerationQueue({
     hasActiveJobs,
   } = useMemo(() => deriveGenerationQueueState(generationJobs), [generationJobs])
   const showIndeterminateOverallBar = hasActiveJobs && totals.totalCompleted === 0
+  const isInitialQueueLoad = loadingJobs && generationJobs.length === 0
+  const showQueuePanel = shouldShowGenerationQueuePanel({
+    loadingJobs,
+    generationJobCount: generationJobs.length,
+    hasActiveJobs,
+    failedCount,
+  })
 
   useEffect(() => {
     if (!hasActiveJobs) {
@@ -204,7 +212,7 @@ export default function GlobalGenerationQueue({
     }
   }, [clearGenerationFailures, clearingFailures, productId])
 
-  if (!hasActiveJobs) {
+  if (!showQueuePanel) {
     return null
   }
 
@@ -315,7 +323,15 @@ export default function GlobalGenerationQueue({
 
         {expanded && (
           <div className="mt-4 space-y-3">
-            {hasActiveJobs ? (
+            {isInitialQueueLoad ? (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-6 text-center">
+                <Loader2 className="mx-auto h-5 w-5 animate-spin text-zinc-500" />
+                <p className="mt-3 text-sm font-medium text-zinc-300">Checking queue</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Active and failed generation jobs will appear here.
+                </p>
+              </div>
+            ) : hasActiveJobs ? (
               activeJobs.map((job) => {
                 const jobProgress = getGenerationJobProgress(job)
                 const showIndeterminateJobBar = shouldShowIndeterminateJobProgress(job)
