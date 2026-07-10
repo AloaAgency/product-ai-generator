@@ -198,8 +198,22 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Exclude static assets, images, and known public files from middleware
-  // to avoid cookie-check overhead on requests that never need auth.
-  // txt covers robots.txt; xml covers sitemaps; webmanifest covers PWA manifests.
-  matcher: ['/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?|ttf|otf|css|js|map|txt|xml|webmanifest)$).*)'],
+  matcher: [
+    // API routes are matched unconditionally — the asset-extension exclusion
+    // below must never apply to them. Dynamic API segments accept arbitrary
+    // values (e.g. /api/products/[id] matches /api/products/x.css), so an
+    // extension-suffixed path would otherwise skip the middleware entirely and
+    // reach a service-role route handler with no auth check at all. Route
+    // handlers here rely on the middleware as their only auth layer.
+    '/api/:path*',
+    // Pages: exclude Next internals, static assets, and known public files
+    // to avoid cookie-check overhead on requests that never need auth.
+    // txt covers robots.txt; xml covers sitemaps; webmanifest covers PWA
+    // manifests. `api/` is excluded because the pattern above covers it.
+    // Residual exposure: a dynamic page path ending in an excluded extension
+    // (e.g. /products/x.css) skips the gate and serves the app shell — but the
+    // shell contains no data (all data fetches hit gated /api routes) and the
+    // same markup ships in the public /_next/static bundles anyway.
+    '/((?!api/|_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?|ttf|otf|css|js|map|txt|xml|webmanifest)$).*)',
+  ],
 }

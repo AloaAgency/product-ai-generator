@@ -64,6 +64,16 @@ describe('POST /api/login — SITE_PASSWORD not configured', () => {
     const res = await POST(req)
     expect(res.status).toBe(503)
   })
+
+  it('serves a human-readable HTML error page, not a blank response — this answers a browser form POST', async () => {
+    const req = buildLoginRequest({ password: 'anything', redirect: '/' })
+    const res = await POST(req)
+    expect(res.headers.get('content-type')).toContain('text/html')
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    const html = await res.text()
+    expect(html).toContain('Sign-in unavailable')
+    expect(html).toContain('href="/"') // way back to the login gate
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -283,6 +293,15 @@ describe('POST /api/login — input length limits', () => {
     expect(res.status).toBe(400)
   })
 
+  it('serves a human-readable HTML error page on the 400, not a blank response', async () => {
+    const req = buildLoginRequest({ password: 'a'.repeat(1025), redirect: '/' })
+    const res = await POST(req)
+    expect(res.headers.get('content-type')).toContain('text/html')
+    const html = await res.text()
+    expect(html).toContain('Invalid request')
+    expect(html).toContain('href="/"')
+  })
+
   it('accepts a password exactly at the 1024-byte limit', async () => {
     const atLimit = 'a'.repeat(1024)
     const req = buildLoginRequest({ password: atLimit, redirect: '/' })
@@ -470,6 +489,23 @@ describe('POST /api/login — brute-force rate limiting', () => {
     expect(throttled.status).toBe(429)
     expect(Number(throttled.headers.get('retry-after'))).toBeGreaterThan(0)
     expect(throttled.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('serves a human-readable HTML error page on the 429 telling the user when to retry', async () => {
+    vi.resetModules()
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+    process.env.LOGIN_MAX_FAILED_ATTEMPTS = '1'
+    const { POST: freshPost } = await import('@/app/api/login/route')
+
+    const ip = '203.0.113.53'
+    await attempt(freshPost, 'wrong', ip)
+    const throttled = await attempt(freshPost, 'wrong', ip)
+    expect(throttled.status).toBe(429)
+    expect(throttled.headers.get('content-type')).toContain('text/html')
+    const html = await throttled.text()
+    expect(html).toContain('Too many')
+    expect(html).toMatch(/in about \d+ minutes?/)
+    expect(html).toContain('href="/"')
   })
 
   it('does not throttle a different client IP', async () => {

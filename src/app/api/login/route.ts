@@ -33,6 +33,51 @@ function noStore(response: NextResponse): NextResponse {
   return response
 }
 
+/**
+ * Terminal error page for the login form POST (throttled, misconfigured,
+ * malformed request). These responses answer a browser form submission — a
+ * body-less status renders as a completely blank page with no way forward, so
+ * each terminal path gets a short explanation and a link back to the sign-in
+ * gate. Status codes and headers are unchanged; only the body is added.
+ * Styling mirrors the login gate served by middleware.ts.
+ */
+function errorPage(
+  status: number,
+  heading: string,
+  message: string,
+  extraHeaders: Record<string, string> = {}
+): NextResponse {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>${heading} - Aloa AI Product Imager</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #09090b; color: #f4f4f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 0 1rem; }
+    .card { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 2rem; width: 100%; max-width: 380px; text-align: center; }
+    h1 { font-size: 1.25rem; margin-bottom: 0.75rem; }
+    p { font-size: 0.875rem; color: #a1a1aa; margin-bottom: 1.25rem; }
+    a { display: inline-block; color: #f4f4f5; background: #2563eb; text-decoration: none; border-radius: 8px; padding: 0.625rem 1.25rem; font-size: 0.875rem; font-weight: 500; }
+    a:hover { background: #3b82f6; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>${heading}</h1>
+    <p>${message}</p>
+    <a href="/">Back to sign in</a>
+  </div>
+</body>
+</html>`
+  return noStore(new NextResponse(html, {
+    status,
+    headers: { 'content-type': 'text/html; charset=utf-8', ...extraHeaders },
+  }))
+}
+
 // Cached derivation Promise — mirrors the pattern in middleware.ts.
 // SITE_PASSWORD is immutable per isolate, so the derived cookie value never
 // changes. Computing it once at module load means successful logins get a
@@ -98,7 +143,7 @@ export async function POST(request: NextRequest) {
   const PASSWORD = process.env.SITE_PASSWORD
   if (!PASSWORD) {
     logger.error('[Login] SITE_PASSWORD is not set — all logins denied')
-    return noStore(new NextResponse(null, { status: 503 }))
+    return errorPage(503, 'Sign-in unavailable', 'The service cannot authenticate right now. Please try again later.')
   }
 
   // Brute-force throttle: once a client exceeds the failed-attempt cap, reject
@@ -107,10 +152,13 @@ export async function POST(request: NextRequest) {
   const clientKey = loginClientKey(request.headers)
   const limit = loginRateLimiter.check(clientKey)
   if (limit.limited) {
-    return noStore(new NextResponse(null, {
-      status: 429,
-      headers: { 'Retry-After': String(limit.retryAfterSeconds) },
-    }))
+    const minutes = Math.max(1, Math.ceil(limit.retryAfterSeconds / 60))
+    return errorPage(
+      429,
+      'Too many attempts',
+      `Too many failed sign-in attempts. Try again in about ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+      { 'Retry-After': String(limit.retryAfterSeconds) }
+    )
   }
 
   // Malformed Content-Type or body (e.g. application/json sent to a form
@@ -120,7 +168,7 @@ export async function POST(request: NextRequest) {
   try {
     formData = await request.formData()
   } catch {
-    return noStore(new NextResponse(null, { status: 400 }))
+    return errorPage(400, 'Invalid request', 'The sign-in request could not be read. Go back and try again.')
   }
   // formData.get() returns string | File | null — guard against File objects
   // (e.g. multipart abuse) before passing to safeCompare.
@@ -131,7 +179,7 @@ export async function POST(request: NextRequest) {
 
   // Reject oversized passwords before doing any crypto work.
   if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
-    return noStore(new NextResponse(null, { status: 400 }))
+    return errorPage(400, 'Invalid request', 'The sign-in request could not be read. Go back and try again.')
   }
 
   const safeRedirect = sanitizeRedirectPath(redirectPath, request.url)
@@ -149,7 +197,7 @@ export async function POST(request: NextRequest) {
       cookieToken = await getCachedToken(PASSWORD)
     } catch (err) {
       logger.error('[Login] Failed to derive auth cookie token', err instanceof Error ? err.message : String(err))
-      return noStore(new NextResponse(null, { status: 503 }))
+      return errorPage(503, 'Sign-in unavailable', 'The service cannot authenticate right now. Please try again later.')
     }
     const response = NextResponse.redirect(new URL(safeRedirect, request.url), 303)
     response.cookies.set(AUTH_COOKIE_NAME, cookieToken, {
