@@ -18,6 +18,13 @@ const serviceClientState = vi.hoisted(() => ({
   current: null as null | ReturnType<typeof createMockSupabase>,
 }))
 
+const workerLogger = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}))
+
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(() => {
     if (!serviceClientState.current) {
@@ -29,6 +36,11 @@ vi.mock('@/lib/supabase/server', () => ({
 
 vi.mock('@/lib/gemini', () => ({
   generateGeminiImage: vi.fn(),
+}))
+
+vi.mock('@/lib/logger', () => ({
+  createLogger: vi.fn(() => workerLogger),
+  logger: workerLogger,
 }))
 
 vi.mock('@/lib/video-generation', async (importOriginal) => {
@@ -1118,6 +1130,63 @@ describe('processGenerationJob', () => {
     }))
   })
 
+  it('fails the job instead of silently omitting a reference download with no data', async () => {
+    const jobId = '59595959-5959-4595-8595-595959595959'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId),
+        },
+        recordedVariationRows(),
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: null, global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [
+            { id: 'ref-1', reference_set_id: 'refs-1', storage_path: 'products/ref-1.png', mime_type: 'image/png', display_order: 1 },
+          ],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-maybeSingle',
+          data: { completed_count: 0, failed_count: 0 },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'reference-images', type: 'download', data: null },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).rejects.toThrow(
+      'Failed to download reference image: download returned no data'
+    )
+    expect(generateGeminiImage).not.toHaveBeenCalled()
+    expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: 'Failed to download reference image: download returned no data',
+    })
+  })
+
   it('cleans up uploaded image assets when recording the generated image fails', async () => {
     const jobId = '56565656-5656-4565-8565-565656565656'
     serviceClientState.current = createMockSupabase(
@@ -1168,7 +1237,7 @@ describe('processGenerationJob', () => {
         { bucket: 'generated-images', type: 'upload', data: {} },
         { bucket: 'generated-images', type: 'upload', data: {} },
         { bucket: 'generated-images', type: 'upload', data: {} },
-        { bucket: 'generated-images', type: 'remove', data: {} },
+        { bucket: 'generated-images', type: 'remove', error: { message: 'cleanup unavailable' } },
       ]
     )
 
@@ -1205,6 +1274,13 @@ describe('processGenerationJob', () => {
       failed_count: 1,
       error_message: 'Failed to record generated image: insert failed',
     })
+    expect(workerLogger.warn).toHaveBeenCalledWith(
+      'Failed to clean up generated image assets',
+      {
+        assetCount: 3,
+        error: 'cleanup unavailable',
+      }
+    )
   })
 
   it('treats a verified duplicate generated-image record as an already completed variation', async () => {
@@ -1290,6 +1366,95 @@ describe('processGenerationJob', () => {
     })
   })
 
+  it('logs duplicate verification failures before preserving the original insert error', async () => {
+    const jobId = '60606060-6060-4606-8606-606060606060'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId),
+        },
+        recordedVariationRows(),
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: null, global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running' },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          error: {
+            code: '23505',
+            message: 'duplicate key value violates unique constraint',
+          },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'select-order',
+          error: { message: 'verification timeout' },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'remove', data: {} },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockResolvedValue({
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-duplicate-verification-failure',
+      raw: {},
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 1,
+      status: 'failed',
+    })
+    expect(workerLogger.warn).toHaveBeenCalledWith(
+      'Failed to verify duplicate generated image record',
+      {
+        jobId,
+        variationNumber: 1,
+        error: 'Failed to load recorded generated variations: verification timeout',
+      }
+    )
+  })
+
   it('stops before the next variation after the job is cancelled during status refresh', async () => {
     const jobId = '66666666-6666-4666-8666-666666666666'
     vi.useFakeTimers()
@@ -1372,6 +1537,50 @@ describe('processGenerationJob', () => {
       completed_count: 1,
       failed_count: 0,
     })
+  })
+
+  it('preserves cancellation when it races the final image status update', async () => {
+    const jobId = '68686868-6868-4686-8686-686868686868'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId),
+      },
+      recordedVariationRows([{ variation_number: 1 }]),
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'running' },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: null,
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'cancelled', completed_count: 0, failed_count: 0 },
+      },
+    ])
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 0,
+      status: 'cancelled',
+    })
+    expect(generateGeminiImage).not.toHaveBeenCalled()
   })
 
   it('uses a configurable status refresh interval when checking for cancellation', async () => {
@@ -1715,6 +1924,41 @@ describe('processGenerationJob', () => {
     expect(statusWrites).toEqual(['running'])
   })
 
+  it('preserves cancellation when it races a successful video completion update', async () => {
+    const jobId = '89898989-8989-4989-8989-898989898989'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createVideoJobRecord(jobId),
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: null,
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'cancelled', completed_count: 0, failed_count: 0 },
+      },
+    ])
+
+    const { generateSceneVideo } = await import('@/lib/video-generation')
+    vi.mocked(generateSceneVideo).mockResolvedValue(undefined)
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 0,
+      status: 'cancelled',
+    })
+    expect(serviceClientState.current?.updates).toHaveLength(2)
+  })
+
   it('fails when it cannot load the latest job state after another worker claims the job first', async () => {
     const jobId = '13131313-1313-4313-8313-131313131313'
     serviceClientState.current = createMockSupabase([
@@ -1839,6 +2083,13 @@ describe('processGenerationJob', () => {
 
     await expect(processGenerationJob(jobId)).rejects.toThrow(
       'Image generation job has no reference sets attached'
+    )
+    expect(workerLogger.error).toHaveBeenCalledWith(
+      'Failed to persist claimed job failure state',
+      {
+        jobId,
+        error: 'Failed to mark generation job as failed: db unavailable',
+      }
     )
   })
 })

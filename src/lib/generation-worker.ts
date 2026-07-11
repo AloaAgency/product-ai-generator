@@ -19,6 +19,7 @@ import {
   parseWorkerPositiveInteger,
   sanitizeWorkerErrorMessage,
 } from '@/lib/generation-worker-guards'
+import { createLogger } from '@/lib/logger'
 
 type WorkerSupabase = ReturnType<typeof createServiceClient>
 
@@ -140,6 +141,7 @@ const DEFAULT_VARIATION_TIMEOUT_MS = 300000
 const DEFAULT_VARIATION_RETRIES = 2
 const DEFAULT_RETRY_BASE_MS = 1500
 const DEFAULT_STATUS_REFRESH_INTERVAL_MS = 3000
+const log = createLogger('GenerationWorker')
 
 const GENERATION_JOB_SELECT = [
   'id',
@@ -248,6 +250,22 @@ async function updateGenerationJob(
   if (!data && !options.allowNoop) {
     throw new Error(`${options.context}: job state changed before update could be applied`)
   }
+
+  return data !== null
+}
+
+async function resolveTerminalUpdateConflict(
+  supabase: WorkerSupabase,
+  jobId: string,
+  processed: number,
+  context: string
+): Promise<WorkerResult> {
+  const latest = await getLatestJobResult(supabase, jobId)
+  if (latest.status === 'cancelled') {
+    return { ...latest, processed }
+  }
+
+  throw new Error(`${context}: job state changed before update could be applied`)
 }
 
 async function markClaimedJobFailed(
@@ -337,7 +355,7 @@ async function processVideoJob(
 
   if (!job.scene_id) {
     const failedCounts = { ...counts, failed: counts.failed + 1 }
-    await updateGenerationJob(
+    const updated = await updateGenerationJob(
       supabase,
       job.id,
       {
@@ -348,30 +366,23 @@ async function processVideoJob(
       },
       {
         expectedStatuses: ['pending', 'running'],
+        allowNoop: true,
         context: 'Failed to persist missing scene_id failure',
       }
     )
+    if (!updated) {
+      return resolveTerminalUpdateConflict(
+        supabase,
+        job.id,
+        1,
+        'Failed to persist missing scene_id failure'
+      )
+    }
     return createWorkerResult(job.id, 'failed', failedCounts, 1)
   }
 
   try {
     await generateSceneVideo(job.product_id, job.scene_id, job.generation_model || undefined, job.id)
-    const completedCounts = { ...counts, completed: counts.completed + 1 }
-    await updateGenerationJob(
-      supabase,
-      job.id,
-      {
-        completed_count: completedCounts.completed,
-        status: 'completed',
-        error_message: null,
-        completed_at: new Date().toISOString(),
-      },
-      {
-        expectedStatuses: ['pending', 'running'],
-        context: 'Failed to persist completed video generation job',
-      }
-    )
-    return createWorkerResult(job.id, 'completed', completedCounts, 1)
   } catch (err) {
     if (err instanceof VideoJobCancelledError) {
       // The cancel endpoint already set status='cancelled'; recording this as
@@ -379,7 +390,7 @@ async function processVideoJob(
       return createWorkerResult(job.id, 'cancelled', counts)
     }
     const failedCounts = { ...counts, failed: counts.failed + 1 }
-    await updateGenerationJob(
+    const updated = await updateGenerationJob(
       supabase,
       job.id,
       {
@@ -390,11 +401,46 @@ async function processVideoJob(
       },
       {
         expectedStatuses: ['pending', 'running'],
+        allowNoop: true,
         context: 'Failed to persist video generation failure',
       }
     )
+    if (!updated) {
+      return resolveTerminalUpdateConflict(
+        supabase,
+        job.id,
+        1,
+        'Failed to persist video generation failure'
+      )
+    }
     return createWorkerResult(job.id, 'failed', failedCounts, 1)
   }
+
+  const completedCounts = { ...counts, completed: counts.completed + 1 }
+  const updated = await updateGenerationJob(
+    supabase,
+    job.id,
+    {
+      completed_count: completedCounts.completed,
+      status: 'completed',
+      error_message: null,
+      completed_at: new Date().toISOString(),
+    },
+    {
+      expectedStatuses: ['pending', 'running'],
+      allowNoop: true,
+      context: 'Failed to persist completed video generation job',
+    }
+  )
+  if (!updated) {
+    return resolveTerminalUpdateConflict(
+      supabase,
+      job.id,
+      1,
+      'Failed to persist completed video generation job'
+    )
+  }
+  return createWorkerResult(job.id, 'completed', completedCounts, 1)
 }
 
 async function fetchProductRecord(supabase: WorkerSupabase, productId: string): Promise<ProductRecord> {
@@ -533,7 +579,7 @@ async function downloadStorageBase64(
   storagePath: string,
   mimeType: string,
   context: string
-): Promise<Base64ReferenceImage | null> {
+): Promise<Base64ReferenceImage> {
   const MAX_RETRIES = 3
   let lastError: Error | null = null
 
@@ -552,7 +598,10 @@ async function downloadStorageBase64(
         throw lastError
       }
 
-      if (!data) return null
+      if (!data) {
+        lastError = new Error(`${context}: download returned no data`)
+        throw lastError
+      }
 
       const arrayBuffer = await data.arrayBuffer()
       return {
@@ -605,7 +654,7 @@ async function buildReferenceImagePayloads(
 
   return [
     ...(sourcePayload ? [sourcePayload] : []),
-    ...referencePayloads.filter((image): image is Base64ReferenceImage => image !== null),
+    ...referencePayloads,
   ]
 }
 
@@ -617,11 +666,21 @@ async function cleanupGeneratedImageAssets(
   if (uniquePaths.length === 0) return
 
   try {
-    await supabase.storage
+    const { error } = await supabase.storage
       .from('generated-images')
       .remove(uniquePaths)
-  } catch {
+    if (error) {
+      log.warn('Failed to clean up generated image assets', {
+        assetCount: uniquePaths.length,
+        error: sanitizeWorkerErrorMessage(error.message, 'Storage cleanup failed'),
+      })
+    }
+  } catch (err) {
     // Cleanup failures should not hide the original generation error.
+    log.warn('Failed to clean up generated image assets', {
+      assetCount: uniquePaths.length,
+      error: sanitizeWorkerErrorMessage(err, 'Storage cleanup failed'),
+    })
   }
 }
 
@@ -880,9 +939,14 @@ async function runVariation(
           if (recorded.has(variationNumber)) {
             return
           }
-        } catch {
+        } catch (err) {
           // Fall through to the original insert error and cleanup path. A
           // duplicate is only safe to treat as success after verification.
+          log.warn('Failed to verify duplicate generated image record', {
+            jobId: job.id,
+            variationNumber,
+            error: sanitizeWorkerErrorMessage(err, 'Duplicate verification failed'),
+          })
         }
       }
       await cleanupGeneratedImageAssets(supabase, generatedPaths)
@@ -1085,16 +1149,25 @@ async function persistFinalImageJobState(
     }
   }
 
-  await updateGenerationJob(
+  const updated = await updateGenerationJob(
     supabase,
     job.id,
     updates,
     {
       expectedStatuses: ['pending', 'running'],
-      allowNoop: false,
+      allowNoop: true,
       context: 'Failed to persist final generation job state',
     }
   )
+
+  if (!updated) {
+    return resolveTerminalUpdateConflict(
+      supabase,
+      job.id,
+      result.processed,
+      'Failed to persist final generation job state'
+    )
+  }
 
   return createWorkerResult(
     job.id,
@@ -1159,10 +1232,14 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     const safeMessage = sanitizeWorkerErrorMessage(err, 'Generation job failed')
     try {
       await markClaimedJobFailed(supabase, claimedJob, safeMessage)
-    } catch {
+    } catch (persistError) {
       // Persisting the failed state is best-effort. If it fails (e.g. a
       // transient DB error or a concurrent status change), never let that
       // mask the original generation error the caller needs for logging.
+      log.error('Failed to persist claimed job failure state', {
+        jobId: claimedJob.id,
+        error: sanitizeWorkerErrorMessage(persistError, 'Failure state persistence failed'),
+      })
     }
     throw err
   }
