@@ -1118,6 +1118,63 @@ describe('processGenerationJob', () => {
     }))
   })
 
+  it('fails the job instead of silently omitting a reference download with no data', async () => {
+    const jobId = '59595959-5959-4595-8595-595959595959'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId),
+        },
+        recordedVariationRows(),
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: null, global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [
+            { id: 'ref-1', reference_set_id: 'refs-1', storage_path: 'products/ref-1.png', mime_type: 'image/png', display_order: 1 },
+          ],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-maybeSingle',
+          data: { completed_count: 0, failed_count: 0 },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'reference-images', type: 'download', data: null },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).rejects.toThrow(
+      'Failed to download reference image: download returned no data'
+    )
+    expect(generateGeminiImage).not.toHaveBeenCalled()
+    expect(serviceClientState.current?.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: 'Failed to download reference image: download returned no data',
+    })
+  })
+
   it('cleans up uploaded image assets when recording the generated image fails', async () => {
     const jobId = '56565656-5656-4565-8565-565656565656'
     serviceClientState.current = createMockSupabase(

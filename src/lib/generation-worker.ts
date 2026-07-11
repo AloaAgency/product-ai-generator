@@ -577,7 +577,7 @@ async function downloadStorageBase64(
   storagePath: string,
   mimeType: string,
   context: string
-): Promise<Base64ReferenceImage | null> {
+): Promise<Base64ReferenceImage> {
   const MAX_RETRIES = 3
   let lastError: Error | null = null
 
@@ -596,7 +596,10 @@ async function downloadStorageBase64(
         throw lastError
       }
 
-      if (!data) return null
+      if (!data) {
+        lastError = new Error(`${context}: download returned no data`)
+        throw lastError
+      }
 
       const arrayBuffer = await data.arrayBuffer()
       return {
@@ -649,7 +652,7 @@ async function buildReferenceImagePayloads(
 
   return [
     ...(sourcePayload ? [sourcePayload] : []),
-    ...referencePayloads.filter((image): image is Base64ReferenceImage => image !== null),
+    ...referencePayloads,
   ]
 }
 
