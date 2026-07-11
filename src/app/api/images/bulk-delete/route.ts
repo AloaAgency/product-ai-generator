@@ -29,10 +29,11 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
-    // Fetch all image records — only the storage paths are needed to delete.
+    // Fetch all image records — the storage paths plus media_type (which
+    // determines the bucket) are all that's needed to delete.
     const { data: images, error: fetchError } = await supabase
       .from(T.generated_images)
-      .select('storage_path, thumb_storage_path, preview_storage_path')
+      .select('storage_path, thumb_storage_path, preview_storage_path, media_type')
       .in('id', sanitizedImageIds)
 
     if (fetchError) {
@@ -43,20 +44,33 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ deleted: 0 })
     }
 
-    // Collect storage paths to delete
+    // Collect storage paths to delete, split by bucket. Video records (and
+    // their thumbnails) live in the generated-videos bucket — removing their
+    // paths from generated-images would silently no-op and leave the actual
+    // files orphaned.
     const imagePaths: string[] = []
+    const videoPaths: string[] = []
     for (const img of images) {
-      if (img.storage_path) imagePaths.push(img.storage_path)
-      if (img.thumb_storage_path) imagePaths.push(img.thumb_storage_path)
-      if (img.preview_storage_path) imagePaths.push(img.preview_storage_path)
+      const target = img.media_type === 'video' ? videoPaths : imagePaths
+      if (img.storage_path) target.push(img.storage_path)
+      if (img.thumb_storage_path) target.push(img.thumb_storage_path)
+      if (img.preview_storage_path) target.push(img.preview_storage_path)
     }
 
-    // Delete storage files
-    if (imagePaths.length > 0) {
-      const { error: storageError } = await supabase.storage.from('generated-images').remove(imagePaths)
-      if (storageError) {
-        logger.error('[BulkDelete] Storage deletion failed, orphaned files may remain:', storageError)
-      }
+    // Delete storage files from each bucket
+    const [imageRemoval, videoRemoval] = await Promise.all([
+      imagePaths.length > 0
+        ? supabase.storage.from('generated-images').remove(imagePaths)
+        : Promise.resolve({ error: null }),
+      videoPaths.length > 0
+        ? supabase.storage.from('generated-videos').remove(videoPaths)
+        : Promise.resolve({ error: null }),
+    ])
+    if (imageRemoval.error) {
+      logger.error('[BulkDelete] Image storage deletion failed, orphaned files may remain:', imageRemoval.error)
+    }
+    if (videoRemoval.error) {
+      logger.error('[BulkDelete] Video storage deletion failed, orphaned files may remain:', videoRemoval.error)
     }
 
     // Delete DB records

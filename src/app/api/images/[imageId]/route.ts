@@ -69,10 +69,11 @@ export async function DELETE(
     const sanitizedImageId = requireUuid(imageId, 'image id')
     const supabase = createServiceClient()
 
-    // Fetch the image record first — only the storage paths are needed to delete.
+    // Fetch the image record first — the storage paths plus media_type (which
+    // determines the bucket) are all that's needed to delete.
     const { data: image, error: fetchError } = await supabase
       .from(T.generated_images)
-      .select('storage_path, thumb_storage_path, preview_storage_path')
+      .select('storage_path, thumb_storage_path, preview_storage_path, media_type')
       .eq('id', sanitizedImageId)
       .single()
 
@@ -80,7 +81,10 @@ export async function DELETE(
       return NextResponse.json({ error: 'Image not found' }, { status: 404 })
     }
 
-    // Delete files from storage
+    // Delete files from storage. Video records (and their thumbnails) live in
+    // the generated-videos bucket — removing their paths from generated-images
+    // would silently no-op and leave the actual files orphaned.
+    const bucket = image.media_type === 'video' ? 'generated-videos' : 'generated-images'
     const pathsToDelete = [
       image.storage_path,
       image.thumb_storage_path,
@@ -88,7 +92,7 @@ export async function DELETE(
     ].filter(Boolean) as string[]
 
     if (pathsToDelete.length > 0) {
-      const { error: storageError } = await supabase.storage.from('generated-images').remove(pathsToDelete)
+      const { error: storageError } = await supabase.storage.from(bucket).remove(pathsToDelete)
       if (storageError) {
         // Log but continue — the DB record must still be deleted to prevent stale data.
         // Orphaned storage files can be cleaned up via the backfill admin route.
