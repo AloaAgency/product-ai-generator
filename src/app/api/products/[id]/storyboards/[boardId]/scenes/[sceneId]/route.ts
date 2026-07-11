@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { parseRequestBody } from '@/lib/request-guards'
+import { parseRequestBody, MAX_PROMPT_TEXT_LENGTH } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
+
+// Must match the limit enforced by the scene POST routes on the same table
+const MAX_TITLE_LENGTH = 500
 
 export async function PATCH(
   request: NextRequest,
@@ -14,6 +17,15 @@ export async function PATCH(
     const parsed = await parseRequestBody(request)
     if (!parsed.ok) return parsed.response
     const body = parsed.body
+
+    if (typeof body.title === 'string' && body.title.length > MAX_TITLE_LENGTH) {
+      return NextResponse.json({ error: `title must be ${MAX_TITLE_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    for (const field of ['prompt_text', 'end_frame_prompt', 'motion_prompt'] as const) {
+      if (typeof body[field] === 'string' && (body[field] as string).length > MAX_PROMPT_TEXT_LENGTH) {
+        return NextResponse.json({ error: `${field} must be ${MAX_PROMPT_TEXT_LENGTH} characters or fewer` }, { status: 400 })
+      }
+    }
 
     const updates: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
