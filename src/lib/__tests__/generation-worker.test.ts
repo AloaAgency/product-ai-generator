@@ -18,6 +18,13 @@ const serviceClientState = vi.hoisted(() => ({
   current: null as null | ReturnType<typeof createMockSupabase>,
 }))
 
+const workerLogger = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}))
+
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(() => {
     if (!serviceClientState.current) {
@@ -29,6 +36,11 @@ vi.mock('@/lib/supabase/server', () => ({
 
 vi.mock('@/lib/gemini', () => ({
   generateGeminiImage: vi.fn(),
+}))
+
+vi.mock('@/lib/logger', () => ({
+  createLogger: vi.fn(() => workerLogger),
+  logger: workerLogger,
 }))
 
 vi.mock('@/lib/video-generation', async (importOriginal) => {
@@ -1225,7 +1237,7 @@ describe('processGenerationJob', () => {
         { bucket: 'generated-images', type: 'upload', data: {} },
         { bucket: 'generated-images', type: 'upload', data: {} },
         { bucket: 'generated-images', type: 'upload', data: {} },
-        { bucket: 'generated-images', type: 'remove', data: {} },
+        { bucket: 'generated-images', type: 'remove', error: { message: 'cleanup unavailable' } },
       ]
     )
 
@@ -1262,6 +1274,13 @@ describe('processGenerationJob', () => {
       failed_count: 1,
       error_message: 'Failed to record generated image: insert failed',
     })
+    expect(workerLogger.warn).toHaveBeenCalledWith(
+      'Failed to clean up generated image assets',
+      {
+        assetCount: 3,
+        error: 'cleanup unavailable',
+      }
+    )
   })
 
   it('treats a verified duplicate generated-image record as an already completed variation', async () => {
@@ -1345,6 +1364,95 @@ describe('processGenerationJob', () => {
       completed_count: 1,
       failed_count: 0,
     })
+  })
+
+  it('logs duplicate verification failures before preserving the original insert error', async () => {
+    const jobId = '60606060-6060-4606-8606-606060606060'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId),
+        },
+        recordedVariationRows(),
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: null, global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running' },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          error: {
+            code: '23505',
+            message: 'duplicate key value violates unique constraint',
+          },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'select-order',
+          error: { message: 'verification timeout' },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'remove', data: {} },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockResolvedValue({
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-duplicate-verification-failure',
+      raw: {},
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 1,
+      status: 'failed',
+    })
+    expect(workerLogger.warn).toHaveBeenCalledWith(
+      'Failed to verify duplicate generated image record',
+      {
+        jobId,
+        variationNumber: 1,
+        error: 'Failed to load recorded generated variations: verification timeout',
+      }
+    )
   })
 
   it('stops before the next variation after the job is cancelled during status refresh', async () => {
@@ -1975,6 +2083,13 @@ describe('processGenerationJob', () => {
 
     await expect(processGenerationJob(jobId)).rejects.toThrow(
       'Image generation job has no reference sets attached'
+    )
+    expect(workerLogger.error).toHaveBeenCalledWith(
+      'Failed to persist claimed job failure state',
+      {
+        jobId,
+        error: 'Failed to mark generation job as failed: db unavailable',
+      }
     )
   })
 })

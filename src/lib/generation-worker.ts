@@ -19,6 +19,7 @@ import {
   parseWorkerPositiveInteger,
   sanitizeWorkerErrorMessage,
 } from '@/lib/generation-worker-guards'
+import { createLogger } from '@/lib/logger'
 
 type WorkerSupabase = ReturnType<typeof createServiceClient>
 
@@ -140,6 +141,7 @@ const DEFAULT_VARIATION_TIMEOUT_MS = 300000
 const DEFAULT_VARIATION_RETRIES = 2
 const DEFAULT_RETRY_BASE_MS = 1500
 const DEFAULT_STATUS_REFRESH_INTERVAL_MS = 3000
+const log = createLogger('GenerationWorker')
 
 const GENERATION_JOB_SELECT = [
   'id',
@@ -664,11 +666,21 @@ async function cleanupGeneratedImageAssets(
   if (uniquePaths.length === 0) return
 
   try {
-    await supabase.storage
+    const { error } = await supabase.storage
       .from('generated-images')
       .remove(uniquePaths)
-  } catch {
+    if (error) {
+      log.warn('Failed to clean up generated image assets', {
+        assetCount: uniquePaths.length,
+        error: sanitizeWorkerErrorMessage(error.message, 'Storage cleanup failed'),
+      })
+    }
+  } catch (err) {
     // Cleanup failures should not hide the original generation error.
+    log.warn('Failed to clean up generated image assets', {
+      assetCount: uniquePaths.length,
+      error: sanitizeWorkerErrorMessage(err, 'Storage cleanup failed'),
+    })
   }
 }
 
@@ -927,9 +939,14 @@ async function runVariation(
           if (recorded.has(variationNumber)) {
             return
           }
-        } catch {
+        } catch (err) {
           // Fall through to the original insert error and cleanup path. A
           // duplicate is only safe to treat as success after verification.
+          log.warn('Failed to verify duplicate generated image record', {
+            jobId: job.id,
+            variationNumber,
+            error: sanitizeWorkerErrorMessage(err, 'Duplicate verification failed'),
+          })
         }
       }
       await cleanupGeneratedImageAssets(supabase, generatedPaths)
@@ -1215,10 +1232,14 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
     const safeMessage = sanitizeWorkerErrorMessage(err, 'Generation job failed')
     try {
       await markClaimedJobFailed(supabase, claimedJob, safeMessage)
-    } catch {
+    } catch (persistError) {
       // Persisting the failed state is best-effort. If it fails (e.g. a
       // transient DB error or a concurrent status change), never let that
       // mask the original generation error the caller needs for logging.
+      log.error('Failed to persist claimed job failure state', {
+        jobId: claimedJob.id,
+        error: sanitizeWorkerErrorMessage(persistError, 'Failure state persistence failed'),
+      })
     }
     throw err
   }
