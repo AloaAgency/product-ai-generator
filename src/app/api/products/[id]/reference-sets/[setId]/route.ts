@@ -4,6 +4,10 @@ import { T } from '@/lib/db-tables'
 import { parseRequestBody } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
+// Must match the limits enforced by the POST route on the same table
+const MAX_NAME_LENGTH = 500
+const MAX_DESCRIPTION_LENGTH = 5000
+
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; setId: string }> }
@@ -14,6 +18,16 @@ export async function PATCH(
     const parsed = await parseRequestBody(request)
     if (!parsed.ok) return parsed.response
     const body = parsed.body
+
+    if (typeof body.name === 'string' && body.name.length > MAX_NAME_LENGTH) {
+      return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (typeof body.description === 'string' && body.description.length > MAX_DESCRIPTION_LENGTH) {
+      return NextResponse.json({ error: `description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (body.name === undefined && body.description === undefined && body.is_active === undefined) {
+      return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })
+    }
 
     // If setting is_active=true, deactivate other sets first
     if (body.is_active === true) {

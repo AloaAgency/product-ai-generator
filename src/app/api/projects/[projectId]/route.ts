@@ -4,6 +4,10 @@ import { T } from '@/lib/db-tables'
 import { requireUuid, parseRequestBody } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
+// Must match the limits enforced by POST /api/projects on the same table
+const MAX_NAME_LENGTH = 500
+const MAX_DESCRIPTION_LENGTH = 5000
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
@@ -39,10 +43,21 @@ export async function PATCH(
     if (!parsed.ok) return parsed.response
     const body = parsed.body
 
+    if (typeof body.name === 'string' && body.name.length > MAX_NAME_LENGTH) {
+      return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (typeof body.description === 'string' && body.description.length > MAX_DESCRIPTION_LENGTH) {
+      return NextResponse.json({ error: `description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer` }, { status: 400 })
+    }
+
     const updates: Record<string, unknown> = {}
     if (body.name !== undefined) updates.name = body.name
     if (body.description !== undefined) updates.description = body.description
     if (body.global_style_settings !== undefined) updates.global_style_settings = body.global_style_settings
+
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })
+    }
 
     const { data, error } = await supabase
       .from(T.projects)

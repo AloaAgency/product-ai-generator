@@ -5,6 +5,10 @@ import { normalizeDurationValue } from '@/lib/video-constants'
 import { parseRequestBody } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
+// Must match the limits enforced by POST /api/products/[id]/scenes on the same table
+const MAX_PROMPT_LENGTH = 10000
+const MAX_TITLE_LENGTH = 500
+
 type Params = { params: Promise<{ id: string; sceneId: string }> }
 
 export async function PATCH(request: NextRequest, { params }: Params) {
@@ -14,6 +18,15 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const parsed = await parseRequestBody(request)
     if (!parsed.ok) return parsed.response
     const body = parsed.body
+
+    if (typeof body.title === 'string' && body.title.length > MAX_TITLE_LENGTH) {
+      return NextResponse.json({ error: `title must be ${MAX_TITLE_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    for (const field of ['prompt_text', 'end_frame_prompt', 'motion_prompt'] as const) {
+      if (typeof body[field] === 'string' && (body[field] as string).length > MAX_PROMPT_LENGTH) {
+        return NextResponse.json({ error: `${field} must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+      }
+    }
 
     // Fetch existing scene to resolve model, resolution, and frame info for duration normalization
     let existingScene: { generation_model?: string; video_resolution?: string; start_frame_image_id?: string; end_frame_image_id?: string } | null = null

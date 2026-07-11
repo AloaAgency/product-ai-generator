@@ -45,9 +45,12 @@ export async function GET(
       img.preview_storage_path,
     ].filter(Boolean)) as string[]
 
-    const videoPaths = videoItems
-      .map((img) => img.storage_path)
-      .filter(Boolean) as string[]
+    // Video thumbnails live in the generated-videos bucket alongside the
+    // videos themselves, so they must be signed there — not in the image bucket.
+    const videoPaths = videoItems.flatMap((img) => [
+      img.storage_path,
+      img.thumb_storage_path,
+    ].filter(Boolean)) as string[]
 
     const [signedImagesResult, signedVideosResult] = await Promise.all([
       imagePaths.length > 0
@@ -80,7 +83,9 @@ export async function GET(
         ? (signedImagesMap.get(img.preview_storage_path) ?? null)
         : null,
       thumb_public_url: img.thumb_storage_path
-        ? (signedImagesMap.get(img.thumb_storage_path) ?? null)
+        ? (img.media_type === 'video'
+          ? (signedVideosMap.get(img.thumb_storage_path) ?? null)
+          : (signedImagesMap.get(img.thumb_storage_path) ?? null))
         : null,
     }))
 

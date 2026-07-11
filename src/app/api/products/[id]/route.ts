@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { requireUuid, parseRequestBody } from '@/lib/request-guards'
+import { requireUuid, isUuid, parseRequestBody } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
+
+// Must match the limits enforced by POST /api/products on the same table
+const MAX_NAME_LENGTH = 500
+const MAX_DESCRIPTION_LENGTH = 5000
 
 export async function GET(
   request: NextRequest,
@@ -39,11 +43,25 @@ export async function PATCH(
     if (!parsed.ok) return parsed.response
     const body = parsed.body
 
+    if (typeof body.name === 'string' && body.name.length > MAX_NAME_LENGTH) {
+      return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (typeof body.description === 'string' && body.description.length > MAX_DESCRIPTION_LENGTH) {
+      return NextResponse.json({ error: `description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (body.project_id !== undefined && (typeof body.project_id !== 'string' || !isUuid(body.project_id))) {
+      return NextResponse.json({ error: 'project_id must be a valid UUID' }, { status: 400 })
+    }
+
     const updates: Record<string, unknown> = {}
     if (body.name !== undefined) updates.name = body.name
     if (body.description !== undefined) updates.description = body.description
     if (body.global_style_settings !== undefined) updates.global_style_settings = body.global_style_settings
     if (body.project_id !== undefined) updates.project_id = body.project_id
+
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })
+    }
 
     const { data, error } = await supabase
       .from(T.products)

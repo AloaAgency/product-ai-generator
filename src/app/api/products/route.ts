@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
+import { parseRequestBody, isUuid, MAX_LIST_ROWS } from '@/lib/request-guards'
 import { logger } from '@/lib/logger'
 
 const PLACEHOLDER_USER_ID = '00000000-0000-0000-0000-000000000000'
@@ -14,6 +14,9 @@ export async function GET(request: NextRequest) {
     const supabase = createServiceClient()
     const { searchParams } = new URL(request.url)
     const projectId = searchParams.get('project_id')
+    if (projectId && !isUuid(projectId)) {
+      return NextResponse.json({ error: 'project_id must be a valid UUID' }, { status: 400 })
+    }
 
     let query = supabase
       .from(T.products)
@@ -54,6 +57,9 @@ export async function POST(request: NextRequest) {
     }
     if (!project_id) {
       return NextResponse.json({ error: 'project_id is required' }, { status: 400 })
+    }
+    if (typeof project_id !== 'string' || !isUuid(project_id)) {
+      return NextResponse.json({ error: 'project_id must be a valid UUID' }, { status: 400 })
     }
 
     const { data, error } = await supabase
