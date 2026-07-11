@@ -248,6 +248,22 @@ async function updateGenerationJob(
   if (!data && !options.allowNoop) {
     throw new Error(`${options.context}: job state changed before update could be applied`)
   }
+
+  return data !== null
+}
+
+async function resolveTerminalUpdateConflict(
+  supabase: WorkerSupabase,
+  jobId: string,
+  processed: number,
+  context: string
+): Promise<WorkerResult> {
+  const latest = await getLatestJobResult(supabase, jobId)
+  if (latest.status === 'cancelled') {
+    return { ...latest, processed }
+  }
+
+  throw new Error(`${context}: job state changed before update could be applied`)
 }
 
 async function markClaimedJobFailed(
@@ -337,7 +353,7 @@ async function processVideoJob(
 
   if (!job.scene_id) {
     const failedCounts = { ...counts, failed: counts.failed + 1 }
-    await updateGenerationJob(
+    const updated = await updateGenerationJob(
       supabase,
       job.id,
       {
@@ -348,30 +364,23 @@ async function processVideoJob(
       },
       {
         expectedStatuses: ['pending', 'running'],
+        allowNoop: true,
         context: 'Failed to persist missing scene_id failure',
       }
     )
+    if (!updated) {
+      return resolveTerminalUpdateConflict(
+        supabase,
+        job.id,
+        1,
+        'Failed to persist missing scene_id failure'
+      )
+    }
     return createWorkerResult(job.id, 'failed', failedCounts, 1)
   }
 
   try {
     await generateSceneVideo(job.product_id, job.scene_id, job.generation_model || undefined, job.id)
-    const completedCounts = { ...counts, completed: counts.completed + 1 }
-    await updateGenerationJob(
-      supabase,
-      job.id,
-      {
-        completed_count: completedCounts.completed,
-        status: 'completed',
-        error_message: null,
-        completed_at: new Date().toISOString(),
-      },
-      {
-        expectedStatuses: ['pending', 'running'],
-        context: 'Failed to persist completed video generation job',
-      }
-    )
-    return createWorkerResult(job.id, 'completed', completedCounts, 1)
   } catch (err) {
     if (err instanceof VideoJobCancelledError) {
       // The cancel endpoint already set status='cancelled'; recording this as
@@ -379,7 +388,7 @@ async function processVideoJob(
       return createWorkerResult(job.id, 'cancelled', counts)
     }
     const failedCounts = { ...counts, failed: counts.failed + 1 }
-    await updateGenerationJob(
+    const updated = await updateGenerationJob(
       supabase,
       job.id,
       {
@@ -390,11 +399,46 @@ async function processVideoJob(
       },
       {
         expectedStatuses: ['pending', 'running'],
+        allowNoop: true,
         context: 'Failed to persist video generation failure',
       }
     )
+    if (!updated) {
+      return resolveTerminalUpdateConflict(
+        supabase,
+        job.id,
+        1,
+        'Failed to persist video generation failure'
+      )
+    }
     return createWorkerResult(job.id, 'failed', failedCounts, 1)
   }
+
+  const completedCounts = { ...counts, completed: counts.completed + 1 }
+  const updated = await updateGenerationJob(
+    supabase,
+    job.id,
+    {
+      completed_count: completedCounts.completed,
+      status: 'completed',
+      error_message: null,
+      completed_at: new Date().toISOString(),
+    },
+    {
+      expectedStatuses: ['pending', 'running'],
+      allowNoop: true,
+      context: 'Failed to persist completed video generation job',
+    }
+  )
+  if (!updated) {
+    return resolveTerminalUpdateConflict(
+      supabase,
+      job.id,
+      1,
+      'Failed to persist completed video generation job'
+    )
+  }
+  return createWorkerResult(job.id, 'completed', completedCounts, 1)
 }
 
 async function fetchProductRecord(supabase: WorkerSupabase, productId: string): Promise<ProductRecord> {
@@ -1085,16 +1129,25 @@ async function persistFinalImageJobState(
     }
   }
 
-  await updateGenerationJob(
+  const updated = await updateGenerationJob(
     supabase,
     job.id,
     updates,
     {
       expectedStatuses: ['pending', 'running'],
-      allowNoop: false,
+      allowNoop: true,
       context: 'Failed to persist final generation job state',
     }
   )
+
+  if (!updated) {
+    return resolveTerminalUpdateConflict(
+      supabase,
+      job.id,
+      result.processed,
+      'Failed to persist final generation job state'
+    )
+  }
 
   return createWorkerResult(
     job.id,

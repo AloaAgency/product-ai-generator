@@ -1374,6 +1374,50 @@ describe('processGenerationJob', () => {
     })
   })
 
+  it('preserves cancellation when it races the final image status update', async () => {
+    const jobId = '68686868-6868-4686-8686-686868686868'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId),
+      },
+      recordedVariationRows([{ variation_number: 1 }]),
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'running' },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: null,
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'cancelled', completed_count: 0, failed_count: 0 },
+      },
+    ])
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 0,
+      status: 'cancelled',
+    })
+    expect(generateGeminiImage).not.toHaveBeenCalled()
+  })
+
   it('uses a configurable status refresh interval when checking for cancellation', async () => {
     const jobId = '67676767-6767-4676-8676-676767676767'
     process.env.GENERATION_STATUS_REFRESH_INTERVAL_MS = '1'
@@ -1713,6 +1757,41 @@ describe('processGenerationJob', () => {
       .map((u) => (u.values as { status?: string }).status)
       .filter(Boolean)
     expect(statusWrites).toEqual(['running'])
+  })
+
+  it('preserves cancellation when it races a successful video completion update', async () => {
+    const jobId = '89898989-8989-4989-8989-898989898989'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createVideoJobRecord(jobId),
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: null,
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'cancelled', completed_count: 0, failed_count: 0 },
+      },
+    ])
+
+    const { generateSceneVideo } = await import('@/lib/video-generation')
+    vi.mocked(generateSceneVideo).mockResolvedValue(undefined)
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 0,
+      status: 'cancelled',
+    })
+    expect(serviceClientState.current?.updates).toHaveLength(2)
   })
 
   it('fails when it cannot load the latest job state after another worker claims the job first', async () => {
