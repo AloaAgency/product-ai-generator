@@ -254,6 +254,18 @@ export async function processReferenceImageCompression(
     }
   }
 
+  // Metering hook: one structured line per successful compression so storage
+  // savings are observable in production logs (aggregate by scanning for the
+  // event name). logger.info is level-gated, not user-facing.
+  const savedBytes = result.originalSize - result.compressedSize
+  logger.info('reference-image-compression: compressed', {
+    imageId,
+    originalSize: result.originalSize,
+    compressedSize: result.compressedSize,
+    savedBytes,
+    savedPercent: Math.round((savedBytes / result.originalSize) * 100),
+  })
+
   return {
     imageId,
     wasCompressed: true,
