@@ -157,8 +157,15 @@ export async function processReferenceImageCompression(
     }
   }
 
-  // Build new storage path with .webp extension
-  const newStoragePath = storagePath.replace(/\.[^/.]+$/, '.webp')
+  // Build new storage path with .webp extension. When the original path has
+  // no extension the regex would not match and the replace would be a no-op —
+  // the upsert upload below would then overwrite the customer's original
+  // bytes at the same key. Append the extension instead so the original
+  // object is never clobbered by a rename that silently failed.
+  const hasExtension = /\.[^/.]+$/.test(storagePath)
+  const newStoragePath = hasExtension
+    ? storagePath.replace(/\.[^/.]+$/, '.webp')
+    : `${storagePath}.webp`
 
   // Upload the compressed version (retried on transient storage errors)
   const { error: uploadError } = await withStorageRetry(
@@ -198,6 +205,31 @@ export async function processReferenceImageCompression(
   )
 
   if (dbError) {
+    // The DB still points at the original object, so the freshly uploaded
+    // compressed copy is unreachable and would sit in billable storage
+    // forever. Best-effort remove it so storage and DB stay consistent —
+    // but only when the paths differ: when the original was already .webp
+    // the upload replaced it in place, and removing it would delete the
+    // customer's only copy.
+    if (newStoragePath !== storagePath) {
+      try {
+        const { error: cleanupError } = await supabase.storage.from(BUCKET).remove([newStoragePath])
+        if (cleanupError) {
+          logger.warn(`Failed to clean up orphaned compressed image '${newStoragePath}':`, cleanupError.message)
+        }
+      } catch (err) {
+        logger.warn(`Failed to clean up orphaned compressed image '${newStoragePath}':`, err)
+      }
+      // The compressed copy no longer exists — report the operation as a
+      // no-op failure rather than advertising a path that was rolled back.
+      return {
+        imageId,
+        wasCompressed: false,
+        originalSize: result.originalSize,
+        compressedSize: result.compressedSize,
+        error: sanitizePublicErrorMessage(dbError.message, { fallback: 'DB update failed' }),
+      }
+    }
     return {
       imageId,
       wasCompressed: true,
@@ -221,6 +253,18 @@ export async function processReferenceImageCompression(
       logger.warn(`Failed to remove old reference image '${storagePath}':`, err)
     }
   }
+
+  // Metering hook: one structured line per successful compression so storage
+  // savings are observable in production logs (aggregate by scanning for the
+  // event name). logger.info is level-gated, not user-facing.
+  const savedBytes = result.originalSize - result.compressedSize
+  logger.info('reference-image-compression: compressed', {
+    imageId,
+    originalSize: result.originalSize,
+    compressedSize: result.compressedSize,
+    savedBytes,
+    savedPercent: Math.round((savedBytes / result.originalSize) * 100),
+  })
 
   return {
     imageId,

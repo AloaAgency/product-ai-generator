@@ -209,18 +209,52 @@ describe('processReferenceImageCompression — DB update failure', () => {
     })
     mockUpload.mockResolvedValue({ error: null })
     mockDbUpdate.mockResolvedValue({ error: { message: 'FK violation' } })
+    mockRemove.mockResolvedValue({ error: null })
   })
 
-  it('returns wasCompressed=true with an error when DB update fails', async () => {
+  it('returns wasCompressed=false with an error when DB update fails (upload rolled back)', async () => {
     const result = await processReferenceImageCompression(FAKE_IMAGE_ID, originalPath)
 
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('FK violation')
+    expect(result.newStoragePath).toBeUndefined()
+  })
+
+  it('removes the orphaned compressed upload when DB update fails and the path changed', async () => {
+    await processReferenceImageCompression(FAKE_IMAGE_ID, originalPath)
+    // The NEW object is removed; the original the DB still points at is kept.
+    expect(mockRemove).toHaveBeenCalledTimes(1)
+    expect(mockRemove).toHaveBeenCalledWith([expectedNewPath])
+  })
+
+  it('does NOT remove anything when DB update fails but the path was unchanged (.webp in place)', async () => {
+    const webpPath = 'org/product/ref-image.webp'
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, webpPath)
+
+    // Upload replaced the original in place — removing it would delete the
+    // customer's only copy. The result keeps the (valid) path and the error.
+    expect(mockRemove).not.toHaveBeenCalled()
     expect(result.wasCompressed).toBe(true)
+    expect(result.newStoragePath).toBe(webpPath)
     expect(result.error).toBe('FK violation')
   })
 
-  it('still includes newStoragePath in the result even when DB update fails', async () => {
+  it('still surfaces the DB error when the orphan cleanup itself fails', async () => {
+    mockRemove.mockResolvedValue({ error: { message: 'storage unavailable' } })
+
     const result = await processReferenceImageCompression(FAKE_IMAGE_ID, originalPath)
-    expect(result.newStoragePath).toBe(expectedNewPath)
+
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('FK violation')
+  })
+
+  it('still surfaces the DB error when the orphan cleanup throws', async () => {
+    mockRemove.mockRejectedValue(new Error('network down'))
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, originalPath)
+
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('FK violation')
   })
 })
 
@@ -441,6 +475,9 @@ describe('processReferenceImageCompression — storage path extension replacemen
     { input: 'org/product/image.tiff', expected: 'org/product/image.webp' },
     // Filename with dots in it — only last extension should be replaced
     { input: 'org/product/image.v2.3.png', expected: 'org/product/image.v2.3.webp' },
+    // No extension at all — .webp must be APPENDED, not silently no-opped:
+    // an unchanged path would make the upsert upload overwrite the original.
+    { input: 'org/product/image-no-ext', expected: 'org/product/image-no-ext.webp' },
   ]
 
   cases.forEach(({ input, expected }) => {

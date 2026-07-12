@@ -337,6 +337,17 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
     return passthroughResult(buffer, format)
   }
 
+  // Animated/multi-page inputs (GIF, animated WebP) are returned untouched.
+  // Sharp decodes only the first page by default, so re-encoding would
+  // silently flatten the animation to a static frame — and the caller then
+  // deletes the original from storage, making the frame loss permanent.
+  // Decoding with `animated: true` instead is not memory-safe here: the
+  // decoded footprint scales with frame count, bypassing the per-page area
+  // guard above (e.g. a 4096px 100-frame GIF decodes to several GB).
+  if ((meta.pages ?? 1) > 1) {
+    return passthroughResult(buffer, format)
+  }
+
   // Always rotate first to honour EXIF orientation before any resize operation.
   const pipeline = sharp(buffer).rotate()
   if (needsResize) {

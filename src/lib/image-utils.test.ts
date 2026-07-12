@@ -438,6 +438,61 @@ describe('compressReferenceImage', () => {
     )
   })
 
+  // ------------------------------------------------------------------
+  // Animated inputs — data-loss guard
+  // ------------------------------------------------------------------
+
+  it('passes through an animated image even when it exceeds the dimension threshold', async () => {
+    // Two 5000px-wide frames joined into an animated WebP. Width exceeds the
+    // 4096px resize trigger, but re-encoding would flatten the animation to a
+    // single static frame (Sharp decodes only page 0 by default) — and the
+    // caller deletes the original afterwards, making that loss permanent.
+    // The frames must differ in content: identical frames are deduplicated
+    // into a single page by the WebP encoder.
+    const frame1 = await sharp({
+      create: { width: 5000, height: 40, channels: 3, background: { r: 255, g: 0, b: 0 } },
+    }).png().toBuffer()
+    const frame2 = await sharp({
+      create: { width: 5000, height: 40, channels: 3, background: { r: 0, g: 0, b: 255 } },
+    }).png().toBuffer()
+    const animated = await sharp([frame1, frame2], { join: { animated: true } })
+      .webp()
+      .toBuffer()
+
+    // Sanity: confirm the synthetic input really is multi-page and oversized.
+    const inMeta = await sharp(animated).metadata()
+    expect(inMeta.pages).toBe(2)
+    expect(inMeta.width).toBeGreaterThan(4096)
+
+    const result = await compressReferenceImage(animated)
+    expect(result.wasCompressed).toBe(false)
+    expect(result.buffer).toBe(animated) // same reference — original preserved
+    expect(result.mimeType).toBe('image/webp')
+
+    // All frames survive.
+    const outMeta = await sharp(result.buffer).metadata()
+    expect(outMeta.pages).toBe(2)
+  })
+
+  it('still enforces the pixel-bomb dimension guard for animated images', async () => {
+    // The animated passthrough must not become a bypass for the memory guard:
+    // per-page dimensions are validated before the pages check. GIF output is
+    // used because WebP cannot encode >16383px per side; frames must differ so
+    // the encoder does not deduplicate them into a single page.
+    const frame1 = await sharp({
+      create: { width: 33_000, height: 10, channels: 3, background: { r: 255, g: 0, b: 0 } },
+    }).png().toBuffer()
+    const frame2 = await sharp({
+      create: { width: 33_000, height: 10, channels: 3, background: { r: 0, g: 0, b: 255 } },
+    }).png().toBuffer()
+    const animated = await sharp([frame1, frame2], { join: { animated: true } })
+      .gif()
+      .toBuffer()
+    await expect(compressReferenceImage(animated)).rejects.toThrow(
+      /dimensions.*exceed maximum/i
+    )
+  })
+
   it('throws at the exact MAX_SAFE_INPUT_DIMENSION boundary (pixel bomb guard)', async () => {
     // A 32 768-px wide image passes the old `>` check but should be rejected.
     // Decoded at 32 768×100 RGBA that is ~13 MB, but the guard fires before
