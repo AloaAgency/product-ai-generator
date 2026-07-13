@@ -488,6 +488,102 @@ describe('useAppStore async scope guards', () => {
     expect(useAppStore.getState().generationJobs).toEqual([])
   })
 
+  it('reconciles a queue clear without re-fetching matching generation jobs', async () => {
+    const pendingJob = makeGenerationJob({
+      status: 'pending',
+      completed_count: 0,
+      completed_at: null,
+    })
+    const completedJob = makeGenerationJob({ id: generationJobB })
+    let generationGets = 0
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/generate` && method === 'GET') {
+        generationGets += 1
+        return Promise.resolve(jsonResponse([pendingJob, completedJob]))
+      }
+      if (url === `/api/products/${productA}/generate` && method === 'DELETE') {
+        return Promise.resolve(jsonResponse({ cancelled: 1, cleared_failed: 0, cleared_log: 0 }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGenerationJobs(productA)
+    await useAppStore.getState().clearGenerationQueue(productA)
+
+    expect(generationGets).toBe(1)
+    expect(useAppStore.getState().generationJobs).toEqual([
+      expect.objectContaining({
+        id: generationJobA,
+        status: 'cancelled',
+        error_message: 'Cancelled by user',
+        completed_at: expect.any(String),
+      }),
+      completedJob,
+    ])
+  })
+
+  it('removes cleared failures without re-fetching matching generation jobs', async () => {
+    const failedJob = makeGenerationJob({ status: 'failed' })
+    const completedJob = makeGenerationJob({ id: generationJobB })
+    let generationGets = 0
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/generate` && method === 'GET') {
+        generationGets += 1
+        return Promise.resolve(jsonResponse([failedJob, completedJob]))
+      }
+      if (url === `/api/products/${productA}/generate?scope=failed` && method === 'DELETE') {
+        return Promise.resolve(jsonResponse({ cancelled: 0, cleared_failed: 1, cleared_log: 0 }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGenerationJobs(productA)
+    await useAppStore.getState().clearGenerationFailures(productA)
+
+    expect(generationGets).toBe(1)
+    expect(useAppStore.getState().generationJobs).toEqual([completedJob])
+  })
+
+  it('re-fetches generation jobs when a clear response does not match the client snapshot', async () => {
+    const pendingJob = makeGenerationJob({ status: 'pending' })
+    const completedJob = makeGenerationJob({ id: generationJobB })
+    let generationGets = 0
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/generate` && method === 'GET') {
+        generationGets += 1
+        return Promise.resolve(jsonResponse(generationGets === 1 ? [pendingJob] : [completedJob]))
+      }
+      if (url === `/api/products/${productA}/generate` && method === 'DELETE') {
+        return Promise.resolve(jsonResponse({ cancelled: 0, cleared_failed: 0, cleared_log: 0 }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGenerationJobs(productA)
+    await useAppStore.getState().clearGenerationQueue(productA)
+
+    expect(generationGets).toBe(2)
+    expect(useAppStore.getState().generationJobs).toEqual([completedJob])
+  })
+
   it('does not let a late generation-log clear invalidate a new current-job fetch', async () => {
     const jobA = makeGenerationJob()
     const jobB = makeGenerationJob({

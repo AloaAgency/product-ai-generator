@@ -360,6 +360,13 @@ const normalizeSuggestedPromptsPayload = (value: unknown) => {
 const getUploadErrorMessage = (value: unknown) =>
   isRecord(value) ? extractErrorMessage(value.error) : null
 
+const getResponseCount = (value: unknown, property: string) => {
+  if (!isRecord(value)) return null
+  const count = value[property]
+  if (typeof count !== 'number' || !Number.isFinite(count) || count < 0) return null
+  return Math.trunc(count)
+}
+
 const normalizeSignedUploadPayload = (value: unknown): Array<SignedReferenceUpload | FailedReferenceUpload> => {
   if (!Array.isArray(value)) {
     throw new Error('Failed to sign upload')
@@ -1588,20 +1595,49 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   clearGenerationQueue: async (productId) => {
     const scopedProductId = requireUuid(productId, 'product id')
-    await api(`/api/products/${buildApiPath(scopedProductId)}/generate`, { method: 'DELETE' })
+    const result = await api(`/api/products/${buildApiPath(scopedProductId)}/generate`, {
+      method: 'DELETE',
+    })
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
     if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
-      await get().fetchGenerationJobs(scopedProductId)
+      const jobs = get().generationJobs
+      const activeJobs = jobs.filter((job) => job.status === 'pending' || job.status === 'running')
+      if (getResponseCount(result, 'cancelled') === activeJobs.length) {
+        const completedAt = new Date().toISOString()
+        set({
+          generationJobs: jobs.map((job) =>
+            job.status === 'pending' || job.status === 'running'
+              ? {
+                  ...job,
+                  status: 'cancelled',
+                  error_message: 'Cancelled by user',
+                  completed_at: completedAt,
+                }
+              : job
+          ),
+        })
+      } else {
+        await get().fetchGenerationJobs(scopedProductId)
+      }
     }
   },
   clearGenerationFailures: async (productId) => {
     const scopedProductId = requireUuid(productId, 'product id')
-    await api(`/api/products/${buildApiPath(scopedProductId)}/generate?scope=failed`, { method: 'DELETE' })
+    const result = await api(
+      `/api/products/${buildApiPath(scopedProductId)}/generate?scope=failed`,
+      { method: 'DELETE' }
+    )
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
     if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
-      await get().fetchGenerationJobs(scopedProductId)
+      const jobs = get().generationJobs
+      const failedJobs = jobs.filter((job) => job.status === 'failed')
+      if (getResponseCount(result, 'cleared_failed') === failedJobs.length) {
+        set({ generationJobs: jobs.filter((job) => job.status !== 'failed') })
+      } else {
+        await get().fetchGenerationJobs(scopedProductId)
+      }
     }
   },
   deleteGenerationJob: async (productId, jobId) => {
