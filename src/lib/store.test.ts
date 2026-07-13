@@ -241,6 +241,38 @@ describe('useAppStore async scope guards', () => {
     expect(useAppStore.getState().loadingRefSets).toBe(false)
   })
 
+  it('aborts a product-scoped fetch when navigation makes it stale', async () => {
+    let referenceFetchAborted = false
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/reference-sets`) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            referenceFetchAborted = true
+            reject(init.signal?.reason)
+          }, { once: true })
+        })
+      }
+      if (url === `/api/products/${productB}`) {
+        return Promise.resolve(jsonResponse({ id: productB, name: 'Product B' }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    const referenceSetsPromise = useAppStore.getState().fetchReferenceSets(productA)
+    await useAppStore.getState().fetchProduct(productB)
+    await referenceSetsPromise
+
+    expect(referenceFetchAborted).toBe(true)
+    expect(useAppStore.getState().currentProduct?.id).toBe(productB)
+    expect(useAppStore.getState().referenceSets).toEqual([])
+    expect(useAppStore.getState().loadingRefSets).toBe(false)
+  })
+
   it('does not append a reference set when its create request completes after product navigation', async () => {
     const pendingCreate = deferred<Response>()
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
