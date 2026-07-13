@@ -60,6 +60,13 @@ export async function POST(
       return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
     }
 
+    // Generate the scene title before inserting so it rides along on the insert.
+    // The old insert → generate → update flow spent an extra UPDATE+SELECT
+    // round-trip after the (multi-second) AI call, and could leave the row
+    // titleless if that follow-up update failed. generateSceneTitle returns ''
+    // on AI failure, so the row still saves without a title in that case.
+    const sceneTitle = await generateSceneTitle(prompt_text)
+
     const { data, error } = await supabase
       .from(T.prompt_templates)
       .insert({
@@ -68,23 +75,12 @@ export async function POST(
         prompt_text,
         tags: tags ?? [],
         ...(prompt_type ? { prompt_type } : {}),
+        ...(sceneTitle ? { scene_title: sceneTitle } : {}),
       })
       .select()
       .single()
 
     if (error) { logger.error('[Prompts POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
-
-    // Generate scene title asynchronously then update
-    const sceneTitle = await generateSceneTitle(prompt_text)
-    if (sceneTitle) {
-      const { data: updated } = await supabase
-        .from(T.prompt_templates)
-        .update({ scene_title: sceneTitle })
-        .eq('id', data.id)
-        .select()
-        .single()
-      if (updated) return NextResponse.json(updated, { status: 201 })
-    }
 
     return NextResponse.json(data, { status: 201 })
   } catch (err) {
