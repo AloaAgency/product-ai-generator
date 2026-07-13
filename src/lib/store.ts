@@ -487,15 +487,13 @@ const getInFlightRequest = <T>(key: string, request: (signal: AbortSignal) => Pr
   if (existingRequest) return existingRequest.promise as Promise<T>
 
   const controller = new AbortController()
-  let requestEntry: { controller: AbortController; promise: Promise<T> }
   const nextRequest = request(controller.signal).finally(() => {
-    if (inFlightRequests.get(key) === requestEntry) {
+    if (inFlightRequests.get(key)?.promise === nextRequest) {
       inFlightRequests.delete(key)
     }
   })
-  requestEntry = { controller, promise: nextRequest }
 
-  inFlightRequests.set(key, requestEntry)
+  inFlightRequests.set(key, { controller, promise: nextRequest })
   return nextRequest
 }
 
@@ -1950,6 +1948,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   activateSettingsTemplate: async (productId, templateId) => {
     const scopedProductId = requireUuid(productId, 'product id')
     const settingsTemplateId = requireUuid(templateId, 'settings template id')
+    const currentProductRequestKey = buildRequestKey('currentProduct', scopedProductId)
     const tmpl = requireEntityResponse<SettingsTemplate>(
       await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates/${buildApiPath(settingsTemplateId)}`, {
         method: 'PATCH',
@@ -1958,7 +1957,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
       'Failed to activate settings template'
     )
-    invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
+    const canApplyProductSettings = get().currentProduct?.id === scopedProductId
+    invalidateRequestKeys(
+      buildRequestKey('settingsTemplates', scopedProductId),
+      currentProductRequestKey
+    )
     if (
       isCurrentProductScopedSlice(
         'settingsTemplates',
@@ -1970,10 +1973,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         settingsTemplates: s.settingsTemplates.map((t) =>
           t.id === settingsTemplateId ? tmpl : { ...t, is_active: false }
         ),
+        currentProduct:
+          s.currentProduct?.id === scopedProductId
+            ? { ...s.currentProduct, global_style_settings: tmpl.settings }
+            : s.currentProduct,
       }))
     }
-    // Refresh product to get synced settings
-    if (isCurrentSliceScope('currentProduct', scopedProductId)) {
+    if (!canApplyProductSettings && isCurrentSliceScope('currentProduct', scopedProductId)) {
       await get().fetchProduct(scopedProductId)
     }
   },

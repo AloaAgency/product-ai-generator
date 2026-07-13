@@ -341,6 +341,97 @@ describe('useAppStore async scope guards', () => {
     expect(useAppStore.getState().settingsTemplates).toEqual([])
   })
 
+  it('applies activated template settings without re-fetching the product', async () => {
+    const settings = { lighting: 'Soft daylight', default_resolution: '4K' as const }
+    const template = {
+      id: settingsTemplateA,
+      product_id: productA,
+      name: 'Template A',
+      settings,
+      is_active: false,
+      created_at: '2026-07-06T00:00:00.000Z',
+      updated_at: '2026-07-06T00:00:00.000Z',
+    }
+    let productGets = 0
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}` && method === 'GET') {
+        productGets += 1
+        return Promise.resolve(jsonResponse({
+          id: productA,
+          name: 'Product A',
+          global_style_settings: {},
+        }))
+      }
+      if (url === `/api/products/${productA}/settings-templates` && method === 'GET') {
+        return Promise.resolve(jsonResponse([template]))
+      }
+      if (
+        url === `/api/products/${productA}/settings-templates/${settingsTemplateA}` &&
+        method === 'PATCH'
+      ) {
+        return Promise.resolve(jsonResponse({ ...template, is_active: true }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchSettingsTemplates(productA)
+    await useAppStore.getState().activateSettingsTemplate(productA, settingsTemplateA)
+
+    expect(productGets).toBe(1)
+    expect(useAppStore.getState().currentProduct?.global_style_settings).toEqual(settings)
+    expect(useAppStore.getState().settingsTemplates).toEqual([
+      expect.objectContaining({ id: settingsTemplateA, is_active: true }),
+    ])
+  })
+
+  it('re-fetches the product after activation when no product record can be updated locally', async () => {
+    const settings = { lighting: 'Soft daylight' }
+    const template = {
+      id: settingsTemplateA,
+      product_id: productA,
+      name: 'Template A',
+      settings,
+      is_active: false,
+      created_at: '2026-07-06T00:00:00.000Z',
+      updated_at: '2026-07-06T00:00:00.000Z',
+    }
+    let productGets = 0
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}` && method === 'GET') {
+        productGets += 1
+        return Promise.resolve(jsonResponse({
+          id: productA,
+          name: 'Product A',
+          global_style_settings: productGets === 1 ? {} : settings,
+        }))
+      }
+      if (url === `/api/products/${productA}/settings-templates` && method === 'GET') {
+        return Promise.resolve(jsonResponse([template]))
+      }
+      if (
+        url === `/api/products/${productA}/settings-templates/${settingsTemplateA}` &&
+        method === 'PATCH'
+      ) {
+        return Promise.resolve(jsonResponse({ ...template, is_active: true }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchSettingsTemplates(productA)
+    useAppStore.setState({ currentProduct: null })
+
+    await useAppStore.getState().activateSettingsTemplate(productA, settingsTemplateA)
+
+    expect(productGets).toBe(2)
+    expect(useAppStore.getState().currentProduct?.global_style_settings).toEqual(settings)
+  })
+
   it('does not append reference images when upload finalization completes after product navigation', async () => {
     const pendingFinalize = deferred<Response>()
     const finalizeStarted = deferred<void>()
