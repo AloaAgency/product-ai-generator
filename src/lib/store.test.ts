@@ -98,6 +98,7 @@ describe('useAppStore async scope guards', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
@@ -673,6 +674,23 @@ describe('useAppStore async scope guards', () => {
     await expect(
       useAppStore.getState().suggestPrompts(productA, 1)
     ).rejects.toThrow('Failed to suggest prompts')
+    expect(useAppStore.getState().aiLoading).toBe(false)
+  })
+
+  it('times out a hanging AI request and clears its loading state', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+      })
+    ))
+
+    const request = useAppStore.getState().buildPrompt(productA, 'make it brighter')
+    const rejection = expect(request).rejects.toThrow('Request timed out')
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    await rejection
+
     expect(useAppStore.getState().aiLoading).toBe(false)
   })
 })

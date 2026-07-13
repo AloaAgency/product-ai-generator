@@ -30,6 +30,9 @@ const MAX_SUGGESTED_PROMPT_COUNT = 10
 const MAX_API_RETRIES = 2
 const MAX_UPLOAD_RETRIES = 1
 const MAX_RETRY_AFTER_MS = 5_000
+const API_REQUEST_TIMEOUT_MS = 15_000
+const AI_REQUEST_TIMEOUT_MS = 60_000
+const UPLOAD_REQUEST_TIMEOUT_MS = 120_000
 const GALLERY_PAGE_SIZE = 48
 const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const requestVersions = new Map<string, number>()
@@ -140,6 +143,42 @@ const parseRetryAfterMs = (value: string | null) => {
 
 const getRetryDelayMs = (attempt: number, response: Response | null) =>
   parseRetryAfterMs(response?.headers.get('retry-after') ?? null) ?? 250 * attempt
+
+const fetchWithTimeout = async (
+  input: RequestInfo | URL,
+  options: RequestInit | undefined,
+  timeoutMs: number
+) => {
+  const controller = new AbortController()
+  const upstreamSignal = options?.signal
+  let didTimeout = false
+  const abortFromUpstream = () => controller.abort(upstreamSignal?.reason)
+
+  if (upstreamSignal?.aborted) {
+    abortFromUpstream()
+  } else {
+    upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true })
+  }
+
+  const timeoutId = setTimeout(() => {
+    didTimeout = true
+    controller.abort()
+  }, timeoutMs)
+
+  try {
+    return await fetch(input, { ...options, signal: controller.signal })
+  } catch (error) {
+    if (didTimeout) {
+      const timeoutError = new Error('Request timed out')
+      timeoutError.name = 'TimeoutError'
+      throw timeoutError
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+    upstreamSignal?.removeEventListener('abort', abortFromUpstream)
+  }
+}
 
 const beginTrackedRequest = (key: string) => {
   const version = (requestVersions.get(key) ?? 0) + 1
@@ -334,7 +373,7 @@ const normalizeSignedUploadPayload = (value: unknown): Array<SignedReferenceUplo
 
 const isRetryableNetworkError = (error: unknown) =>
   error instanceof TypeError ||
-  (error instanceof Error && error.name === 'AbortError')
+  (error instanceof Error && error.name === 'TimeoutError')
 
 const withRetry = async (
   request: () => Promise<Response>,
@@ -369,13 +408,17 @@ const withRetry = async (
 const uploadToSignedUrl = (signedUrl: string, file: File) =>
   withRetry(
     () =>
-      fetch(signedUrl, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': file.type || 'application/octet-stream',
+      fetchWithTimeout(
+        signedUrl,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+          },
+          body: file,
         },
-        body: file,
-      }),
+        UPLOAD_REQUEST_TIMEOUT_MS
+      ),
     {
       retries: MAX_UPLOAD_RETRIES,
       shouldRetryResponse: (response) => !response.ok && RETRYABLE_RESPONSE_STATUSES.has(response.status),
@@ -641,13 +684,17 @@ interface AppState {
   suggestPrompts: (productId: string, count?: number) => Promise<{ name: string; prompt_text: string }[]>
 }
 
-const api = async (url: string, options?: RequestInit): Promise<unknown> => {
+const api = async (
+  url: string,
+  options?: RequestInit,
+  timeoutMs = API_REQUEST_TIMEOUT_MS
+): Promise<unknown> => {
   const method = (options?.method ?? 'GET').toUpperCase()
   let res: Response
 
   try {
     res = await withRetry(
-      () => fetch(url, options),
+      () => fetchWithTimeout(url, options, timeoutMs),
       {
         retries: method === 'GET' ? MAX_API_RETRIES : 0,
         shouldRetryResponse: (response) => !response.ok && RETRYABLE_RESPONSE_STATUSES.has(response.status),
@@ -1881,14 +1928,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     beginAiRequest(set)
     try {
       const data = requireRecordResponse(
-        await api('/api/ai/build-prompt', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            product_id: requireUuid(productId, 'product id'),
-            user_prompt: sanitizePromptText(userPrompt, 'user_prompt'),
-          }),
-        }),
+        await api(
+          '/api/ai/build-prompt',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              product_id: requireUuid(productId, 'product id'),
+              user_prompt: sanitizePromptText(userPrompt, 'user_prompt'),
+            }),
+          },
+          AI_REQUEST_TIMEOUT_MS
+        ),
         'Failed to build prompt'
       )
       if (typeof data.refined_prompt !== 'string') {
@@ -1903,14 +1954,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     beginAiRequest(set)
     try {
       return normalizeSuggestedPromptsPayload(
-        await api('/api/ai/suggest-prompts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            product_id: requireUuid(productId, 'product id'),
-            count: clampInteger(count, 1, MAX_SUGGESTED_PROMPT_COUNT, 5),
-          }),
-        })
+        await api(
+          '/api/ai/suggest-prompts',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              product_id: requireUuid(productId, 'product id'),
+              count: clampInteger(count, 1, MAX_SUGGESTED_PROMPT_COUNT, 5),
+            }),
+          },
+          AI_REQUEST_TIMEOUT_MS
+        )
       )
     } finally {
       endAiRequest(set)
