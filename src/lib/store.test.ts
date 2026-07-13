@@ -98,6 +98,7 @@ describe('useAppStore async scope guards', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
@@ -240,6 +241,38 @@ describe('useAppStore async scope guards', () => {
     expect(useAppStore.getState().loadingRefSets).toBe(false)
   })
 
+  it('aborts a product-scoped fetch when navigation makes it stale', async () => {
+    let referenceFetchAborted = false
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/reference-sets`) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            referenceFetchAborted = true
+            reject(init.signal?.reason)
+          }, { once: true })
+        })
+      }
+      if (url === `/api/products/${productB}`) {
+        return Promise.resolve(jsonResponse({ id: productB, name: 'Product B' }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    const referenceSetsPromise = useAppStore.getState().fetchReferenceSets(productA)
+    await useAppStore.getState().fetchProduct(productB)
+    await referenceSetsPromise
+
+    expect(referenceFetchAborted).toBe(true)
+    expect(useAppStore.getState().currentProduct?.id).toBe(productB)
+    expect(useAppStore.getState().referenceSets).toEqual([])
+    expect(useAppStore.getState().loadingRefSets).toBe(false)
+  })
+
   it('does not append a reference set when its create request completes after product navigation', async () => {
     const pendingCreate = deferred<Response>()
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -306,6 +339,97 @@ describe('useAppStore async scope guards', () => {
     expect(created.id).toBe(settingsTemplateA)
     expect(useAppStore.getState().currentProduct?.id).toBe(productB)
     expect(useAppStore.getState().settingsTemplates).toEqual([])
+  })
+
+  it('applies activated template settings without re-fetching the product', async () => {
+    const settings = { lighting: 'Soft daylight', default_resolution: '4K' as const }
+    const template = {
+      id: settingsTemplateA,
+      product_id: productA,
+      name: 'Template A',
+      settings,
+      is_active: false,
+      created_at: '2026-07-06T00:00:00.000Z',
+      updated_at: '2026-07-06T00:00:00.000Z',
+    }
+    let productGets = 0
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}` && method === 'GET') {
+        productGets += 1
+        return Promise.resolve(jsonResponse({
+          id: productA,
+          name: 'Product A',
+          global_style_settings: {},
+        }))
+      }
+      if (url === `/api/products/${productA}/settings-templates` && method === 'GET') {
+        return Promise.resolve(jsonResponse([template]))
+      }
+      if (
+        url === `/api/products/${productA}/settings-templates/${settingsTemplateA}` &&
+        method === 'PATCH'
+      ) {
+        return Promise.resolve(jsonResponse({ ...template, is_active: true }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchSettingsTemplates(productA)
+    await useAppStore.getState().activateSettingsTemplate(productA, settingsTemplateA)
+
+    expect(productGets).toBe(1)
+    expect(useAppStore.getState().currentProduct?.global_style_settings).toEqual(settings)
+    expect(useAppStore.getState().settingsTemplates).toEqual([
+      expect.objectContaining({ id: settingsTemplateA, is_active: true }),
+    ])
+  })
+
+  it('re-fetches the product after activation when no product record can be updated locally', async () => {
+    const settings = { lighting: 'Soft daylight' }
+    const template = {
+      id: settingsTemplateA,
+      product_id: productA,
+      name: 'Template A',
+      settings,
+      is_active: false,
+      created_at: '2026-07-06T00:00:00.000Z',
+      updated_at: '2026-07-06T00:00:00.000Z',
+    }
+    let productGets = 0
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}` && method === 'GET') {
+        productGets += 1
+        return Promise.resolve(jsonResponse({
+          id: productA,
+          name: 'Product A',
+          global_style_settings: productGets === 1 ? {} : settings,
+        }))
+      }
+      if (url === `/api/products/${productA}/settings-templates` && method === 'GET') {
+        return Promise.resolve(jsonResponse([template]))
+      }
+      if (
+        url === `/api/products/${productA}/settings-templates/${settingsTemplateA}` &&
+        method === 'PATCH'
+      ) {
+        return Promise.resolve(jsonResponse({ ...template, is_active: true }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchSettingsTemplates(productA)
+    useAppStore.setState({ currentProduct: null })
+
+    await useAppStore.getState().activateSettingsTemplate(productA, settingsTemplateA)
+
+    expect(productGets).toBe(2)
+    expect(useAppStore.getState().currentProduct?.global_style_settings).toEqual(settings)
   })
 
   it('does not append reference images when upload finalization completes after product navigation', async () => {
@@ -453,6 +577,102 @@ describe('useAppStore async scope guards', () => {
       })
     ).rejects.toThrow('Failed to start generation')
     expect(useAppStore.getState().generationJobs).toEqual([])
+  })
+
+  it('reconciles a queue clear without re-fetching matching generation jobs', async () => {
+    const pendingJob = makeGenerationJob({
+      status: 'pending',
+      completed_count: 0,
+      completed_at: null,
+    })
+    const completedJob = makeGenerationJob({ id: generationJobB })
+    let generationGets = 0
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/generate` && method === 'GET') {
+        generationGets += 1
+        return Promise.resolve(jsonResponse([pendingJob, completedJob]))
+      }
+      if (url === `/api/products/${productA}/generate` && method === 'DELETE') {
+        return Promise.resolve(jsonResponse({ cancelled: 1, cleared_failed: 0, cleared_log: 0 }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGenerationJobs(productA)
+    await useAppStore.getState().clearGenerationQueue(productA)
+
+    expect(generationGets).toBe(1)
+    expect(useAppStore.getState().generationJobs).toEqual([
+      expect.objectContaining({
+        id: generationJobA,
+        status: 'cancelled',
+        error_message: 'Cancelled by user',
+        completed_at: expect.any(String),
+      }),
+      completedJob,
+    ])
+  })
+
+  it('removes cleared failures without re-fetching matching generation jobs', async () => {
+    const failedJob = makeGenerationJob({ status: 'failed' })
+    const completedJob = makeGenerationJob({ id: generationJobB })
+    let generationGets = 0
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/generate` && method === 'GET') {
+        generationGets += 1
+        return Promise.resolve(jsonResponse([failedJob, completedJob]))
+      }
+      if (url === `/api/products/${productA}/generate?scope=failed` && method === 'DELETE') {
+        return Promise.resolve(jsonResponse({ cancelled: 0, cleared_failed: 1, cleared_log: 0 }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGenerationJobs(productA)
+    await useAppStore.getState().clearGenerationFailures(productA)
+
+    expect(generationGets).toBe(1)
+    expect(useAppStore.getState().generationJobs).toEqual([completedJob])
+  })
+
+  it('re-fetches generation jobs when a clear response does not match the client snapshot', async () => {
+    const pendingJob = makeGenerationJob({ status: 'pending' })
+    const completedJob = makeGenerationJob({ id: generationJobB })
+    let generationGets = 0
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/generate` && method === 'GET') {
+        generationGets += 1
+        return Promise.resolve(jsonResponse(generationGets === 1 ? [pendingJob] : [completedJob]))
+      }
+      if (url === `/api/products/${productA}/generate` && method === 'DELETE') {
+        return Promise.resolve(jsonResponse({ cancelled: 0, cleared_failed: 0, cleared_log: 0 }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGenerationJobs(productA)
+    await useAppStore.getState().clearGenerationQueue(productA)
+
+    expect(generationGets).toBe(2)
+    expect(useAppStore.getState().generationJobs).toEqual([completedJob])
   })
 
   it('does not let a late generation-log clear invalidate a new current-job fetch', async () => {
@@ -673,6 +893,23 @@ describe('useAppStore async scope guards', () => {
     await expect(
       useAppStore.getState().suggestPrompts(productA, 1)
     ).rejects.toThrow('Failed to suggest prompts')
+    expect(useAppStore.getState().aiLoading).toBe(false)
+  })
+
+  it('times out a hanging AI request and clears its loading state', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+      })
+    ))
+
+    const request = useAppStore.getState().buildPrompt(productA, 'make it brighter')
+    const rejection = expect(request).rejects.toThrow('Request timed out')
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    await rejection
+
     expect(useAppStore.getState().aiLoading).toBe(false)
   })
 })
