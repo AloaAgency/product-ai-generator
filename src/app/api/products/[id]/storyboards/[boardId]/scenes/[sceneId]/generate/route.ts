@@ -17,12 +17,15 @@ import { resolveGoogleApiKey } from '@/lib/google-api-keys'
 import { logError } from '@/lib/error-logger'
 import { logger } from '@/lib/logger'
 
+/** The only reference-image columns this route needs — enough to download and re-encode each file. */
+type SceneReferenceImage = Pick<ReferenceImage, 'storage_path' | 'mime_type'>
+
 async function generateAndStoreImage(
   supabase: ReturnType<typeof createServiceClient>,
   productId: string,
   prompt: string,
   settings: Product['global_style_settings'],
-  referenceImages: ReferenceImage[],
+  referenceImages: SceneReferenceImage[],
   extraReferenceBase64?: { mimeType: string; base64: string },
   sceneId?: string,
   sceneName?: string | null,
@@ -119,19 +122,40 @@ export async function POST(
 
     const supabase = createServiceClient()
 
-    // Fetch scene and product (with project styles via JOIN) in parallel — independent queries.
-    // Including project styles in the product JOIN avoids a second sequential round-trip
-    // when the product has no per-product API key (the common case).
+    const fetchRefImages = (setId: string) =>
+      supabase
+        .from(T.reference_images)
+        .select('storage_path, mime_type')
+        .eq('reference_set_id', setId)
+        .order('display_order', { ascending: true })
+
+    // Fetch scene, product (with project styles via JOIN), and the reference
+    // lookup in one parallel batch — all three are independent. When the client
+    // supplies reference_set_id we can fetch its images here directly; otherwise
+    // we resolve the active set now and fetch its images right after, so the
+    // pre-generation phase is 1–2 round-trip stages instead of 3.
+    // The product select only pulls global_style_settings — the sole product
+    // column this route reads.
     const [
       { data: scene, error: sceneError },
       { data: product },
+      refLookup,
     ] = await Promise.all([
       supabase.from(T.storyboard_scenes).select('*').eq('id', sceneId).single(),
       supabase
         .from(T.products)
-        .select(`*, ${T.projects}!fk_products_project(global_style_settings)`)
+        .select(`global_style_settings, ${T.projects}!fk_products_project(global_style_settings)`)
         .eq('id', productId)
         .single(),
+      referenceSetId
+        ? fetchRefImages(referenceSetId).then((r) => ({ images: (r.data ?? []) as SceneReferenceImage[] }))
+        : supabase
+            .from(T.reference_sets)
+            .select('id')
+            .eq('product_id', productId)
+            .eq('is_active', true)
+            .single()
+            .then((r) => ({ activeSetId: (r.data?.id ?? undefined) as string | undefined })),
     ])
 
     if (sceneError || !scene) {
@@ -143,7 +167,7 @@ export async function POST(
     }
 
     // Resolve API key from product-level settings first, then project-level defaults.
-    const productWithProject = product as Product & {
+    const productWithProject = product as unknown as Pick<Product, 'global_style_settings'> & {
       prodai_projects: { global_style_settings: Product['global_style_settings'] } | null
     }
     let geminiApiKey = resolveGoogleApiKey(productWithProject.global_style_settings)
@@ -151,32 +175,25 @@ export async function POST(
       geminiApiKey = resolveGoogleApiKey(productWithProject.prodai_projects?.global_style_settings ?? null)
     }
 
-    // Find reference set
-    let refSetId = referenceSetId
-    if (!refSetId) {
-      const { data: activeSet } = await supabase
-        .from(T.reference_sets)
-        .select('id')
-        .eq('product_id', productId)
-        .eq('is_active', true)
-        .single()
-      refSetId = activeSet?.id
+    // Resolve reference images: already fetched above when the client named a
+    // set; otherwise fetch from the active set resolved in the parallel batch.
+    let referenceImages: SceneReferenceImage[]
+    if ('images' in refLookup) {
+      referenceImages = refLookup.images
+    } else {
+      if (!refLookup.activeSetId) {
+        return NextResponse.json({ error: 'No reference set found' }, { status: 400 })
+      }
+      const { data: refImages } = await fetchRefImages(refLookup.activeSetId)
+      referenceImages = (refImages ?? []) as SceneReferenceImage[]
     }
 
-    if (!refSetId) {
-      return NextResponse.json({ error: 'No reference set found' }, { status: 400 })
-    }
-
-    const { data: refImages } = await supabase
-      .from(T.reference_images)
-      .select('*')
-      .eq('reference_set_id', refSetId)
-      .order('display_order', { ascending: true })
-
-    const referenceImages: ReferenceImage[] = refImages || []
     const settings = productWithProject.global_style_settings
 
     const result: { start_frame_image_id?: string; end_frame_image_id?: string } = {}
+    // Row returned by the most recent frame-link update — reused as the response
+    // body so the happy path doesn't need a final refetch of the scene.
+    let updatedScene: Record<string, unknown> | null = null
 
     // Generate start frame
     if (frame === 'start' || frame === 'both') {
@@ -195,12 +212,16 @@ export async function POST(
         geminiApiKey
       )
       result.start_frame_image_id = imageId
-      const { error: startFrameUpdateError } = await supabase
+      const { data: sceneAfterStart, error: startFrameUpdateError } = await supabase
         .from(T.storyboard_scenes)
         .update({ start_frame_image_id: imageId, updated_at: new Date().toISOString() })
         .eq('id', sceneId)
+        .select()
+        .single()
       if (startFrameUpdateError) {
         logger.error('[Scene Generate] Failed to link start frame to scene:', startFrameUpdateError)
+      } else {
+        updatedScene = sceneAfterStart
       }
     }
 
@@ -248,23 +269,32 @@ export async function POST(
         geminiApiKey
       )
       result.end_frame_image_id = imageId
-      const { error: endFrameUpdateError } = await supabase
+      const { data: sceneAfterEnd, error: endFrameUpdateError } = await supabase
         .from(T.storyboard_scenes)
         .update({ end_frame_image_id: imageId, updated_at: new Date().toISOString() })
         .eq('id', sceneId)
+        .select()
+        .single()
       if (endFrameUpdateError) {
         logger.error('[Scene Generate] Failed to link end frame to scene:', endFrameUpdateError)
+      } else {
+        updatedScene = sceneAfterEnd
       }
     }
 
-    // Return updated scene
-    const { data: updated } = await supabase
-      .from(T.storyboard_scenes)
-      .select('*')
-      .eq('id', sceneId)
-      .single()
+    // The frame-link update already returned the updated scene row; only fall
+    // back to a fresh select if the update failed (matching the old
+    // always-refetch behavior, which also returned a possibly-stale row then).
+    if (!updatedScene) {
+      const { data: refetched } = await supabase
+        .from(T.storyboard_scenes)
+        .select('*')
+        .eq('id', sceneId)
+        .single()
+      updatedScene = refetched
+    }
 
-    return NextResponse.json(updated)
+    return NextResponse.json(updatedScene)
   } catch (err) {
     logger.error('[Scene Generate] Error:', err)
     await logError({

@@ -121,9 +121,11 @@ export async function POST(
     const supabase = createServiceClient()
 
     const [productResult, refSetsResult, refImagesResult, sourceImgResult] = await Promise.all([
+      // Only global_style_settings is read from the product below — selecting
+      // specific columns keeps large unrelated fields out of the payload.
       supabase
         .from(T.products)
-        .select(`*, ${T.projects}!fk_products_project(global_style_settings)`)
+        .select(`global_style_settings, ${T.projects}!fk_products_project(global_style_settings)`)
         .eq('id', productId)
         .single(),
       uniqueSetIds.length > 0
@@ -190,7 +192,7 @@ export async function POST(
 
     // Parent-project styles arrive embedded via the product JOIN above, avoiding a
     // second sequential round-trip (mirrors the suggest-prompts / build-prompt routes).
-    const typedProduct = productResult.data as Product & {
+    const typedProduct = productResult.data as unknown as Pick<Product, 'global_style_settings'> & {
       prodai_projects: { global_style_settings: GlobalStyleSettings } | null
     }
     const projectStyles = typedProduct.prodai_projects?.global_style_settings ?? {}

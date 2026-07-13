@@ -50,16 +50,16 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
-    // Single JOIN query — fetches product + parent project in one round-trip
+    // Single JOIN query — fetches product + parent project in one round-trip.
+    // Only the columns this route actually reads: name/description feed the
+    // system prompt, the two style blobs feed mergeStyles.
     const { data: product, error: productError } = await supabase
       .from(T.products)
-      .select(`id,name,description,project_id,global_style_settings,${T.projects}!fk_products_project(global_style_settings)`)
+      .select(`name,description,global_style_settings,${T.projects}!fk_products_project(global_style_settings)`)
       .eq('id', product_id)
       .single<{
-        id: string
         name: string
         description: string | null
-        project_id: string | null
         global_style_settings: GlobalStyleSettings | null
         prodai_projects: { global_style_settings: GlobalStyleSettings | null } | null
       }>()
