@@ -11,6 +11,7 @@ import {
   DEFAULT_VEO,
 } from '@/lib/video-constants'
 import {
+  AlertTriangle,
   Loader2,
   Video,
   X,
@@ -201,8 +202,12 @@ export function CreateVideoModal({
 
         <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
           {error && (
-            <div className="rounded-lg border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300">
-              {error}
+            <div
+              className="flex items-start gap-2 rounded-lg border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300"
+              role="alert"
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+              <span className="break-words">{error}</span>
             </div>
           )}
 
