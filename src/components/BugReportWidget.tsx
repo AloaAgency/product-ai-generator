@@ -4,7 +4,6 @@ import { useEffect, useId, useRef, useState } from 'react'
 import {
   AlertCircle,
   Bug,
-  CheckCircle2,
   Lightbulb,
   Loader2,
   MessageSquarePlus,
@@ -13,6 +12,7 @@ import {
   X,
 } from 'lucide-react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { TransientToast } from '@/components/TransientToast'
 import {
   buildSelectedBugReportImages,
   clampBugReportText,
@@ -40,17 +40,12 @@ export function BugReportWidget() {
   const [images, setImages] = useState<SelectedBugReportImage[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
   const imagesRef = useRef<SelectedBugReportImage[]>([])
   const submitInFlightRef = useRef(false)
   const dialogId = useId()
   const dialogTitleId = useId()
   const dialogDescriptionId = useId()
-
-  useEffect(() => {
-    if (!successToast) return
-    const t = setTimeout(() => setSuccessToast(null), 4000)
-    return () => clearTimeout(t)
-  }, [successToast])
 
   const handleClose = () => {
     if (isSubmitting || submitInFlightRef.current) return
@@ -63,6 +58,10 @@ export function BugReportWidget() {
     onClose: handleClose,
     onSubmit: isSubmitting ? null : () => formRef.current?.requestSubmit(),
   })
+
+  useEffect(() => {
+    if (isOpen) dialogRef.current?.focus()
+  }, [isOpen])
 
   useEffect(() => {
     imagesRef.current = images
@@ -192,21 +191,9 @@ export function BugReportWidget() {
         <MessageSquarePlus className="h-5 w-5" />
       </button>
 
+      {/* Toast notification */}
       {successToast && (
-        <div className="fixed bottom-4 left-1/2 z-[120] w-full max-w-sm -translate-x-1/2 px-4" role="status" aria-live="polite">
-          <div className="flex items-center gap-3 rounded-lg border border-emerald-700/50 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 shadow-xl shadow-black/50">
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-            <span className="min-w-0 flex-1 break-words">{successToast}</span>
-            <button
-              type="button"
-              onClick={() => setSuccessToast(null)}
-              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
-              aria-label="Dismiss feedback confirmation"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
+        <TransientToast tone="success" message={successToast} onDismiss={() => setSuccessToast(null)} />
       )}
 
       {/* Modal */}
@@ -222,8 +209,10 @@ export function BugReportWidget() {
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={handleClose} />
 
           <div
+            ref={dialogRef}
             className="relative z-10 mx-4 flex max-h-[90vh] w-full max-w-lg flex-col overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
+            tabIndex={-1}
           >
             <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
               <div className="flex items-center gap-3">
