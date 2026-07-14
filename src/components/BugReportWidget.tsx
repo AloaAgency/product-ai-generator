@@ -38,6 +38,7 @@ export function BugReportWidget() {
   const [images, setImages] = useState<SelectedBugReportImage[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
   const imagesRef = useRef<SelectedBugReportImage[]>([])
   const submitInFlightRef = useRef(false)
   const dialogTitleId = useId()
@@ -53,6 +54,10 @@ export function BugReportWidget() {
     onClose: handleClose,
     onSubmit: isSubmitting ? null : () => formRef.current?.requestSubmit(),
   })
+
+  useEffect(() => {
+    if (isOpen) dialogRef.current?.focus()
+  }, [isOpen])
 
   useEffect(() => {
     imagesRef.current = images
@@ -194,8 +199,10 @@ export function BugReportWidget() {
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={handleClose} />
 
           <div
+            ref={dialogRef}
             className="relative z-10 mx-4 flex max-h-[90vh] w-full max-w-lg flex-col overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
+            tabIndex={-1}
           >
             <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
               <div className="flex items-center gap-3">
