@@ -104,6 +104,13 @@ const LightboxThumbnailButton = memo(function LightboxThumbnailButton({
   const isApproved = approvalStatus === 'approved'
   const isRejected = approvalStatus === 'rejected'
   const isRequestChanges = approvalStatus === 'request_changes'
+  const approvalLabel = isApproved
+    ? 'approved'
+    : isRejected
+      ? 'rejected'
+      : isRequestChanges
+        ? 'changes requested'
+        : null
 
   return (
     <button
@@ -120,12 +127,22 @@ const LightboxThumbnailButton = memo(function LightboxThumbnailButton({
                 ? 'border-orange-500'
                 : 'border-gray-600 hover:border-gray-400'
       }`}
-      aria-label={`View image ${index + 1}`}
+      aria-label={`View image ${index + 1}${approvalLabel ? `, ${approvalLabel}` : ''}`}
+      aria-current={isActive ? 'true' : undefined}
       data-image-id={id}
     >
-      {thumbUrl && (
-        <img src={thumbUrl} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
-      )}
+      <FallbackImage
+        sources={[thumbUrl]}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        className="h-full w-full object-cover"
+        fallback={(
+          <span className="flex h-full w-full items-center justify-center bg-zinc-900 text-zinc-600">
+            <ImageOff className="h-4 w-4" />
+          </span>
+        )}
+      />
       {isApproved && (
         <div className="absolute inset-0 flex items-center justify-center bg-green-500/30">
           <Check className="w-4 h-4 text-green-500" />
@@ -541,7 +558,7 @@ export function ImageLightbox({
       >
         {/* Header */}
         <div className="flex items-center justify-between rounded-t-xl bg-zinc-900/80 px-3 py-2 sm:px-4 sm:py-3">
-          <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-4" aria-live="polite" aria-atomic="true">
             <span id={dialogTitleId} className="whitespace-nowrap text-sm font-medium text-zinc-100 sm:text-base">
               {displayName}
             </span>
@@ -600,6 +617,7 @@ export function ImageLightbox({
                   href={buildRegenerateUrl({ projectId, image: currentImage })}
                   className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white sm:min-h-0 sm:min-w-0"
                   title="Regenerate with this prompt"
+                  aria-label="Regenerate with this prompt"
                 >
                   <ExternalLink className="w-4 h-4" />
                 </a>
@@ -710,8 +728,8 @@ export function ImageLightbox({
                 ? 'border-red-900/30 bg-red-950/20'
                 : 'border-emerald-900/30 bg-emerald-950/20'
             }`}
-            role="status"
-            aria-live="polite"
+            role={actionNotice.type === 'error' ? 'alert' : 'status'}
+            aria-live={actionNotice.type === 'error' ? 'assertive' : 'polite'}
           >
             <div
               className={`flex items-start gap-2 text-sm ${
@@ -757,6 +775,7 @@ export function ImageLightbox({
                   : 'bg-zinc-700 text-zinc-200 hover:bg-emerald-600 hover:text-white'
               }`}
               title="Approve (Enter or A)"
+              aria-label="Approve image"
             >
               {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               <span className="hidden sm:inline">Approve</span>
@@ -771,6 +790,7 @@ export function ImageLightbox({
                   : 'bg-zinc-700 text-zinc-200 hover:bg-red-600 hover:text-white'
               }`}
               title="Reject (R)"
+              aria-label="Reject image"
             >
               {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
               <span className="hidden sm:inline">Reject</span>
@@ -785,6 +805,7 @@ export function ImageLightbox({
                   : 'bg-zinc-700 text-zinc-200 hover:bg-amber-600 hover:text-white'
               }`}
               title="Request Changes (C)"
+              aria-label="Request changes to image"
             >
               {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <AlertTriangle className="w-4 h-4" />}
               <span className="hidden sm:inline">Changes</span>
@@ -796,6 +817,7 @@ export function ImageLightbox({
                 disabled={isUpdating}
                 className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-red-800 hover:text-white shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2"
                 title="Permanently Delete (Delete/Backspace)"
+                aria-label="Permanently delete image"
               >
                 {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                 <span className="hidden sm:inline">Delete</span>
@@ -806,6 +828,7 @@ export function ImageLightbox({
                 href={buildRegenerateUrl({ projectId, image: currentImage })}
                 className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-blue-600 hover:text-white shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2"
                 title="Regenerate with this prompt"
+                aria-label="Regenerate with this prompt"
               >
                 <RefreshCw className="w-4 h-4" />
                 <span className="hidden sm:inline">Regenerate</span>
@@ -816,6 +839,7 @@ export function ImageLightbox({
               onClick={handleDownload}
               className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-blue-600 hover:text-white shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2"
               title="Download (D)"
+              aria-label="Download image"
             >
               <Download className="w-4 h-4" />
               <span className="hidden sm:inline">Download</span>
