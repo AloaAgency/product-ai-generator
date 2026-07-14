@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
-import { ImageIcon, Loader2, Video, X, CalendarDays } from 'lucide-react'
+import { AlertTriangle, ImageIcon, Loader2, Video, X, CalendarDays } from 'lucide-react'
 import { logger } from '@/lib/logger'
 
 type DayBucket = {
@@ -46,8 +46,13 @@ export function GenerationActivityModal({
   const [data, setData] = useState<SummaryResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const dialogRef = useRef<HTMLDivElement>(null)
 
   useModalShortcuts({ isOpen: true, onClose })
+
+  useEffect(() => {
+    dialogRef.current?.focus()
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -90,8 +95,10 @@ export function GenerationActivityModal({
     >
       <div className="fixed inset-0 bg-black/70" onClick={onClose} />
       <div
+        ref={dialogRef}
         className="relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 shadow-xl shadow-black/50"
         onClick={(e) => e.stopPropagation()}
+        tabIndex={-1}
       >
         {/* Header */}
         <div className="flex items-start justify-between border-b border-zinc-800 px-5 py-4">
@@ -124,9 +131,13 @@ export function GenerationActivityModal({
               <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
             </div>
           ) : error ? (
-            <p className="py-16 text-center text-sm text-zinc-500">
-              Couldn&apos;t load generation activity.
-            </p>
+            <div
+              className="flex items-start gap-2 rounded-lg border border-red-900/40 bg-red-950/30 px-3 py-2 text-sm text-red-200"
+              role="alert"
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+              <span className="break-words">Couldn&apos;t load generation activity.</span>
+            </div>
           ) : !data || data.days.length === 0 ? (
             <p className="py-16 text-center text-sm text-zinc-500">No generation activity yet.</p>
           ) : (

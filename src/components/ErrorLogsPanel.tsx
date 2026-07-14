@@ -55,7 +55,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
 
   const handleClear = useCallback(async () => {
     if (clearing) return
-    if (!confirm('Clear all error logs for this project?')) return
+    if (!window.confirm('Clear all error logs for this project?')) return
     setClearing(true)
     setPanelError(null)
     try {

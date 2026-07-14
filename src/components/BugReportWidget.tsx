@@ -2,9 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from 'react'
 import {
-  AlertCircle,
   Bug,
-  CheckCircle2,
   Lightbulb,
   Loader2,
   MessageSquarePlus,
@@ -13,6 +11,7 @@ import {
   X,
 } from 'lucide-react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { TransientToast } from '@/components/TransientToast'
 import {
   buildSelectedBugReportImages,
   clampBugReportText,
@@ -39,17 +38,11 @@ export function BugReportWidget() {
   const [images, setImages] = useState<SelectedBugReportImage[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
   const imagesRef = useRef<SelectedBugReportImage[]>([])
   const submitInFlightRef = useRef(false)
   const dialogTitleId = useId()
   const dialogDescriptionId = useId()
-
-  // Auto-dismiss toast
-  useEffect(() => {
-    if (!toast) return
-    const t = setTimeout(() => setToast(null), 4000)
-    return () => clearTimeout(t)
-  }, [toast])
 
   const handleClose = () => {
     if (isSubmitting || submitInFlightRef.current) return
@@ -61,6 +54,10 @@ export function BugReportWidget() {
     onClose: handleClose,
     onSubmit: isSubmitting ? null : () => formRef.current?.requestSubmit(),
   })
+
+  useEffect(() => {
+    if (isOpen) dialogRef.current?.focus()
+  }, [isOpen])
 
   useEffect(() => {
     imagesRef.current = images
@@ -187,22 +184,7 @@ export function BugReportWidget() {
 
       {/* Toast notification */}
       {toast && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={`fixed bottom-20 right-6 z-[110] flex max-w-sm items-start gap-3 rounded-xl border px-4 py-3 text-sm shadow-2xl ${
-            toast.type === 'success'
-              ? 'border-emerald-900/40 bg-emerald-950/95 text-emerald-100'
-              : 'border-red-900/40 bg-red-950/95 text-red-100'
-          }`}
-        >
-          {toast.type === 'success' ? (
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-          ) : (
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-          )}
-          {toast.message}
-        </div>
+        <TransientToast tone={toast.type} message={toast.message} onDismiss={() => setToast(null)} />
       )}
 
       {/* Modal */}
@@ -217,8 +199,10 @@ export function BugReportWidget() {
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={handleClose} />
 
           <div
+            ref={dialogRef}
             className="relative z-10 mx-4 flex max-h-[90vh] w-full max-w-lg flex-col overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
+            tabIndex={-1}
           >
             <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
               <div className="flex items-center gap-3">
