@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { AlertTriangle, ImageIcon, Loader2, Video, X, CalendarDays } from 'lucide-react'
 import { logger } from '@/lib/logger'
@@ -43,10 +43,12 @@ export function GenerationActivityModal({
   mediaFilter: 'all' | 'image' | 'video'
   onClose: () => void
 }) {
+  const dialogTitleId = useId()
+  const dialogDescriptionId = useId()
+  const dialogRef = useRef<HTMLDivElement>(null)
   const [data, setData] = useState<SummaryResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
-  const dialogRef = useRef<HTMLDivElement>(null)
 
   useModalShortcuts({ isOpen: true, onClose })
 
@@ -91,7 +93,8 @@ export function GenerationActivityModal({
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="Generation activity by day"
+      aria-labelledby={dialogTitleId}
+      aria-describedby={dialogDescriptionId}
     >
       <div className="fixed inset-0 bg-black/70" onClick={onClose} />
       <div
@@ -107,8 +110,8 @@ export function GenerationActivityModal({
               <CalendarDays className="h-4 w-4 text-zinc-300" />
             </div>
             <div>
-              <h2 className="text-base font-semibold text-zinc-100">Generation activity</h2>
-              <p className="mt-0.5 text-xs text-zinc-500">
+              <h2 id={dialogTitleId} className="text-base font-semibold text-zinc-100">Generation activity</h2>
+              <p id={dialogDescriptionId} className="mt-0.5 text-xs text-zinc-500">
                 Assets generated per day — helps correlate billing with actual output. Counts all
                 assets, including rejected and pending.
               </p>
@@ -127,19 +130,27 @@ export function GenerationActivityModal({
         {/* Body */}
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {loading ? (
-            <div className="flex items-center justify-center py-16">
-              <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-10 text-center" role="status">
+              <Loader2 className="mx-auto h-6 w-6 animate-spin text-zinc-500" />
+              <p className="mt-3 text-sm font-medium text-zinc-300">Loading activity</p>
+              <p className="mt-1 text-xs text-zinc-500">Counting generated images and videos by day.</p>
             </div>
           ) : error ? (
-            <div
-              className="flex items-start gap-2 rounded-lg border border-red-900/40 bg-red-950/30 px-3 py-2 text-sm text-red-200"
-              role="alert"
-            >
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-              <span className="break-words">Couldn&apos;t load generation activity.</span>
+            <div className="rounded-lg border border-red-900/40 bg-red-950/20 px-4 py-8 text-center" role="alert">
+              <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-red-950/60 text-red-300">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <p className="mt-3 text-sm font-medium text-red-200">Couldn&apos;t load generation activity</p>
+              <p className="mt-1 text-xs text-red-300/70">Close this dialog and try again.</p>
             </div>
           ) : !data || data.days.length === 0 ? (
-            <p className="py-16 text-center text-sm text-zinc-500">No generation activity yet.</p>
+            <div className="rounded-lg border border-dashed border-zinc-800 bg-zinc-900/40 px-4 py-8 text-center">
+              <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-zinc-800 text-zinc-500">
+                <CalendarDays className="h-5 w-5" />
+              </div>
+              <p className="mt-3 text-sm font-medium text-zinc-300">No generation activity yet</p>
+              <p className="mt-1 text-xs text-zinc-500">Generated images and videos will be summarized here.</p>
+            </div>
           ) : (
             <>
               {/* Totals */}
@@ -164,7 +175,11 @@ export function GenerationActivityModal({
                     <span className="w-32 shrink-0 text-xs text-zinc-400">
                       {formatDayLabel(day.date)}
                     </span>
-                    <div className="flex h-5 flex-1 items-center overflow-hidden rounded bg-zinc-800/60">
+                    <div
+                      className="flex h-5 flex-1 items-center overflow-hidden rounded bg-zinc-800/60"
+                      role="img"
+                      aria-label={`${day.images} image${day.images !== 1 ? 's' : ''} and ${day.videos} video${day.videos !== 1 ? 's' : ''}`}
+                    >
                       {day.images > 0 && (
                         <div
                           className="h-full bg-zinc-500"

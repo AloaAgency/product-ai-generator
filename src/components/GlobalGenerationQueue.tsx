@@ -36,11 +36,11 @@ function useGenerationQueuePolling({
   useEffect(() => {
     let cancelled = false
 
-    const runPoll = async ({ force = false }: { force?: boolean } = {}) => {
+    const runPoll = async () => {
       if (cancelled) return
 
       const now = Date.now()
-      if (!force && !shouldPollGenerationQueue({
+      if (!shouldPollGenerationQueue({
         hasActiveJobs,
         isDocumentVisible: document.visibilityState === 'visible',
         isPolling: isPollingRef.current,
@@ -69,8 +69,7 @@ function useGenerationQueuePolling({
       }
     }
 
-    void runPoll({ force: true })
-
+    lastPollAtRef.current = Date.now()
     const interval = window.setInterval(() => {
       void runPoll()
     }, POLL_MS)
@@ -112,6 +111,10 @@ export default function GlobalGenerationQueue({
   const [clearingFailures, setClearingFailures] = useState(false)
   const [pollError, setPollError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+
+  useEffect(() => {
+    void fetchGenerationJobs(productId)
+  }, [fetchGenerationJobs, productId])
 
   const {
     activeJobs,
@@ -235,8 +238,9 @@ export default function GlobalGenerationQueue({
     <section
       className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/70 backdrop-blur"
       aria-label="Generation queue"
+      aria-busy={isInitialQueueLoad || clearing || clearingFailures}
     >
-      <div className="flex w-full flex-col gap-3 px-3 py-3 sm:px-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex w-full flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:px-4">
         <button
           type="button"
           onClick={handleToggleExpanded}
@@ -255,8 +259,16 @@ export default function GlobalGenerationQueue({
             <p className="text-sm font-medium text-zinc-100">Generation queue</p>
             <p className="break-words text-xs text-zinc-500" aria-live="polite">{queueSummary}</p>
           </div>
+          <span className="ml-auto flex shrink-0 items-center gap-2 pl-2 text-xs text-zinc-400">
+            <span className="whitespace-nowrap">{outputLabel}</span>
+            {expanded ? (
+              <ChevronUp className="h-4 w-4" />
+            ) : (
+              <ChevronDown className="h-4 w-4" />
+            )}
+          </span>
         </button>
-        <div className="flex w-full flex-wrap items-center gap-2 text-xs text-zinc-400 sm:w-auto sm:justify-end sm:gap-3">
+        <div className="flex w-full flex-wrap items-center gap-2 text-xs text-zinc-400 empty:hidden sm:w-auto sm:justify-end">
           {process.env.NODE_ENV === 'development' && (
             <button
               type="button"
@@ -286,12 +298,6 @@ export default function GlobalGenerationQueue({
               {clearingFailures ? 'Clearing failures…' : 'Clear failures'}
             </button>
           )}
-          <span className="min-h-11 min-w-0 content-center break-words text-left sm:text-right" aria-live="polite">{outputLabel}</span>
-          {expanded ? (
-            <ChevronUp className="h-4 w-4" />
-          ) : (
-            <ChevronDown className="h-4 w-4" />
-          )}
         </div>
       </div>
 
@@ -305,24 +311,37 @@ export default function GlobalGenerationQueue({
         </div>
       )}
 
-      <div id={detailsId} className="px-3 pb-4 sm:px-4">
-        <div className="flex flex-col gap-1 text-xs text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
-          <span>{overallProgress}% overall</span>
-          <span>Updates every {POLL_MS / 1000}s</span>
-        </div>
-        <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-zinc-800">
-          {showIndeterminateOverallBar ? (
-            <div className="h-full w-1/3 rounded-full bg-blue-500 animate-pulse-bar" />
-          ) : (
-            <div
-              className="h-full rounded-full bg-blue-500 transition-all duration-500"
-              style={{ width: `${overallProgress}%` }}
-            />
+      {(hasActiveJobs || expanded) && (
+        <div className="px-3 pb-4 sm:px-4">
+          {hasActiveJobs && (
+            <>
+              <div className="flex flex-col gap-1 text-xs text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
+                <span>{overallProgress}% overall</span>
+                <span>Updates every {POLL_MS / 1000}s</span>
+              </div>
+              <div
+                className="mt-2 h-2 w-full overflow-hidden rounded-full bg-zinc-800"
+                role="progressbar"
+                aria-label="Overall generation progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={showIndeterminateOverallBar ? undefined : overallProgress}
+                aria-valuetext={showIndeterminateOverallBar ? 'Generation in progress' : `${overallProgress}% complete`}
+              >
+                {showIndeterminateOverallBar ? (
+                  <div className="h-full w-1/3 rounded-full bg-blue-500 animate-pulse-bar" />
+                ) : (
+                  <div
+                    className="h-full rounded-full bg-blue-500 transition-all duration-500"
+                    style={{ width: `${overallProgress}%` }}
+                  />
+                )}
+              </div>
+            </>
           )}
-        </div>
 
-        {expanded && (
-          <div className="mt-4 space-y-3">
+          {expanded && (
+            <div id={detailsId} className={`${hasActiveJobs ? 'mt-4 ' : ''}space-y-3`}>
             {isInitialQueueLoad ? (
               <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-6 text-center">
                 <Loader2 className="mx-auto h-5 w-5 animate-spin text-zinc-500" />
@@ -362,7 +381,15 @@ export default function GlobalGenerationQueue({
                         {getSafeQueueErrorMessage(job.error_message)}
                       </p>
                     )}
-                    <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                    <div
+                      className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800"
+                      role="progressbar"
+                      aria-label={`${job.status === 'pending' ? 'Pending' : 'Running'} ${unitLabel} generation`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={showIndeterminateJobBar ? undefined : jobProgress}
+                      aria-valuetext={showIndeterminateJobBar ? `${job.status} generation` : `${jobProgress}% complete`}
+                    >
                       {showIndeterminateJobBar ? (
                         <div className="h-full w-1/3 rounded-full bg-blue-500/80 animate-pulse-bar" />
                       ) : (
@@ -414,9 +441,10 @@ export default function GlobalGenerationQueue({
                 </div>
               </div>
             )}
-          </div>
-        )}
-      </div>
+            </div>
+          )}
+        </div>
+      )}
     </section>
   )
 }
