@@ -2,9 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from 'react'
 import {
-  AlertCircle,
   Bug,
-  CheckCircle2,
   Lightbulb,
   Loader2,
   MessageSquarePlus,
@@ -13,6 +11,7 @@ import {
   X,
 } from 'lucide-react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { TransientToast } from '@/components/TransientToast'
 import {
   buildSelectedBugReportImages,
   clampBugReportText,
@@ -43,13 +42,6 @@ export function BugReportWidget() {
   const submitInFlightRef = useRef(false)
   const dialogTitleId = useId()
   const dialogDescriptionId = useId()
-
-  // Auto-dismiss toast
-  useEffect(() => {
-    if (!toast) return
-    const t = setTimeout(() => setToast(null), 4000)
-    return () => clearTimeout(t)
-  }, [toast])
 
   const handleClose = () => {
     if (isSubmitting || submitInFlightRef.current) return
@@ -187,22 +179,7 @@ export function BugReportWidget() {
 
       {/* Toast notification */}
       {toast && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={`fixed bottom-20 right-6 z-[110] flex max-w-sm items-start gap-3 rounded-xl border px-4 py-3 text-sm shadow-2xl ${
-            toast.type === 'success'
-              ? 'border-emerald-900/40 bg-emerald-950/95 text-emerald-100'
-              : 'border-red-900/40 bg-red-950/95 text-red-100'
-          }`}
-        >
-          {toast.type === 'success' ? (
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-          ) : (
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-          )}
-          {toast.message}
-        </div>
+        <TransientToast tone={toast.type} message={toast.message} onDismiss={() => setToast(null)} />
       )}
 
       {/* Modal */}

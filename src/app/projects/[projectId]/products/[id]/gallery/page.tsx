@@ -9,9 +9,9 @@ import { CreateVideoModal } from '@/components/CreateVideoModal'
 import { SquareGrid } from '@/components/SquareGrid'
 import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
 import { FallbackImage } from '@/components/FallbackImage'
+import { TransientToast } from '@/components/TransientToast'
 import type { PromptTemplate } from '@/lib/types'
 import {
-  AlertCircle,
   ArrowLeft,
   ArrowUpDown,
   ChevronLeft,
@@ -99,12 +99,6 @@ export default function GalleryPage({
   const [videoModal, setVideoModal] = useState<{ imageId: string; previewUrl: string | null; sourcePrompt: string | null } | null>(null)
   const [toast, setToast] = useState<{ type: 'info' | 'error'; message: string } | null>(null)
   const loadMoreRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!toast) return
-    const timer = setTimeout(() => setToast(null), 6000)
-    return () => clearTimeout(timer)
-  }, [toast])
 
   useEffect(() => {
     signedUrlsRef.current = signedUrlsById
@@ -1205,21 +1199,12 @@ export default function GalleryPage({
 
       {/* Transient toast */}
       {toast && (
-        <div className="fixed bottom-4 left-1/2 z-[120] -translate-x-1/2 px-4" role="status" aria-live="polite">
-          <div className={`flex items-center gap-3 rounded-lg border bg-zinc-900 px-4 py-3 text-sm text-zinc-100 shadow-xl shadow-black/50 ${toast.type === 'error' ? 'border-red-700/60' : 'border-purple-700/50'}`}>
-            {toast.type === 'error'
-              ? <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
-              : <Video className="h-4 w-4 shrink-0 text-purple-400" />}
-            <span className="flex-1">{toast.message}</span>
-            <button
-              onClick={() => setToast(null)}
-              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
-              aria-label="Dismiss"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
+        <TransientToast
+          tone={toast.type}
+          message={toast.message}
+          icon={<Video className="h-4 w-4 shrink-0 text-purple-400" />}
+          onDismiss={() => setToast(null)}
+        />
       )}
 
       {/* Lightbox */}
