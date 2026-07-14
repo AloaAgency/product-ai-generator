@@ -36,11 +36,11 @@ function useGenerationQueuePolling({
   useEffect(() => {
     let cancelled = false
 
-    const runPoll = async ({ force = false }: { force?: boolean } = {}) => {
+    const runPoll = async () => {
       if (cancelled) return
 
       const now = Date.now()
-      if (!force && !shouldPollGenerationQueue({
+      if (!shouldPollGenerationQueue({
         hasActiveJobs,
         isDocumentVisible: document.visibilityState === 'visible',
         isPolling: isPollingRef.current,
@@ -69,8 +69,7 @@ function useGenerationQueuePolling({
       }
     }
 
-    void runPoll({ force: true })
-
+    lastPollAtRef.current = Date.now()
     const interval = window.setInterval(() => {
       void runPoll()
     }, POLL_MS)
@@ -112,6 +111,10 @@ export default function GlobalGenerationQueue({
   const [clearingFailures, setClearingFailures] = useState(false)
   const [pollError, setPollError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+
+  useEffect(() => {
+    void fetchGenerationJobs(productId)
+  }, [fetchGenerationJobs, productId])
 
   const {
     activeJobs,
