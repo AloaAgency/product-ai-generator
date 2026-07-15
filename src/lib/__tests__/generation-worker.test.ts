@@ -12,6 +12,7 @@ type StorageResponse = {
   type: 'upload' | 'download' | 'remove'
   data?: unknown
   error?: { message: string } | null
+  reject?: string
 }
 
 const serviceClientState = vi.hoisted(() => ({
@@ -187,6 +188,7 @@ function createMockSupabase(
     }
     expect(next.bucket).toBe(bucket)
     expect(next.type).toBe(type)
+    if (next.reject) throw new Error(next.reject)
     return {
       data: next.data ?? null,
       error: next.error ?? null,
@@ -468,7 +470,7 @@ describe('processGenerationJob', () => {
         {
           bucket: 'generated-images',
           type: 'upload',
-          data: {},
+          reject: 'upload transport failed',
         },
         {
           bucket: 'generated-images',
@@ -509,7 +511,6 @@ describe('processGenerationJob', () => {
       {
         bucket: 'generated-images',
         paths: [
-          'products/product-1/jobs/job-1/thumbs/gen-01.webp',
           'products/product-1/jobs/job-1/previews/gen-01.webp',
         ],
       },

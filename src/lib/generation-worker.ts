@@ -900,7 +900,7 @@ async function runVariation(
     const thumbPath = buildThumbnailPath(storagePath, thumbnail.extension)
     const previewPath = buildPreviewPath(storagePath, preview.extension)
 
-    const uploadResults = await Promise.all([
+    const uploadResults = await Promise.allSettled([
       supabase.storage
         .from('generated-images')
         .upload(storagePath, imageBuffer, { contentType: result.mimeType }),
@@ -913,20 +913,28 @@ async function runVariation(
     ])
 
     const generatedPaths = [storagePath, thumbPath, previewPath]
-    const successfulUploads = generatedPaths.filter((_, index) => !uploadResults[index]?.error)
-    const [imageUploadResult, thumbUploadResult, previewUploadResult] = uploadResults
-    const previewUploadError = previewUploadResult?.error
+    const successfulUploads = generatedPaths.filter((_, index) => {
+      const upload = uploadResults[index]
+      return upload?.status === 'fulfilled' && !upload.value.error
+    })
+    const uploadErrors = uploadResults.map((upload) => {
+      if (upload.status === 'rejected') {
+        return sanitizeWorkerErrorMessage(upload.reason, 'upload request failed')
+      }
+      return upload.value.error?.message ?? null
+    })
+    const [imageUploadError, thumbUploadError, previewUploadError] = uploadErrors
 
-    if (imageUploadResult?.error || thumbUploadResult?.error || previewUploadError) {
+    if (imageUploadError || thumbUploadError || previewUploadError) {
       await cleanupGeneratedImageAssets(supabase, successfulUploads)
 
-      if (imageUploadResult?.error) {
-        throw new Error(`Failed to upload generated image: ${imageUploadResult.error.message}`)
+      if (imageUploadError) {
+        throw new Error(`Failed to upload generated image: ${imageUploadError}`)
       }
-      if (thumbUploadResult?.error) {
-        throw new Error(`Failed to upload image thumbnail: ${thumbUploadResult.error.message}`)
+      if (thumbUploadError) {
+        throw new Error(`Failed to upload image thumbnail: ${thumbUploadError}`)
       }
-      throw new Error(`Failed to upload image preview: ${previewUploadError?.message || 'unknown upload failure'}`)
+      throw new Error(`Failed to upload image preview: ${previewUploadError || 'unknown upload failure'}`)
     }
 
     const { error: insertError } = await supabase.from(T.generated_images).insert({
