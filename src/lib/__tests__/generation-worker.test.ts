@@ -26,6 +26,8 @@ const workerLogger = vi.hoisted(() => ({
   error: vi.fn(),
 }))
 
+const CLAIM_STARTED_AT = '2026-01-01T00:00:00.000Z'
+
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(() => {
     if (!serviceClientState.current) {
@@ -91,6 +93,7 @@ function createImageJobRecord(jobId: string, overrides: Record<string, unknown> 
     job_type: 'image',
     scene_id: null,
     source_image_id: null,
+    started_at: CLAIM_STARTED_AT,
     ...overrides,
   }
 }
@@ -112,6 +115,7 @@ function createVideoJobRecord(jobId: string, overrides: Record<string, unknown> 
     job_type: 'video',
     scene_id: 'scene-1',
     source_image_id: null,
+    started_at: CLAIM_STARTED_AT,
     ...overrides,
   }
 }
@@ -448,7 +452,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generation_jobs',
@@ -545,7 +549,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
@@ -634,7 +638,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
@@ -751,7 +755,7 @@ describe('processGenerationJob', () => {
       {
         table: 'prodai_generation_jobs',
         type: 'select-single',
-        data: { status: 'running' },
+        data: { status: 'running', started_at: CLAIM_STARTED_AT },
       },
       {
         table: 'prodai_generation_jobs',
@@ -815,7 +819,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
@@ -895,7 +899,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
@@ -992,7 +996,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
@@ -1051,6 +1055,11 @@ describe('processGenerationJob', () => {
       column: 'prodai_reference_sets.product_id',
       value: 'product-1',
     })
+    expect(serviceClientState.current?.filters).toContainEqual({
+      table: 'prodai_generation_jobs',
+      column: 'started_at',
+      value: CLAIM_STARTED_AT,
+    })
   })
 
   it('retries transient reference image stream failures before generating', async () => {
@@ -1085,7 +1094,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
@@ -1224,7 +1233,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
@@ -1320,7 +1329,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
@@ -1403,7 +1412,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
@@ -1464,6 +1473,79 @@ describe('processGenerationJob', () => {
     )
   })
 
+  it('stops queued variations when a progress write loses the claim lease', async () => {
+    const jobId = '65656565-6565-4565-8565-656565656565'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId, { variation_count: 2 }),
+        },
+        recordedVariationRows(),
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { project_id: null, global_style_settings: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: null,
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running', completed_count: 0, failed_count: 0 },
+        },
+      ],
+      [
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockResolvedValue({
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-superseded',
+      raw: {},
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId, { batchSize: 2, parallelism: 1 })).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 0,
+      status: 'running',
+    })
+    expect(generateGeminiImage).toHaveBeenCalledTimes(1)
+  })
+
   it('stops before the next variation after the job is cancelled during status refresh', async () => {
     const jobId = '66666666-6666-4666-8666-666666666666'
     vi.useFakeTimers()
@@ -1495,7 +1577,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
@@ -1560,7 +1642,7 @@ describe('processGenerationJob', () => {
       {
         table: 'prodai_generation_jobs',
         type: 'select-single',
-        data: { status: 'running' },
+        data: { status: 'running', started_at: CLAIM_STARTED_AT },
       },
       {
         table: 'prodai_generation_jobs',
@@ -1624,7 +1706,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
@@ -1701,7 +1783,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
@@ -1782,7 +1864,7 @@ describe('processGenerationJob', () => {
         {
           table: 'prodai_generation_jobs',
           type: 'select-single',
-          data: { status: 'running' },
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
         },
         {
           table: 'prodai_generated_images',
