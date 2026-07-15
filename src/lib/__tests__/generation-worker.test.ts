@@ -162,6 +162,7 @@ function createMockSupabase(
   storageResponses: StorageResponse[] = []
 ) {
   const updates: Array<{ table: string; values: Record<string, unknown> }> = []
+  const filters: Array<{ table: string; column: string; value: unknown }> = []
   const removals: Array<{ bucket: string; paths: string[] }> = []
   const queryQueue = [...queryResponses]
   const storageQueue = [...storageResponses]
@@ -207,6 +208,7 @@ function createMockSupabase(
 
   const supabase = {
     updates,
+    filters,
     removals,
     storage,
     from(table: string) {
@@ -233,7 +235,8 @@ function createMockSupabase(
           state.mode = 'insert'
           return Promise.resolve(nextQuery(table, 'insert'))
         },
-        eq() {
+        eq(column: string, value: unknown) {
+          filters.push({ table, column, value })
           return builder
         },
         in() {
@@ -1042,6 +1045,11 @@ describe('processGenerationJob', () => {
         { mimeType: 'image/png', base64: Buffer.from('texture-ref').toString('base64') },
       ],
     }))
+    expect(serviceClientState.current?.filters).toContainEqual({
+      table: 'prodai_generation_job_reference_sets',
+      column: 'prodai_reference_sets.product_id',
+      value: 'product-1',
+    })
   })
 
   it('retries transient reference image stream failures before generating', async () => {

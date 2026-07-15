@@ -459,12 +459,21 @@ async function fetchProductRecord(supabase: WorkerSupabase, productId: string): 
 
 async function fetchJobReferenceSetRows(
   supabase: WorkerSupabase,
-  jobId: string
+  jobId: string,
+  productId: string
 ): Promise<JobReferenceSetRow[]> {
   const { data, error } = await supabase
     .from(T.generation_job_reference_sets)
-    .select('reference_set_id, role, display_order, image_count, selected_image_ids')
+    .select(`
+      reference_set_id,
+      role,
+      display_order,
+      image_count,
+      selected_image_ids,
+      ${T.reference_sets}!inner(product_id)
+    `)
     .eq('job_id', jobId)
+    .eq(`${T.reference_sets}.product_id`, productId)
     .order('display_order', { ascending: true })
 
   if (error) {
@@ -688,7 +697,7 @@ async function loadImageJobResources(
   supabase: WorkerSupabase,
   job: GenerationJobRecord
 ): Promise<LoadedImageJobResources> {
-  const jobRefSets = await fetchJobReferenceSetRows(supabase, job.id)
+  const jobRefSets = await fetchJobReferenceSetRows(supabase, job.id, job.product_id)
   if (jobRefSets.length === 0 && !job.source_image_id) {
     throw new Error('Image generation job has no reference sets attached')
   }
