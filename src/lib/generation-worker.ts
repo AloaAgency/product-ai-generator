@@ -53,7 +53,10 @@ type GenerationJobRecord = {
   job_type?: 'image' | 'video' | null
   scene_id?: string | null
   source_image_id?: string | null
+  started_at: string | null
 }
+
+type ClaimedGenerationJobRecord = GenerationJobRecord & { started_at: string }
 
 type JobReferenceSetRow = {
   reference_set_id: string
@@ -133,6 +136,7 @@ type VariationProcessingResult = {
   failedCount: number
   lastError: string | null
   cancelled: boolean
+  claimLost: boolean
 }
 
 const DEFAULT_TIME_BUDGET_MS = 760000
@@ -159,6 +163,7 @@ const GENERATION_JOB_SELECT = [
   'job_type',
   'scene_id',
   'source_image_id',
+  'started_at',
 ].join(', ')
 
 const REFERENCE_IMAGE_SELECT = [
@@ -224,6 +229,7 @@ async function updateGenerationJob(
   updates: Record<string, unknown>,
   options: {
     expectedStatuses?: GenerationJobStatus[]
+    expectedStartedAt?: string
     allowNoop?: boolean
     context: string
   }
@@ -237,6 +243,10 @@ async function updateGenerationJob(
     query = options.expectedStatuses.length === 1
       ? query.eq('status', options.expectedStatuses[0])
       : query.in('status', options.expectedStatuses)
+  }
+
+  if (options.expectedStartedAt) {
+    query = query.eq('started_at', options.expectedStartedAt)
   }
 
   const { data, error } = await query
@@ -254,23 +264,18 @@ async function updateGenerationJob(
   return data !== null
 }
 
-async function resolveTerminalUpdateConflict(
+async function resolveJobUpdateConflict(
   supabase: WorkerSupabase,
   jobId: string,
-  processed: number,
-  context: string
+  processed: number
 ): Promise<WorkerResult> {
   const latest = await getLatestJobResult(supabase, jobId)
-  if (latest.status === 'cancelled') {
-    return { ...latest, processed }
-  }
-
-  throw new Error(`${context}: job state changed before update could be applied`)
+  return { ...latest, processed }
 }
 
 async function markClaimedJobFailed(
   supabase: WorkerSupabase,
-  job: GenerationJobRecord,
+  job: ClaimedGenerationJobRecord,
   message: string
 ) {
   const { completed, failed } = await getCurrentJobCounts(supabase, job)
@@ -287,6 +292,7 @@ async function markClaimedJobFailed(
     },
     {
       expectedStatuses: ['running'],
+      expectedStartedAt: job.started_at,
       allowNoop: true,
       context: 'Failed to mark generation job as failed',
     }
@@ -296,10 +302,13 @@ async function markClaimedJobFailed(
 async function claimPendingJobById(
   supabase: WorkerSupabase,
   jobId: string
-): Promise<GenerationJobRecord | null> {
+): Promise<ClaimedGenerationJobRecord | null> {
+  // started_at doubles as a lease token. Every later write must match it so a
+  // stale invocation cannot update a job that has been requeued and reclaimed.
+  const startedAt = new Date().toISOString()
   const { data, error } = await supabase
     .from(T.generation_jobs)
-    .update({ status: 'running', started_at: new Date().toISOString() })
+    .update({ status: 'running', started_at: startedAt })
     .eq('id', jobId)
     .eq('status', 'pending')
     .select(GENERATION_JOB_SELECT)
@@ -309,7 +318,13 @@ async function claimPendingJobById(
     throw new Error(`Failed to claim generation job: ${error.message}`)
   }
 
-  return (data as unknown as GenerationJobRecord | null) ?? null
+  if (!data) return null
+
+  const claimedJob = data as unknown as GenerationJobRecord
+  return {
+    ...claimedJob,
+    started_at: claimedJob.started_at || startedAt,
+  }
 }
 
 async function getLatestJobResult(supabase: WorkerSupabase, jobId: string): Promise<WorkerResult> {
@@ -332,25 +347,13 @@ async function getLatestJobResult(supabase: WorkerSupabase, jobId: string): Prom
 }
 
 async function processVideoJob(
-  job: GenerationJobRecord,
+  job: ClaimedGenerationJobRecord,
   supabase: WorkerSupabase
 ): Promise<WorkerResult> {
   const counts = getJobCounts(job)
 
   if (job.status === 'completed' || job.status === 'cancelled') {
     return createWorkerResult(job.id, job.status, counts)
-  }
-
-  if (job.status === 'pending') {
-    await updateGenerationJob(
-      supabase,
-      job.id,
-      { status: 'running', started_at: new Date().toISOString() },
-      {
-        expectedStatuses: ['pending', 'running'],
-        context: 'Failed to start video generation job',
-      }
-    )
   }
 
   if (!job.scene_id) {
@@ -365,17 +368,17 @@ async function processVideoJob(
         completed_at: new Date().toISOString(),
       },
       {
-        expectedStatuses: ['pending', 'running'],
+        expectedStatuses: ['running'],
+        expectedStartedAt: job.started_at,
         allowNoop: true,
         context: 'Failed to persist missing scene_id failure',
       }
     )
     if (!updated) {
-      return resolveTerminalUpdateConflict(
+      return resolveJobUpdateConflict(
         supabase,
         job.id,
-        1,
-        'Failed to persist missing scene_id failure'
+        1
       )
     }
     return createWorkerResult(job.id, 'failed', failedCounts, 1)
@@ -400,17 +403,17 @@ async function processVideoJob(
         completed_at: new Date().toISOString(),
       },
       {
-        expectedStatuses: ['pending', 'running'],
+        expectedStatuses: ['running'],
+        expectedStartedAt: job.started_at,
         allowNoop: true,
         context: 'Failed to persist video generation failure',
       }
     )
     if (!updated) {
-      return resolveTerminalUpdateConflict(
+      return resolveJobUpdateConflict(
         supabase,
         job.id,
-        1,
-        'Failed to persist video generation failure'
+        1
       )
     }
     return createWorkerResult(job.id, 'failed', failedCounts, 1)
@@ -427,17 +430,17 @@ async function processVideoJob(
       completed_at: new Date().toISOString(),
     },
     {
-      expectedStatuses: ['pending', 'running'],
+      expectedStatuses: ['running'],
+      expectedStartedAt: job.started_at,
       allowNoop: true,
       context: 'Failed to persist completed video generation job',
     }
   )
   if (!updated) {
-    return resolveTerminalUpdateConflict(
+    return resolveJobUpdateConflict(
       supabase,
       job.id,
-      1,
-      'Failed to persist completed video generation job'
+      1
     )
   }
   return createWorkerResult(job.id, 'completed', completedCounts, 1)
@@ -459,12 +462,21 @@ async function fetchProductRecord(supabase: WorkerSupabase, productId: string): 
 
 async function fetchJobReferenceSetRows(
   supabase: WorkerSupabase,
-  jobId: string
+  jobId: string,
+  productId: string
 ): Promise<JobReferenceSetRow[]> {
   const { data, error } = await supabase
     .from(T.generation_job_reference_sets)
-    .select('reference_set_id, role, display_order, image_count, selected_image_ids')
+    .select(`
+      reference_set_id,
+      role,
+      display_order,
+      image_count,
+      selected_image_ids,
+      ${T.reference_sets}!inner(product_id)
+    `)
     .eq('job_id', jobId)
+    .eq(`${T.reference_sets}.product_id`, productId)
     .order('display_order', { ascending: true })
 
   if (error) {
@@ -688,7 +700,7 @@ async function loadImageJobResources(
   supabase: WorkerSupabase,
   job: GenerationJobRecord
 ): Promise<LoadedImageJobResources> {
-  const jobRefSets = await fetchJobReferenceSetRows(supabase, job.id)
+  const jobRefSets = await fetchJobReferenceSetRows(supabase, job.id, job.product_id)
   if (jobRefSets.length === 0 && !job.source_image_id) {
     throw new Error('Image generation job has no reference sets attached')
   }
@@ -819,14 +831,14 @@ function isDuplicateGeneratedImageInsertError(error: SupabaseErrorLike | null | 
 
 async function persistProgress(
   supabase: WorkerSupabase,
-  jobId: string,
+  job: Pick<ClaimedGenerationJobRecord, 'id' | 'started_at'>,
   progress: ProgressSnapshot,
   plan: VariationPlan
 ) {
   const nextFailedCount = plan.startingFailed + progress.failCount
-  await updateGenerationJob(
+  return updateGenerationJob(
     supabase,
-    jobId,
+    job.id,
     {
       completed_count: plan.startingCompleted + progress.successCount,
       failed_count: nextFailedCount,
@@ -836,7 +848,8 @@ async function persistProgress(
       ...(progress.lastError ? { error_message: progress.lastError } : {}),
     },
     {
-      expectedStatuses: ['pending', 'running'],
+      expectedStatuses: ['running'],
+      expectedStartedAt: job.started_at,
       allowNoop: true,
       context: 'Failed to persist generation job progress',
     }
@@ -845,14 +858,16 @@ async function persistProgress(
 
 function createProgressPersister(
   supabase: WorkerSupabase,
-  jobId: string,
+  job: Pick<ClaimedGenerationJobRecord, 'id' | 'started_at'>,
   plan: VariationPlan
 ) {
-  let pendingWrite = Promise.resolve()
+  let pendingWrite = Promise.resolve(true)
 
   return {
     persist(progress: ProgressSnapshot) {
-      pendingWrite = pendingWrite.then(() => persistProgress(supabase, jobId, progress, plan))
+      pendingWrite = pendingWrite.then((claimActive) => (
+        claimActive ? persistProgress(supabase, job, progress, plan) : false
+      ))
       return pendingWrite
     },
     flush() {
@@ -891,7 +906,7 @@ async function runVariation(
     const thumbPath = buildThumbnailPath(storagePath, thumbnail.extension)
     const previewPath = buildPreviewPath(storagePath, preview.extension)
 
-    const uploadResults = await Promise.all([
+    const uploadResults = await Promise.allSettled([
       supabase.storage
         .from('generated-images')
         .upload(storagePath, imageBuffer, { contentType: result.mimeType }),
@@ -904,20 +919,28 @@ async function runVariation(
     ])
 
     const generatedPaths = [storagePath, thumbPath, previewPath]
-    const successfulUploads = generatedPaths.filter((_, index) => !uploadResults[index]?.error)
-    const [imageUploadResult, thumbUploadResult, previewUploadResult] = uploadResults
-    const previewUploadError = previewUploadResult?.error
+    const successfulUploads = generatedPaths.filter((_, index) => {
+      const upload = uploadResults[index]
+      return upload?.status === 'fulfilled' && !upload.value.error
+    })
+    const uploadErrors = uploadResults.map((upload) => {
+      if (upload.status === 'rejected') {
+        return sanitizeWorkerErrorMessage(upload.reason, 'upload request failed')
+      }
+      return upload.value.error?.message ?? null
+    })
+    const [imageUploadError, thumbUploadError, previewUploadError] = uploadErrors
 
-    if (imageUploadResult?.error || thumbUploadResult?.error || previewUploadError) {
+    if (imageUploadError || thumbUploadError || previewUploadError) {
       await cleanupGeneratedImageAssets(supabase, successfulUploads)
 
-      if (imageUploadResult?.error) {
-        throw new Error(`Failed to upload generated image: ${imageUploadResult.error.message}`)
+      if (imageUploadError) {
+        throw new Error(`Failed to upload generated image: ${imageUploadError}`)
       }
-      if (thumbUploadResult?.error) {
-        throw new Error(`Failed to upload image thumbnail: ${thumbUploadResult.error.message}`)
+      if (thumbUploadError) {
+        throw new Error(`Failed to upload image thumbnail: ${thumbUploadError}`)
       }
-      throw new Error(`Failed to upload image preview: ${previewUploadError?.message || 'unknown upload failure'}`)
+      throw new Error(`Failed to upload image preview: ${previewUploadError || 'unknown upload failure'}`)
     }
 
     const { error: insertError } = await supabase.from(T.generated_images).insert({
@@ -993,45 +1016,48 @@ async function runVariationWithRetry(
 
 function createShouldStopChecker(
   supabase: WorkerSupabase,
-  jobId: string,
+  job: Pick<ClaimedGenerationJobRecord, 'id' | 'started_at'>,
   timeBudgetMs: number,
   statusRefreshIntervalMs: number
 ) {
   const startedAt = Date.now()
   let cancelled = false
+  let claimLost = false
   let lastStatusCheckAt = 0
 
   const shouldStop = async () => {
     if (Date.now() - startedAt > timeBudgetMs) return true
-    if (Date.now() - lastStatusCheckAt < statusRefreshIntervalMs) return cancelled
+    if (Date.now() - lastStatusCheckAt < statusRefreshIntervalMs) return claimLost
 
     lastStatusCheckAt = Date.now()
     const { data, error } = await supabase
       .from(T.generation_jobs)
-      .select('status')
-      .eq('id', jobId)
+      .select('status, started_at')
+      .eq('id', job.id)
       .single()
 
     if (error) {
       // A transient status read must not abort a job that is otherwise making
-      // progress. Keep the last known cancellation state and re-check on the
+      // progress. Keep the last known claim state and re-check on the
       // next interval; the overall time budget still bounds total runtime.
-      return cancelled
+      return claimLost
     }
 
     cancelled = data?.status === 'cancelled'
-    return cancelled
+    claimLost = data?.status !== 'running' || data?.started_at !== job.started_at
+    return claimLost
   }
 
   return {
     shouldStop,
     wasCancelled: () => cancelled,
+    wasClaimLost: () => claimLost,
   }
 }
 
 async function processVariations(
   supabase: WorkerSupabase,
-  job: GenerationJobRecord,
+  job: ClaimedGenerationJobRecord,
   plan: VariationPlan,
   recordedVariationNumbers: Set<number>,
   resources: LoadedImageJobResources,
@@ -1047,15 +1073,16 @@ async function processVariations(
   let nextIndex = 0
   const stopChecker = createShouldStopChecker(
     supabase,
-    job.id,
+    job,
     config.timeBudgetMs,
     config.statusRefreshIntervalMs
   )
-  const progressPersister = createProgressPersister(supabase, job.id, plan)
+  const progressPersister = createProgressPersister(supabase, job, plan)
   let fatalError: unknown = null
+  let claimLost = false
 
   const worker = async () => {
-    while (nextIndex < plan.variationNumbers.length && fatalError === null) {
+    while (nextIndex < plan.variationNumbers.length && fatalError === null && !claimLost) {
       if (await stopChecker.shouldStop()) {
         break
       }
@@ -1076,11 +1103,16 @@ async function processVariations(
         progress.lastError = sanitizeWorkerErrorMessage(err, 'Variation failed')
       } finally {
         progress.processed += 1
-        await progressPersister.persist({
+        const persisted = await progressPersister.persist({
           successCount: progress.successCount,
           failCount: progress.failCount,
           lastError: progress.lastError,
         })
+        if (!persisted) {
+          // Cancellation or a newer claim made the conditional update a no-op.
+          // Stop assigning queued variations; in-flight work is still drained.
+          claimLost = true
+        }
       }
     }
   }
@@ -1108,12 +1140,13 @@ async function processVariations(
     failedCount: plan.startingFailed + progress.failCount,
     lastError: progress.lastError,
     cancelled: stopChecker.wasCancelled(),
+    claimLost: claimLost || stopChecker.wasClaimLost(),
   }
 }
 
 async function persistFinalImageJobState(
   supabase: WorkerSupabase,
-  job: GenerationJobRecord,
+  job: ClaimedGenerationJobRecord,
   result: VariationProcessingResult
 ) {
   if (result.cancelled) {
@@ -1123,6 +1156,10 @@ async function persistFinalImageJobState(
       { completed: result.completedCount, failed: result.failedCount },
       result.processed
     )
+  }
+
+  if (result.claimLost) {
+    return resolveJobUpdateConflict(supabase, job.id, result.processed)
   }
 
   const finalCompleted = result.completedCount + result.failedCount >= job.variation_count
@@ -1154,18 +1191,18 @@ async function persistFinalImageJobState(
     job.id,
     updates,
     {
-      expectedStatuses: ['pending', 'running'],
+      expectedStatuses: ['running'],
+      expectedStartedAt: job.started_at,
       allowNoop: true,
       context: 'Failed to persist final generation job state',
     }
   )
 
   if (!updated) {
-    return resolveTerminalUpdateConflict(
+    return resolveJobUpdateConflict(
       supabase,
       job.id,
-      result.processed,
-      'Failed to persist final generation job state'
+      result.processed
     )
   }
 
@@ -1205,6 +1242,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
         failedCount: plan.startingFailed,
         lastError: claimedJob.error_message,
         cancelled: false,
+        claimLost: false,
       })
     }
 
