@@ -9,6 +9,7 @@ import {
   normalizeBugReportMultiline,
   normalizeBugReportSingleLine,
 } from '@/components/bugReportWidget.helpers'
+import { redactSensitiveText } from '@/lib/redact-secrets'
 import { logger } from '@/lib/server-logger'
 
 const BFT_API_KEY = process.env.BFT_API_KEY?.replace(/"/g, '') || ''
@@ -35,14 +36,10 @@ interface ImageUpload {
   caption: string
 }
 
-const SECRET_TEXT_PATTERNS = [
-  /([?&](?:access_token|api[_-]?key|authorization|signature|sig|token|x-amz-[^=]+|x-goog-[^=]+)=)[^&\s]+/gi,
-  /((?:api[_-]?key|authorization|secret|signature|token|cookie|set-cookie)\s*[:=]\s*)[^\s,;]+/gi,
-]
-
-const redactSensitiveText = (value: string) =>
-  SECRET_TEXT_PATTERNS.reduce((current, pattern) => current.replace(pattern, '$1[redacted]'), value)
-
+// Redaction is delegated to the shared implementation in redact-secrets.ts.
+// The local pattern list this replaced was weaker (no Bearer tokens, no raw
+// JWTs, no Google `AIza…` keys) — a drift risk this route can't afford since
+// it holds BFT_API_KEY and logs raw tracker responses.
 const getSafeBugReportError = (error: unknown) =>
   redactSensitiveText(error instanceof Error ? error.message : String(error ?? 'unknown error')).slice(0, 240)
 

@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { compressReferenceImage, type CompressResult } from '@/lib/image-utils'
 import { T } from '@/lib/db-tables'
 import { sanitizePublicErrorMessage } from '@/lib/request-guards'
+import { redactSensitiveText } from '@/lib/redact-secrets'
 import { logger } from '@/lib/server-logger'
 
 const BUCKET = 'reference-images'
@@ -59,7 +60,9 @@ async function withStorageRetry<TResult extends { error: { message?: string } | 
       if (!result.error) return result
       lastResult = result
       if (attempt < STORAGE_MAX_ATTEMPTS - 1 && isRetriableStorageError(result.error.message)) {
-        logger.warn(`${label}: retriable error on attempt ${attempt + 1}/${STORAGE_MAX_ATTEMPTS}: ${result.error.message}`)
+        // Redact before logging: storage error messages can echo request
+        // details (signed URLs, auth query params) from the failed call.
+        logger.warn(`${label}: retriable error on attempt ${attempt + 1}/${STORAGE_MAX_ATTEMPTS}: ${redactSensitiveText(result.error.message ?? '')}`)
         await sleep(STORAGE_RETRY_BASE_MS * (attempt + 1))
         continue
       }
@@ -67,7 +70,7 @@ async function withStorageRetry<TResult extends { error: { message?: string } | 
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (attempt < STORAGE_MAX_ATTEMPTS - 1 && isRetriableStorageError(message)) {
-        logger.warn(`${label}: retriable exception on attempt ${attempt + 1}/${STORAGE_MAX_ATTEMPTS}: ${message}`)
+        logger.warn(`${label}: retriable exception on attempt ${attempt + 1}/${STORAGE_MAX_ATTEMPTS}: ${redactSensitiveText(message)}`)
         await sleep(STORAGE_RETRY_BASE_MS * (attempt + 1))
         continue
       }
@@ -215,10 +218,10 @@ export async function processReferenceImageCompression(
       try {
         const { error: cleanupError } = await supabase.storage.from(BUCKET).remove([newStoragePath])
         if (cleanupError) {
-          logger.warn(`Failed to clean up orphaned compressed image '${newStoragePath}':`, cleanupError.message)
+          logger.warn(`Failed to clean up orphaned compressed image '${newStoragePath}':`, redactSensitiveText(cleanupError.message ?? ''))
         }
       } catch (err) {
-        logger.warn(`Failed to clean up orphaned compressed image '${newStoragePath}':`, err)
+        logger.warn(`Failed to clean up orphaned compressed image '${newStoragePath}':`, redactSensitiveText(err instanceof Error ? err.message : String(err)))
       }
       // The compressed copy no longer exists — report the operation as a
       // no-op failure rather than advertising a path that was rolled back.
@@ -247,10 +250,10 @@ export async function processReferenceImageCompression(
     try {
       const { error: removeError } = await supabase.storage.from(BUCKET).remove([storagePath])
       if (removeError) {
-        logger.warn(`Failed to remove old reference image '${storagePath}':`, removeError.message)
+        logger.warn(`Failed to remove old reference image '${storagePath}':`, redactSensitiveText(removeError.message ?? ''))
       }
     } catch (err) {
-      logger.warn(`Failed to remove old reference image '${storagePath}':`, err)
+      logger.warn(`Failed to remove old reference image '${storagePath}':`, redactSensitiveText(err instanceof Error ? err.message : String(err)))
     }
   }
 
