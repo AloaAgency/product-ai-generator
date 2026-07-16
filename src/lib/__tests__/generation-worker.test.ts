@@ -41,7 +41,7 @@ vi.mock('@/lib/gemini', () => ({
   generateGeminiImage: vi.fn(),
 }))
 
-vi.mock('@/lib/logger', () => ({
+vi.mock('@/lib/server-logger', () => ({
   createLogger: vi.fn(() => workerLogger),
   logger: workerLogger,
 }))
