@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { redactSensitiveText } from '@/lib/redact-secrets'
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -197,12 +198,11 @@ export function sanitizePublicErrorMessage(
     return String(error)
   })()
 
-  const normalized = rawMessage
-    .replace(/\s+/g, ' ')
-    .replace(/(Bearer\s+)[^\s,;]+/gi, '$1[redacted]')
-    .replace(/([?&](?:access_token|api[_-]?key|authorization|signature|sig|token|x-amz-[^=]+|x-goog-[^=]+)=)[^&\s]+/gi, '$1[redacted]')
-    .replace(/((?:api[_-]?key|authorization|secret|signature|token)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
-    .trim()
+  // Redaction is delegated to the shared single source of truth in
+  // redact-secrets.ts. A local pattern list here is exactly how this function
+  // previously drifted weaker than the worker-side sanitizers (it missed raw
+  // JWTs, Google `AIza…` keys, `sk-` keys, and quoted JSON secret fields).
+  const normalized = redactSensitiveText(rawMessage)
 
   if (!normalized) return fallback
   if (normalized.length <= maxLength) return normalized

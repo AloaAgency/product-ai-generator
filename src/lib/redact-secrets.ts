@@ -2,8 +2,10 @@
  * Strip credential-bearing substrings out of free-text before it is persisted to
  * the database, written to logs, or surfaced to a client.
  *
- * This is the single source of truth shared by every error sanitizer in the
- * generation pipeline (`sanitizeWorkerErrorMessage`, `sanitizeExternalErrorMessage`).
+ * This is the single source of truth shared by every error sanitizer
+ * (`sanitizeWorkerErrorMessage`, `sanitizeExternalErrorMessage`,
+ * `sanitizePublicErrorMessage`) and by log statements that echo external
+ * error messages (storage retries, bug-tracker responses).
  * Keeping one implementation prevents the redaction rules from drifting apart —
  * a weaker copy is exactly how a provider key (e.g. the `AIza…` Gemini/Veo key
  * passed via `x-goog-api-key`) ends up echoed back inside a stored job error.
