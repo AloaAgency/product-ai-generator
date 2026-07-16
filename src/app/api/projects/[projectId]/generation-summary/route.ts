@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { optionalUuid, requireUuid } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 // Per-day generation activity for a project, used to correlate asset generation with
 // billing. Counts ALL generated assets regardless of approval status — rejected and

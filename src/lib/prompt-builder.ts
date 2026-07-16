@@ -6,7 +6,7 @@
 import type { GlobalStyleSettings } from '@/lib/types'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import { createAnthropicClient } from '@/lib/anthropic-client'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 // Route through the shared factory so the inline generateSceneTitle path gets the
 // same bounded per-request timeout + retry policy as the AI routes. A bare

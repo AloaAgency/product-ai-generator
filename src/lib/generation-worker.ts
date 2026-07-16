@@ -19,7 +19,7 @@ import {
   parseWorkerPositiveInteger,
   sanitizeWorkerErrorMessage,
 } from '@/lib/generation-worker-guards'
-import { createLogger } from '@/lib/logger'
+import { createLogger } from '@/lib/server-logger'
 
 type WorkerSupabase = ReturnType<typeof createServiceClient>
 

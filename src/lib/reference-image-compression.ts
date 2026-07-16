@@ -2,7 +2,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { compressReferenceImage, type CompressResult } from '@/lib/image-utils'
 import { T } from '@/lib/db-tables'
 import { sanitizePublicErrorMessage } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 const BUCKET = 'reference-images'
 

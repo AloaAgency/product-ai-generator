@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { processGenerationJob } from '@/lib/generation-worker'
 import { logError } from '@/lib/error-logger'
-import { createLogger } from '@/lib/logger'
+import { createLogger } from '@/lib/server-logger'
 import { T } from '@/lib/db-tables'
 import { secretsEqual } from '@/lib/server-secrets'
 import {

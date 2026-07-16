@@ -9,7 +9,7 @@ import { tmpdir } from 'os'
 import { join, dirname, basename } from 'path'
 import { randomUUID } from 'crypto'
 import { writeFile, readFile, unlink, access } from 'fs/promises'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 // Resolve ffmpeg path: try ffmpeg-static first (checking the file exists),
 // then fall back to system ffmpeg

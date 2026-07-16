@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { AUTH_COOKIE_NAME, deriveAuthToken, timingResistantEqual } from '@/lib/auth-constants'
 import { applySecurityHeaders } from '@/lib/security-headers'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 // Static parts of the login page HTML, split so the form (which varies per request)
 // can be inserted between them without re-declaring the surrounding boilerplate.

@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { requireUuid, MAX_LIST_ROWS } from '@/lib/request-guards'
 import { mapWithConcurrency } from '@/lib/concurrency'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 const COUNT_CONCURRENCY = 5
 

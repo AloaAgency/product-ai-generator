@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 import { redactSensitiveText } from '@/lib/redact-secrets'
 
 export type GeminiImageResolution = '2K' | '4K'

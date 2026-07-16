@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { requireUuid, isUuid, parseRequestBody } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 // Must match the limits enforced by POST /api/products on the same table
 const MAX_NAME_LENGTH = 500

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const MAX_BATCH_SIZE = 24

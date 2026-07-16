@@ -4,7 +4,7 @@ import { T } from '@/lib/db-tables'
 import { createThumbnail, buildThumbnailPath } from '@/lib/image-utils'
 import { mapWithConcurrency } from '@/lib/concurrency'
 import { isAdminAuthorizedNode } from '@/lib/server-secrets'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300

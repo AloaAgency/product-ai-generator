@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { generateSceneTitle } from '@/lib/prompt-builder'
 import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 const MAX_NAME_LENGTH = 500
 const MAX_PROMPT_LENGTH = 10000

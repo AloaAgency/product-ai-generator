@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { parseRequestBody, sanitizeStorageFileExtension, MAX_FILE_NAME_LENGTH } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

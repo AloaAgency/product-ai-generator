@@ -4,7 +4,7 @@ import { processGenerationJob } from '@/lib/generation-worker'
 import { logError } from '@/lib/error-logger'
 import { T } from '@/lib/db-tables'
 import { kickWorkerForJob, shouldRunVideoGenerationInline } from '@/lib/video-job-request'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300

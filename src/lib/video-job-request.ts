@@ -4,7 +4,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processGenerationJob } from '@/lib/generation-worker'
 import { logError } from '@/lib/error-logger'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 export type ServiceClient = ReturnType<typeof createServiceClient>
 

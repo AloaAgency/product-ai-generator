@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { generateSceneTitle } from '@/lib/prompt-builder'
 import { parseRequestBody } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 // Must match the limits enforced by the POST route on the same table
 const MAX_NAME_LENGTH = 500

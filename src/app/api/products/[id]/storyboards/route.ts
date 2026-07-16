@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { parseRequestBody, isUuid, MAX_LIST_ROWS } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 const MAX_NAME_LENGTH = 500
 const MAX_STORYBOARD_IMAGES = 200

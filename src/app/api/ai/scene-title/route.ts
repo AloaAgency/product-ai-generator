@@ -4,7 +4,7 @@ import { createAnthropicClient } from '@/lib/anthropic-client'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import { MAX_USER_PROMPT_LEN, SCENE_TITLE_SYSTEM_PROMPT, safeTextFromContent } from '@/lib/prompt-builder'
 import { logError } from '@/lib/error-logger'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 const anthropic = createAnthropicClient()
 

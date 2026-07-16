@@ -9,7 +9,7 @@ import {
   normalizeBugReportMultiline,
   normalizeBugReportSingleLine,
 } from '@/components/bugReportWidget.helpers'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 const BFT_API_KEY = process.env.BFT_API_KEY?.replace(/"/g, '') || ''
 const BFT_BASE_URL = process.env.BFT_BASE_URL?.replace(/"/g, '') || ''

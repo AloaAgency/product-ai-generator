@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { extractVideoThumbnail, buildThumbnailPath } from '@/lib/image-utils'
 import { isAdminAuthorizedNode } from '@/lib/server-secrets'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300

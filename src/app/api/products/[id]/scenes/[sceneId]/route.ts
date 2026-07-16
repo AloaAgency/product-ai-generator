@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { normalizeDurationValue } from '@/lib/video-constants'
 import { parseRequestBody } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 // Must match the limits enforced by POST /api/products/[id]/scenes on the same table
 const MAX_PROMPT_LENGTH = 10000

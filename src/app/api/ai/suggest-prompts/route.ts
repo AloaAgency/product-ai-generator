@@ -14,7 +14,7 @@ import type { GlobalStyleSettings } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 const anthropic = createAnthropicClient()
 
