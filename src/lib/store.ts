@@ -738,7 +738,12 @@ const api = async (
 
   try {
     res = await withRetry(
-      () => fetchWithTimeout(url, options, timeoutMs),
+      () =>
+        fetchWithTimeout(
+          url,
+          { ...options, credentials: 'same-origin' },
+          timeoutMs
+        ),
       {
         retries: method === 'GET' ? MAX_API_RETRIES : 0,
         shouldRetryResponse: (response) => !response.ok && RETRYABLE_RESPONSE_STATUSES.has(response.status),

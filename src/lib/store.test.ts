@@ -169,6 +169,18 @@ describe('useAppStore async scope guards', () => {
     expect(useAppStore.getState().projects).toEqual([project])
   })
 
+  it('confines authenticated app API credentials to the same origin', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse([])))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await useAppStore.getState().fetchProjects()
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects',
+      expect.objectContaining({ credentials: 'same-origin' })
+    )
+  })
+
   it('preserves loaded gallery images when a gallery refresh returns malformed JSON', async () => {
     const image: GeneratedImage = {
       id: generatedImageA,
