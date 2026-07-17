@@ -24,6 +24,7 @@ import {
   validateReferenceUploadFiles,
 } from './request-guards'
 import { logger } from '@/lib/logger'
+import { isClientDevelopmentRuntime } from '@/lib/client-runtime'
 
 const DEFAULT_ERROR_MESSAGE = 'Request failed'
 const MAX_SUGGESTED_PROMPT_COUNT = 10
@@ -1502,7 +1503,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       reference_sets: sanitizedRefSets,
       source_image_id: optionalUuid(data.source_image_id, 'source image id') ?? null,
       variation_count: clampInteger(data.variation_count ?? 15, 1, 100, 15),
-      ...(process.env.NODE_ENV === 'development' && !devParallel
+      ...(isClientDevelopmentRuntime() && !devParallel
         ? { parallelism_override: 1, batch_override: 1 }
         : {}),
     }

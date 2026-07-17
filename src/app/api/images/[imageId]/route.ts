@@ -7,7 +7,7 @@ import {
   sanitizePublicErrorMessage,
   parseRequestBody,
 } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 export async function PATCH(
   request: NextRequest,

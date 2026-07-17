@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { requireUuid, sanitizePublicErrorMessage } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 async function resolveProject(supabase: ReturnType<typeof createServiceClient>, projectId: string) {
   const { data, error } = await supabase

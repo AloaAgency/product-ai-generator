@@ -6,7 +6,7 @@ import type { Product, GlobalStyleSettings, ReferenceSet, ReferenceImage } from 
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
-import { createLogger } from '@/lib/logger'
+import { createLogger } from '@/lib/server-logger'
 import { processGenerationJob } from '@/lib/generation-worker'
 import { kickWorkerForJob } from '@/lib/video-job-request'
 import {

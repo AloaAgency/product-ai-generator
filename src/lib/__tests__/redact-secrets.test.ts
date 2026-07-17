@@ -61,6 +61,39 @@ describe('redactSensitiveText', () => {
     expect(safe).toContain('[redacted]')
   })
 
+  it('redacts common provider credentials even when they have no field label', () => {
+    const credentials = [
+      `sk_${'live'}_${'A'.repeat(24)}`,
+      `${'AK'}${'IA'}${'A1'.repeat(8)}`,
+      `gh${'p'}_${'B'.repeat(24)}`,
+      `xox${'b'}-${'C1'.repeat(12)}`,
+    ]
+
+    for (const credential of credentials) {
+      const safe = redactSensitiveText(`Provider rejected ${credential}`)
+      expect(safe).not.toContain(credential)
+      expect(safe).toBe('Provider rejected [redacted]')
+    }
+  })
+
+  it('redacts URL credentials and complete PEM private-key blocks', () => {
+    const urlPassword = 'example-password'
+    const credentialUrl = `https://example-user:${urlPassword}@api.example.test/resource`
+    const privateKey = [
+      `-----BEGIN ${'PRIVATE KEY'}-----`,
+      'not-a-real-key-body',
+      `-----END ${'PRIVATE KEY'}-----`,
+    ].join('\n')
+
+    const safeUrl = redactSensitiveText(`GET ${credentialUrl}`)
+    expect(safeUrl).not.toContain(urlPassword)
+    expect(safeUrl).toBe('GET https://[redacted]@api.example.test/resource')
+
+    const safeKey = redactSensitiveText(`Rejected credential ${privateKey}`)
+    expect(safeKey).not.toContain('not-a-real-key-body')
+    expect(safeKey).toBe('Rejected credential [redacted]')
+  })
+
   it('redacts three-segment JWTs (Supabase anon/service-role key shape)', () => {
     const jwt =
       'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.s3cr3tS1gnatureValue123'

@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { normalizeDurationValue } from '@/lib/video-constants'
 import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 const MAX_PROMPT_LENGTH = 10000
 const MAX_TITLE_LENGTH = 500

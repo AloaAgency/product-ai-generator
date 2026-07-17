@@ -10,7 +10,7 @@ import {
   normalizeBugReportSingleLine,
 } from '@/components/bugReportWidget.helpers'
 import { redactSensitiveText } from '@/lib/redact-secrets'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 const BFT_API_KEY = process.env.BFT_API_KEY?.replace(/"/g, '') || ''
 const BFT_BASE_URL = process.env.BFT_BASE_URL?.replace(/"/g, '') || ''

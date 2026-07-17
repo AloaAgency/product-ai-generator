@@ -13,7 +13,7 @@ import {
   parseRequestBody,
   sanitizeStorageFileExtension,
 } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { AUTH_COOKIE_NAME, deriveAuthToken } from '@/lib/auth-constants'
 import { secretsEqual } from '@/lib/server-secrets'
 import { loginClientKey, loginRateLimiter } from '@/lib/login-rate-limit'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 // Hard cap on input sizes accepted by the login endpoint.
 // A legitimate password will never approach these limits; rejecting early

@@ -4,7 +4,7 @@ import { slugify, extractVideoThumbnail, buildThumbnailPath } from '@/lib/image-
 import { resolveGoogleApiKey } from '@/lib/google-api-keys'
 import type { GlobalStyleSettings } from '@/lib/types'
 import { isLtxModel, normalizeDurationValue, parsePositiveNumber } from '@/lib/video-constants'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 import { redactSensitiveText } from '@/lib/redact-secrets'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60

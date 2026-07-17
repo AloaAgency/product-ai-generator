@@ -38,8 +38,10 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const appEnvironment = process.env.NODE_ENV === 'development' ? 'development' : 'production';
+
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" data-app-environment={appEnvironment}>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-zinc-950 text-zinc-100`}
       >

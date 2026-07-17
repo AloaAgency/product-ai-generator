@@ -16,6 +16,7 @@ import {
   shouldShowIndeterminateJobProgress,
 } from './globalGenerationQueue.helpers'
 import { getSafeErrorMessage, getSafeQueueErrorMessage } from './errorDisplay.helpers'
+import { isClientDevelopmentRuntime } from '@/lib/client-runtime'
 
 function useGenerationQueuePolling({
   productId,
@@ -111,6 +112,11 @@ export default function GlobalGenerationQueue({
   const [clearingFailures, setClearingFailures] = useState(false)
   const [pollError, setPollError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [isDevelopment, setIsDevelopment] = useState(false)
+
+  useEffect(() => {
+    setIsDevelopment(isClientDevelopmentRuntime())
+  }, [])
 
   useEffect(() => {
     void fetchGenerationJobs(productId)
@@ -269,7 +275,7 @@ export default function GlobalGenerationQueue({
           </span>
         </button>
         <div className="flex w-full flex-wrap items-center gap-2 text-xs text-zinc-400 empty:hidden sm:w-auto sm:justify-end">
-          {process.env.NODE_ENV === 'development' && (
+          {isDevelopment && (
             <button
               type="button"
               className="min-h-11 whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100"

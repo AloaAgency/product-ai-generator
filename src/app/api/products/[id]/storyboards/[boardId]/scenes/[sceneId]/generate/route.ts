@@ -15,7 +15,7 @@ import type { Product, ReferenceImage } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { resolveGoogleApiKey } from '@/lib/google-api-keys'
 import { logError } from '@/lib/error-logger'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 /** The only reference-image columns this route needs — enough to download and re-encode each file. */
 type SceneReferenceImage = Pick<ReferenceImage, 'storage_path' | 'mime_type'>

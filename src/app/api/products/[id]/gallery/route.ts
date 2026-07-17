@@ -8,7 +8,7 @@ import {
   sanitizeApprovalStatus,
   sanitizePublicErrorMessage,
 } from '@/lib/request-guards'
-import { logger } from '@/lib/logger'
+import { logger } from '@/lib/server-logger'
 
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const DEFAULT_PAGE_SIZE = 48
