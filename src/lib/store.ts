@@ -454,6 +454,7 @@ const uploadToSignedUrl = (signedUrl: string, file: File) =>
         signedUrl,
         {
           method: 'PUT',
+          credentials: 'omit',
           headers: {
             'Content-Type': file.type || 'application/octet-stream',
           },
