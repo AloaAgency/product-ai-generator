@@ -741,7 +741,7 @@ const api = async (
       () =>
         fetchWithTimeout(
           url,
-          { ...options, credentials: 'same-origin' },
+          { ...options, cache: 'no-store', credentials: 'same-origin' },
           timeoutMs
         ),
       {

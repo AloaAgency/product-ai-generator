@@ -181,6 +181,18 @@ describe('useAppStore async scope guards', () => {
     )
   })
 
+  it('keeps authenticated app API responses out of the browser cache', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse([])))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await useAppStore.getState().fetchProjects()
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects',
+      expect.objectContaining({ cache: 'no-store' })
+    )
+  })
+
   it('preserves loaded gallery images when a gallery refresh returns malformed JSON', async () => {
     const image: GeneratedImage = {
       id: generatedImageA,
