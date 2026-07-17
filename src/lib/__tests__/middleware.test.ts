@@ -311,7 +311,7 @@ describe('middleware — authenticated requests', () => {
 
   it('passes authenticated requests through without redirecting', async () => {
     const req = new NextRequest('http://localhost/dashboard', {
-      headers: { Cookie: `site-auth=${validToken}` },
+      headers: { Cookie: `__Host-site-auth=${validToken}` },
     })
     const res = await middleware(req)
     expect(res.headers.get('x-middleware-next')).toBe('1')
@@ -319,7 +319,7 @@ describe('middleware — authenticated requests', () => {
 
   it('passes authenticated API requests through (no 401)', async () => {
     const req = new NextRequest('http://localhost/api/products', {
-      headers: { Cookie: `site-auth=${validToken}` },
+      headers: { Cookie: `__Host-site-auth=${validToken}` },
     })
     const res = await middleware(req)
     expect(res.headers.get('x-middleware-next')).toBe('1')
@@ -328,7 +328,7 @@ describe('middleware — authenticated requests', () => {
 
   it('rejects a cookie with a wrong token value even if the name is correct', async () => {
     const req = new NextRequest('http://localhost/dashboard', {
-      headers: { Cookie: 'site-auth=not-a-valid-hmac-token' },
+      headers: { Cookie: '__Host-site-auth=not-a-valid-hmac-token' },
     })
     const res = await middleware(req)
     // Wrong token → show login page
@@ -339,7 +339,7 @@ describe('middleware — authenticated requests', () => {
   it('rejects a cookie that uses the right algorithm on a different password', async () => {
     const forgeryToken = await deriveAuthToken('wrong-password')
     const req = new NextRequest('http://localhost/dashboard', {
-      headers: { Cookie: `site-auth=${forgeryToken}` },
+      headers: { Cookie: `__Host-site-auth=${forgeryToken}` },
     })
     const res = await middleware(req)
     expect(res.status).toBe(200)
@@ -380,7 +380,7 @@ describe('middleware — transient token-derivation failure recovers', () => {
     const validToken = await actual.deriveAuthToken(TEST_PASSWORD)
     const buildReq = () =>
       new NextRequest('http://localhost/api/products', {
-        headers: { Cookie: `site-auth=${validToken}` },
+        headers: { Cookie: `__Host-site-auth=${validToken}` },
       })
 
     // While derivation is broken, a request with a valid cookie fails closed.

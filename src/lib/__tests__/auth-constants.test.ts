@@ -71,8 +71,16 @@ describe('timingResistantEqual', () => {
 // ---------------------------------------------------------------------------
 
 describe('AUTH_COOKIE_NAME', () => {
-  it('equals "site-auth" — changing this constant invalidates all live auth cookies', () => {
-    expect(AUTH_COOKIE_NAME).toBe('site-auth')
+  it('equals "__Host-site-auth" — changing this constant invalidates all live auth cookies', () => {
+    expect(AUTH_COOKIE_NAME).toBe('__Host-site-auth')
+  })
+
+  it('keeps the __Host- prefix so browsers enforce Secure + Path=/ + no Domain', () => {
+    // The prefix is load-bearing: browsers reject a __Host- cookie set without
+    // Secure/Path=/ or with a Domain attribute, which turns any future weakening
+    // of the login route's cookie options into a hard failure instead of a
+    // silently less-secure session cookie.
+    expect(AUTH_COOKIE_NAME.startsWith('__Host-')).toBe(true)
   })
 })
 

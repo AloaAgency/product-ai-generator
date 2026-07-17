@@ -1,7 +1,19 @@
 import type { NextRequest } from 'next/server'
 
-/** Cookie name used by the site-password auth layer. */
-export const AUTH_COOKIE_NAME = 'site-auth'
+/**
+ * Cookie name used by the site-password auth layer.
+ *
+ * The `__Host-` prefix makes the browser itself refuse the cookie unless it is
+ * set with Secure, Path=/, and no Domain attribute — so a regression that
+ * weakens those attributes fails loudly at the browser instead of silently
+ * shipping, and a sibling subdomain (relevant when deployed under a custom
+ * apex like aloa.agency) can never plant/override this cookie via a
+ * Domain-scoped copy (cookie tossing / session fixation).
+ *
+ * Renaming this constant invalidates all live sessions (users re-enter the
+ * site password once); keep the prefix if the base name ever changes.
+ */
+export const AUTH_COOKIE_NAME = '__Host-site-auth'
 
 /**
  * XOR-based timing-resistant string comparison.

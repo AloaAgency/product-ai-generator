@@ -121,6 +121,16 @@ describe('POST /api/login — correct password', () => {
     expect(setCookie).toContain('Path=/')
   })
 
+  it('satisfies the __Host- prefix preconditions (no Domain attribute)', async () => {
+    // Browsers reject a __Host- cookie carrying a Domain attribute (or missing
+    // Secure / Path=/, pinned above). If this assertion fails, the cookie would
+    // be silently dropped by every browser and nobody could log in.
+    const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/' })
+    const res = await POST(req)
+    const setCookie = res.headers.get('set-cookie') ?? ''
+    expect(setCookie.toLowerCase()).not.toContain('domain=')
+  })
+
   it('redirects to the provided redirect path on success', async () => {
     const req = buildLoginRequest({ password: TEST_PASSWORD, redirect: '/products/123' })
     const res = await POST(req)
