@@ -26,6 +26,13 @@ test('getSafeDownloadErrorMessage falls back to a generic customer-facing messag
   assert.equal(getSafeDownloadErrorMessage('<html>502 Bad Gateway</html>'), 'Download failed. Please try again.')
 })
 
+test('getSafeErrorMessage hides webhook verification-stage diagnostics', () => {
+  const fallback = 'Something went wrong. Try again or contact support if the issue persists.'
+  assert.equal(getSafeErrorMessage('Webhook timestamp outside the allowed tolerance'), fallback)
+  assert.equal(getSafeErrorMessage('HMAC mismatch'), fallback)
+  assert.equal(getSafeErrorMessage('Request timestamp expired'), fallback)
+})
+
 test('getSafeErrorContext redacts secrets and truncates large payloads', () => {
   const context = getSafeErrorContext({
     request: {

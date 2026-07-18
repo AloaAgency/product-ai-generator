@@ -28,6 +28,13 @@ describe('getSafeErrorMessage — message sanitization', () => {
     expect(getSafeErrorMessage('Authorization: Bearer abc123')).toBe(GENERIC)
   })
 
+  it('does not expose webhook verification-stage diagnostics', () => {
+    expect(getSafeErrorMessage('Webhook timestamp outside the allowed tolerance')).toBe(GENERIC)
+    expect(getSafeErrorMessage('HMAC mismatch')).toBe(GENERIC)
+    expect(getSafeErrorMessage('Request timestamp expired')).toBe(GENERIC)
+    expect(getSafeErrorMessage('Replayed request detected')).toBe(GENERIC)
+  })
+
   it('preserves a clean customer-safe message verbatim', () => {
     const safe = 'Your image is still processing. Please try again in a moment.'
     expect(getSafeErrorMessage(safe)).toBe(safe)
