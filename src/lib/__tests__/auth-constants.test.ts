@@ -196,3 +196,60 @@ describe('isAdminAuthorized', () => {
     expect(isAdminAuthorized(req)).toBe(false)
   })
 })
+
+// ---------------------------------------------------------------------------
+// isAdminAuthorized — ADMIN_SECRET_PREVIOUS rotation overlap (Edge variant)
+// ---------------------------------------------------------------------------
+
+describe('isAdminAuthorized — rotation overlap', () => {
+  const originalAdminSecret = process.env.ADMIN_SECRET
+  const originalPrevious = process.env.ADMIN_SECRET_PREVIOUS
+
+  afterEach(() => {
+    if (originalAdminSecret === undefined) {
+      delete process.env.ADMIN_SECRET
+    } else {
+      process.env.ADMIN_SECRET = originalAdminSecret
+    }
+    if (originalPrevious === undefined) {
+      delete process.env.ADMIN_SECRET_PREVIOUS
+    } else {
+      process.env.ADMIN_SECRET_PREVIOUS = originalPrevious
+    }
+  })
+
+  it('accepts the previous secret while ADMIN_SECRET_PREVIOUS is set', () => {
+    process.env.ADMIN_SECRET = 'new-secret'
+    process.env.ADMIN_SECRET_PREVIOUS = 'old-secret'
+    const req = mockRequest({ 'x-admin-secret': 'old-secret' })
+    expect(isAdminAuthorized(req)).toBe(true)
+  })
+
+  it('accepts the new secret while ADMIN_SECRET_PREVIOUS is set', () => {
+    process.env.ADMIN_SECRET = 'new-secret'
+    process.env.ADMIN_SECRET_PREVIOUS = 'old-secret'
+    const req = mockRequest({ 'x-admin-secret': 'new-secret' })
+    expect(isAdminAuthorized(req)).toBe(true)
+  })
+
+  it('rejects the previous secret once ADMIN_SECRET_PREVIOUS is removed', () => {
+    process.env.ADMIN_SECRET = 'new-secret'
+    delete process.env.ADMIN_SECRET_PREVIOUS
+    const req = mockRequest({ 'x-admin-secret': 'old-secret' })
+    expect(isAdminAuthorized(req)).toBe(false)
+  })
+
+  it('fails closed when only ADMIN_SECRET_PREVIOUS is configured', () => {
+    delete process.env.ADMIN_SECRET
+    process.env.ADMIN_SECRET_PREVIOUS = 'old-secret'
+    const req = mockRequest({ 'x-admin-secret': 'old-secret' })
+    expect(isAdminAuthorized(req)).toBe(false)
+  })
+
+  it('rejects a wrong value while both secrets are set', () => {
+    process.env.ADMIN_SECRET = 'new-secret'
+    process.env.ADMIN_SECRET_PREVIOUS = 'old-secret'
+    const req = mockRequest({ 'x-admin-secret': 'neither' })
+    expect(isAdminAuthorized(req)).toBe(false)
+  })
+})

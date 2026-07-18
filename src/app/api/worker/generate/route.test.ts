@@ -288,3 +288,61 @@ describe('GET /api/worker/generate — service client construction fails', () =>
     expect(res.status).toBe(401)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Rotation overlap — CRON_SECRET_PREVIOUS accepted only while set
+// ---------------------------------------------------------------------------
+
+describe('GET /api/worker/generate — CRON_SECRET_PREVIOUS rotation overlap', () => {
+  let GET: Awaited<ReturnType<typeof importGET>>
+
+  beforeEach(async () => {
+    vi.resetModules()
+    process.env.CRON_SECRET = 'new-secret'
+    process.env.CRON_SECRET_PREVIOUS = 'old-secret'
+    GET = await importGET()
+  })
+
+  afterEach(() => {
+    delete process.env.CRON_SECRET
+    delete process.env.CRON_SECRET_PREVIOUS
+  })
+
+  it('accepts the previous secret via x-cron-secret during the overlap window', async () => {
+    const req = buildRequest({ 'x-cron-secret': 'old-secret' })
+    const res = await GET(req)
+    expect(res.status).not.toBe(401)
+  })
+
+  it('accepts the previous secret via Authorization Bearer during the overlap window', async () => {
+    const req = buildRequest({ Authorization: 'Bearer old-secret' })
+    const res = await GET(req)
+    expect(res.status).not.toBe(401)
+  })
+
+  it('still accepts the new secret during the overlap window', async () => {
+    const req = buildRequest({ 'x-cron-secret': 'new-secret' })
+    const res = await GET(req)
+    expect(res.status).not.toBe(401)
+  })
+
+  it('rejects values that match neither secret', async () => {
+    const req = buildRequest({ 'x-cron-secret': 'neither-secret' })
+    const res = await GET(req)
+    expect(res.status).toBe(401)
+  })
+
+  it('rejects the previous secret once CRON_SECRET_PREVIOUS is removed', async () => {
+    delete process.env.CRON_SECRET_PREVIOUS
+    const req = buildRequest({ 'x-cron-secret': 'old-secret' })
+    const res = await GET(req)
+    expect(res.status).toBe(401)
+  })
+
+  it('fails closed when only CRON_SECRET_PREVIOUS is configured', async () => {
+    delete process.env.CRON_SECRET
+    const req = buildRequest({ 'x-cron-secret': 'old-secret' })
+    const res = await GET(req)
+    expect(res.status).toBe(401)
+  })
+})

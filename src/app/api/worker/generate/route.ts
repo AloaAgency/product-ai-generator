@@ -4,7 +4,7 @@ import { processGenerationJob } from '@/lib/generation-worker'
 import { logError } from '@/lib/error-logger'
 import { createLogger } from '@/lib/server-logger'
 import { T } from '@/lib/db-tables'
-import { secretsEqual } from '@/lib/server-secrets'
+import { matchesRotatableSecret } from '@/lib/server-secrets'
 import {
   isValidGenerationJobId,
   MAX_GENERATION_BATCH_SIZE,
@@ -27,12 +27,16 @@ function isAuthorized(request: NextRequest) {
     log.error('CRON_SECRET is not set — all requests denied')
     return false
   }
+  // Zero-downtime rotation: CRON_SECRET_PREVIOUS is also accepted while set,
+  // so external callers (Vercel cron) can be updated after the new secret
+  // deploys. See the rotation procedure in server-secrets.ts.
+  const previous = process.env.CRON_SECRET_PREVIOUS
   const headerSecret = request.headers.get('x-cron-secret') ?? ''
   const auth = request.headers.get('authorization') ?? ''
   const bearerSecret = auth.startsWith('Bearer ') ? auth.slice(7) : ''
 
-  return (headerSecret.length > 0 && secretsEqual(headerSecret, secret)) ||
-    (bearerSecret.length > 0 && secretsEqual(bearerSecret, secret))
+  return matchesRotatableSecret(headerSecret, secret, previous) ||
+    matchesRotatableSecret(bearerSecret, secret, previous)
 }
 
 export async function GET(request: NextRequest) {
