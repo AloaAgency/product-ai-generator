@@ -50,13 +50,17 @@ export function timingResistantEqual(provided: string, expected: string): boolea
  * This function is intentionally kept Edge Runtime-safe for future middleware use.
  *
  * Fails closed: if ADMIN_SECRET is not configured, all requests are denied.
+ * During rotation, ADMIN_SECRET_PREVIOUS is also accepted — mirrors
+ * `isAdminAuthorizedNode` / the rotation procedure in server-secrets.ts.
  */
 export function isAdminAuthorized(request: NextRequest): boolean {
   const adminSecret = process.env.ADMIN_SECRET
   if (!adminSecret) return false
   const provided = request.headers.get('x-admin-secret') ?? ''
   if (provided.length === 0) return false
-  return timingResistantEqual(provided, adminSecret)
+  if (timingResistantEqual(provided, adminSecret)) return true
+  const previousSecret = process.env.ADMIN_SECRET_PREVIOUS
+  return Boolean(previousSecret) && timingResistantEqual(provided, previousSecret as string)
 }
 
 /**

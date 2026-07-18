@@ -7,7 +7,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import type { NextRequest } from 'next/server'
-import { isAdminAuthorizedNode, secretsEqual } from '@/lib/server-secrets'
+import { isAdminAuthorizedNode, matchesRotatableSecret, secretsEqual } from '@/lib/server-secrets'
 
 // ---------------------------------------------------------------------------
 // secretsEqual — constant-time string comparison
@@ -128,6 +128,95 @@ describe('isAdminAuthorizedNode', () => {
     // ADMIN_SECRET='' is falsy — the function must still deny all requests.
     process.env.ADMIN_SECRET = ''
     const req = mockRequest({ 'x-admin-secret': '' })
+    expect(isAdminAuthorizedNode(req)).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// matchesRotatableSecret — rotation overlap acceptance
+// ---------------------------------------------------------------------------
+
+describe('matchesRotatableSecret', () => {
+  it('accepts the current secret', () => {
+    expect(matchesRotatableSecret('current', 'current')).toBe(true)
+  })
+
+  it('accepts the previous secret during a rotation overlap', () => {
+    expect(matchesRotatableSecret('old', 'new', 'old')).toBe(true)
+  })
+
+  it('still accepts the current secret while a previous secret is set', () => {
+    expect(matchesRotatableSecret('new', 'new', 'old')).toBe(true)
+  })
+
+  it('rejects a wrong value even when both current and previous are set', () => {
+    expect(matchesRotatableSecret('wrong', 'new', 'old')).toBe(false)
+  })
+
+  it('fails closed when the current secret is undefined, even if previous matches', () => {
+    // A *_PREVIOUS value alone must never grant access.
+    expect(matchesRotatableSecret('old', undefined, 'old')).toBe(false)
+  })
+
+  it('fails closed when the current secret is empty, even if previous matches', () => {
+    expect(matchesRotatableSecret('old', '', 'old')).toBe(false)
+  })
+
+  it('rejects an empty provided value even if the previous secret is empty', () => {
+    expect(matchesRotatableSecret('', 'current', '')).toBe(false)
+  })
+
+  it('rejects when previous is unset and provided does not match current', () => {
+    expect(matchesRotatableSecret('old', 'new')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// isAdminAuthorizedNode — ADMIN_SECRET_PREVIOUS rotation overlap
+// ---------------------------------------------------------------------------
+
+describe('isAdminAuthorizedNode — rotation overlap', () => {
+  const originalAdminSecret = process.env.ADMIN_SECRET
+  const originalPrevious = process.env.ADMIN_SECRET_PREVIOUS
+
+  afterEach(() => {
+    if (originalAdminSecret === undefined) {
+      delete process.env.ADMIN_SECRET
+    } else {
+      process.env.ADMIN_SECRET = originalAdminSecret
+    }
+    if (originalPrevious === undefined) {
+      delete process.env.ADMIN_SECRET_PREVIOUS
+    } else {
+      process.env.ADMIN_SECRET_PREVIOUS = originalPrevious
+    }
+  })
+
+  it('accepts the previous secret while ADMIN_SECRET_PREVIOUS is set', () => {
+    process.env.ADMIN_SECRET = 'new-secret'
+    process.env.ADMIN_SECRET_PREVIOUS = 'old-secret'
+    const req = mockRequest({ 'x-admin-secret': 'old-secret' })
+    expect(isAdminAuthorizedNode(req)).toBe(true)
+  })
+
+  it('accepts the new secret while ADMIN_SECRET_PREVIOUS is set', () => {
+    process.env.ADMIN_SECRET = 'new-secret'
+    process.env.ADMIN_SECRET_PREVIOUS = 'old-secret'
+    const req = mockRequest({ 'x-admin-secret': 'new-secret' })
+    expect(isAdminAuthorizedNode(req)).toBe(true)
+  })
+
+  it('rejects the previous secret once ADMIN_SECRET_PREVIOUS is removed', () => {
+    process.env.ADMIN_SECRET = 'new-secret'
+    delete process.env.ADMIN_SECRET_PREVIOUS
+    const req = mockRequest({ 'x-admin-secret': 'old-secret' })
+    expect(isAdminAuthorizedNode(req)).toBe(false)
+  })
+
+  it('fails closed when only ADMIN_SECRET_PREVIOUS is configured', () => {
+    delete process.env.ADMIN_SECRET
+    process.env.ADMIN_SECRET_PREVIOUS = 'old-secret'
+    const req = mockRequest({ 'x-admin-secret': 'old-secret' })
     expect(isAdminAuthorizedNode(req)).toBe(false)
   })
 })

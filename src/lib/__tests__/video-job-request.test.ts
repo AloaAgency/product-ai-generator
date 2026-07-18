@@ -135,3 +135,65 @@ describe('kickWorkerForJob', () => {
     expect(String((warnings[0]?.payload as { error?: string }).error)).toMatch(/aborted/i)
   })
 })
+
+describe('kickWorkerForJob — WORKER_BASE_URL origin pinning', () => {
+  it('sends the kick to WORKER_BASE_URL instead of the request-derived origin when set', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 202 }))
+    vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+    kickWorkerForJob(
+      'job-3',
+      // Attacker-influenced origin (derived from Host header) must be ignored.
+      'https://forged-host.evil/products/123',
+      '[GenerateVideo]',
+      undefined,
+      env({ CRON_SECRET: 'secret', WORKER_BASE_URL: 'https://app.example.test' })
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const call = fetchSpy.mock.calls[0]
+    expect(String(call?.[0])).toBe('https://app.example.test/api/worker/generate?jobId=job-3')
+    expect((call?.[1]?.headers as Record<string, string>)?.Authorization).toBe('Bearer secret')
+  })
+
+  it('falls back to the request URL when WORKER_BASE_URL is unset', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 202 }))
+    vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+    kickWorkerForJob(
+      'job-4',
+      'https://example.test/products/123',
+      '[GenerateVideo]',
+      undefined,
+      env({ CRON_SECRET: 'secret' })
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe('https://example.test/api/worker/generate?jobId=job-4')
+  })
+
+  it('skips the kick with a warning instead of throwing when WORKER_BASE_URL is malformed', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 202 }))
+    const warnings: string[] = []
+    vi.spyOn(console, 'warn').mockImplementation((message?: unknown) => {
+      warnings.push(String(message))
+    })
+
+    expect(() =>
+      kickWorkerForJob(
+        'job-5',
+        'https://example.test/products/123',
+        '[GenerateVideo]',
+        undefined,
+        env({ CRON_SECRET: 'secret', WORKER_BASE_URL: 'not a url' })
+      )
+    ).not.toThrow()
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(warnings).toStrictEqual(['[GenerateVideo] Worker kick skipped — invalid worker base URL'])
+  })
+})

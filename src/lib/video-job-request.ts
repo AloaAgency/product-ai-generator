@@ -70,7 +70,25 @@ export function kickWorkerForJob(
     ? timeoutMs
     : DEFAULT_WORKER_KICK_TIMEOUT_MS
 
-  const url = new URL('/api/worker/generate', requestUrl)
+  // This fetch delivers CRON_SECRET as a bearer token, so the target origin
+  // must not be attacker-influenced. requestUrl's host ultimately comes from
+  // the incoming Host / X-Forwarded-Host headers; on platforms that don't
+  // strictly bind those to the deployment (Vercel does, a bare reverse proxy
+  // may not), a forged header would make this kick deliver the secret to a
+  // foreign origin. Setting WORKER_BASE_URL (e.g. https://app.example.com)
+  // pins the target; the request URL remains the fallback so local dev and
+  // Host-validating platforms keep working with no extra configuration.
+  let url: URL
+  try {
+    url = new URL('/api/worker/generate', env.WORKER_BASE_URL || requestUrl)
+  } catch (err) {
+    // Fire-and-forget contract: never throw into the calling route.
+    logger.warn(`${label} Worker kick skipped — invalid worker base URL`, {
+      jobId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return
+  }
   url.searchParams.set('jobId', jobId)
   if (extraParams) {
     for (const [key, value] of Object.entries(extraParams)) {
