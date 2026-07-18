@@ -9,6 +9,7 @@ const INTERNAL_ERROR_PATTERNS = [
   /\b(?:select|insert|update|delete|from|where)\b.+\b(?:limit|returning|group by|order by)\b/i,
   /\b(?:exception|traceback|stack trace|sqlstate|supabase|postgres|prisma|node_modules)\b/i,
   /\b(?:api[_ -]?key|authorization|bearer|token|secret|password|cookie|set-cookie)\b/i,
+  /\b(?:webhook|hmac|signature verification|request timestamp|timestamp (?:is )?(?:invalid|expired|stale|outside)|replay(?:ed)? request)\b/i,
   /\b(?:https?:\/\/|s3:\/\/|gs:\/\/)[^\s]+/i,
 ]
 

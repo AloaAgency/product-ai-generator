@@ -137,6 +137,9 @@ Deployed on Vercel. The cron in `vercel.json` invokes `/api/worker/generate` eve
 minute to drain the generation queue. Ensure all environment variables (including
 `CRON_SECRET`) are configured in the Vercel project.
 
+The audited external-receiver inventory and requirements for adding a signed
+webhook are documented in [`docs/webhook-security.md`](docs/webhook-security.md).
+
 ## Bug & Feature Tracking
 
 This project uses the **Aloa Bug & Feature Tracker (BFT)**, not GitHub Issues.
