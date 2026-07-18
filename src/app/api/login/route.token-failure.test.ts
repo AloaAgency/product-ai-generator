@@ -60,6 +60,6 @@ describe('POST /api/login — transient token-derivation failure', () => {
     const after = await POST(buildLoginRequest({ password: TEST_PASSWORD, redirect: '/' }))
     expect(after.status).toBe(303)
     const cookie = after.headers.get('set-cookie') ?? ''
-    expect(cookie).toContain(`site-auth=${await actual.deriveAuthToken(TEST_PASSWORD)}`)
+    expect(cookie).toContain(`__Host-site-auth=${await actual.deriveAuthToken(TEST_PASSWORD)}`)
   })
 })
