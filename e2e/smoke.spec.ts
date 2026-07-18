@@ -31,8 +31,15 @@ test.describe('public smoke', () => {
   test('security headers are applied to responses', async ({ request }) => {
     const response = await request.get('/')
     const headers = response.headers()
-    // applySecurityHeaders should set at least these — adjust if security-headers.ts changes.
-    expect(headers['x-frame-options'] || headers['content-security-policy']).toBeTruthy()
+    expect(headers).toMatchObject({
+      'strict-transport-security': 'max-age=63072000; includeSubDomains; preload',
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'DENY',
+      'referrer-policy': 'strict-origin-when-cross-origin',
+      'permissions-policy':
+        'camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), interest-cohort=()',
+    })
+    expect(headers['x-powered-by']).toBeUndefined()
   })
 
   test('login gate response is not cacheable', async ({ request }) => {

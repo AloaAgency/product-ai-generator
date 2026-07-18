@@ -169,6 +169,30 @@ describe('useAppStore async scope guards', () => {
     expect(useAppStore.getState().projects).toEqual([project])
   })
 
+  it('confines authenticated app API credentials to the same origin', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse([])))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await useAppStore.getState().fetchProjects()
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects',
+      expect.objectContaining({ credentials: 'same-origin' })
+    )
+  })
+
+  it('keeps authenticated app API responses out of the browser cache', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse([])))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await useAppStore.getState().fetchProjects()
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects',
+      expect.objectContaining({ cache: 'no-store' })
+    )
+  })
+
   it('preserves loaded gallery images when a gallery refresh returns malformed JSON', async () => {
     const image: GeneratedImage = {
       id: generatedImageA,
@@ -498,6 +522,51 @@ describe('useAppStore async scope guards', () => {
 
     expect(useAppStore.getState().currentProduct?.id).toBe(productB)
     expect(useAppStore.getState().referenceImages).toEqual({})
+  })
+
+  it('omits app cookies when uploading to a signed storage URL', async () => {
+    const signedUrl = 'https://storage.example.test/signed-upload'
+    let signedUploadInit: RequestInit | undefined
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (
+        url === `/api/products/${productA}/reference-sets/${referenceSetA}/images/upload-urls` &&
+        method === 'POST'
+      ) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { files?: Array<{ clientId: string }> }
+        return Promise.resolve(jsonResponse([{
+          clientId: body.files?.[0]?.clientId,
+          signedUrl,
+          storage_path: 'references/photo.png',
+          file_name: 'photo.png',
+          mime_type: 'image/png',
+          file_size: 1,
+          display_order: 1,
+        }]))
+      }
+      if (url === signedUrl && method === 'PUT') {
+        signedUploadInit = init
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }
+      if (
+        url === `/api/products/${productA}/reference-sets/${referenceSetA}/images` &&
+        method === 'POST'
+      ) {
+        return Promise.resolve(jsonResponse([]))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore
+      .getState()
+      .uploadReferenceImages(productA, referenceSetA, [
+        new File(['x'], 'photo.png', { type: 'image/png' }),
+      ])
+
+    expect(signedUploadInit).toEqual(
+      expect.objectContaining({ method: 'PUT', credentials: 'omit' })
+    )
   })
 
   it('rejects malformed upload signing responses with a stable error', async () => {

@@ -454,6 +454,7 @@ const uploadToSignedUrl = (signedUrl: string, file: File) =>
         signedUrl,
         {
           method: 'PUT',
+          credentials: 'omit',
           headers: {
             'Content-Type': file.type || 'application/octet-stream',
           },
@@ -738,7 +739,12 @@ const api = async (
 
   try {
     res = await withRetry(
-      () => fetchWithTimeout(url, options, timeoutMs),
+      () =>
+        fetchWithTimeout(
+          url,
+          { ...options, cache: 'no-store', credentials: 'same-origin' },
+          timeoutMs
+        ),
       {
         retries: method === 'GET' ? MAX_API_RETRIES : 0,
         shouldRetryResponse: (response) => !response.ok && RETRYABLE_RESPONSE_STATUSES.has(response.status),
