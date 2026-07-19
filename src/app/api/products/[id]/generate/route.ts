@@ -18,6 +18,7 @@ import {
   validateVariationCount,
   capStyleValue,
   isValidDeleteScope,
+  firstPositiveNumber,
 } from '@/lib/generate-route-helpers'
 
 export const runtime = 'nodejs'
@@ -270,21 +271,20 @@ export async function POST(
       process.env.INLINE_GENERATION === 'true' || process.env.NODE_ENV === 'development'
 
     if (shouldRunInline) {
-      const batchSizeRaw = Number(process.env.GENERATION_BATCH_SIZE)
-      const batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0
-        ? batchSizeRaw
-        : sanitizedVariationCount
-      const parallelismRaw = Number(process.env.GENERATION_PARALLELISM)
-      const parallelism = Number.isFinite(parallelismRaw) && parallelismRaw > 0 ? parallelismRaw : 1
-      const timeBudgetMsRaw = Number(process.env.GENERATION_TIME_BUDGET_MS)
-      const timeBudgetMs = Number.isFinite(timeBudgetMsRaw) && timeBudgetMsRaw > 0 ? timeBudgetMsRaw : 760000
-      const overrideBatch = Number(batch_override)
-      const overrideParallel = Number(parallelism_override)
-      const overrideBudget = Number(time_budget_ms_override)
-      const finalBatch = Number.isFinite(overrideBatch) && overrideBatch > 0 ? overrideBatch : batchSize
-      const finalParallel = Number.isFinite(overrideParallel) && overrideParallel > 0 ? overrideParallel : parallelism
-      const finalBudget = Number.isFinite(overrideBudget) && overrideBudget > 0 ? overrideBudget : timeBudgetMs
-      void processGenerationJob(job.id, { batchSize: finalBatch, parallelism: finalParallel, timeBudgetMs: finalBudget }).catch(async (err) => {
+      // Request override wins, then env config, then the computed default.
+      const batchSize = firstPositiveNumber(
+        [batch_override, process.env.GENERATION_BATCH_SIZE],
+        sanitizedVariationCount
+      )
+      const parallelism = firstPositiveNumber(
+        [parallelism_override, process.env.GENERATION_PARALLELISM],
+        1
+      )
+      const timeBudgetMs = firstPositiveNumber(
+        [time_budget_ms_override, process.env.GENERATION_TIME_BUDGET_MS],
+        760000
+      )
+      void processGenerationJob(job.id, { batchSize, parallelism, timeBudgetMs }).catch(async (err) => {
         const message = err instanceof Error ? err.message : 'Inline generation job failed'
         log.error('Inline job failed:', err)
         await logError({

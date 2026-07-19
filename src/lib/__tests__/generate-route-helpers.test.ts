@@ -19,6 +19,7 @@ import {
   validateVariationCount,
   capStyleValue,
   isValidDeleteScope,
+  firstPositiveNumber,
   type ReferenceSetSelection,
 } from '@/lib/generate-route-helpers'
 
@@ -464,5 +465,32 @@ describe('isValidDeleteScope', () => {
     expect(isValidDeleteScope('everything')).toBe(false)
     expect(isValidDeleteScope('')).toBe(false)
     expect(isValidDeleteScope('ACTIVE')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// firstPositiveNumber
+// ---------------------------------------------------------------------------
+
+describe('firstPositiveNumber', () => {
+  it('returns the first candidate that parses to a positive number', () => {
+    expect(firstPositiveNumber([5, 10], 1)).toBe(5)
+    expect(firstPositiveNumber(['12', 10], 1)).toBe(12)
+    expect(firstPositiveNumber([0.5], 1)).toBe(0.5)
+  })
+
+  it('skips non-positive and non-numeric candidates', () => {
+    expect(firstPositiveNumber([undefined, null, '', 'abc', 0, -3, NaN, Infinity, 7], 1)).toBe(7)
+  })
+
+  it('layers a request override over env config over the fallback', () => {
+    // Mirrors the inline-generation tuning in the generate route.
+    expect(firstPositiveNumber(['4', '8'], 15)).toBe(4)   // override wins
+    expect(firstPositiveNumber([undefined, '8'], 15)).toBe(8) // env wins
+    expect(firstPositiveNumber([undefined, undefined], 15)).toBe(15) // fallback
+  })
+
+  it('returns the fallback for an empty candidate list', () => {
+    expect(firstPositiveNumber([], 42)).toBe(42)
   })
 })

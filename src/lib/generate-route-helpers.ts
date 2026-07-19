@@ -197,3 +197,17 @@ export function capStyleValue(v: unknown): string | undefined {
 export function isValidDeleteScope(scope: string): scope is DeleteScope {
   return (VALID_DELETE_SCOPES as readonly string[]).includes(scope)
 }
+
+/**
+ * Return the first candidate that coerces to a finite positive number,
+ * falling back when none does. Used to layer per-request tuning overrides
+ * over env config over a computed default (request wins, then env, then
+ * fallback) without repeating the parse-and-validate dance per knob.
+ */
+export function firstPositiveNumber(candidates: unknown[], fallback: number): number {
+  for (const candidate of candidates) {
+    const parsed = Number(candidate)
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
+  return fallback
+}
