@@ -1307,6 +1307,45 @@ async function persistFinalImageJobState(
   )
 }
 
+async function processImageJobVariations(
+  supabase: WorkerSupabase,
+  job: ClaimedGenerationJobRecord,
+  config: WorkerConfig
+): Promise<VariationProcessingResult> {
+  const plan = createVariationPlan(job, config.batchSize)
+  if (plan.variationNumbers.length === 0) {
+    return {
+      processed: 0,
+      completedCount: plan.startingCompleted,
+      failedCount: plan.startingFailed,
+      lastError: job.error_message,
+      cancelled: false,
+      claimLost: false,
+    }
+  }
+
+  const recordedVariationNumbers = await fetchRecordedImageVariationNumbers(
+    supabase,
+    job,
+    plan.variationNumbers
+  )
+  const hasUnrecordedVariations = plan.variationNumbers.some(
+    (variationNumber) => !recordedVariationNumbers.has(variationNumber)
+  )
+  const resources = hasUnrecordedVariations
+    ? await loadImageJobResources(supabase, job)
+    : { referenceImages: [] }
+
+  return processVariations(
+    supabase,
+    job,
+    plan,
+    recordedVariationNumbers,
+    resources,
+    config
+  )
+}
+
 export async function processGenerationJob(jobId: string, options: WorkerOptions = {}): Promise<WorkerResult> {
   if (!isValidGenerationJobId(jobId)) {
     throw new Error('Invalid generation job id')
@@ -1327,37 +1366,7 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
       return await processVideoJob(claimedJob, supabase)
     }
 
-    const plan = createVariationPlan(claimedJob, config.batchSize)
-    if (plan.variationNumbers.length === 0) {
-      return persistFinalImageJobState(supabase, claimedJob, {
-        processed: 0,
-        completedCount: plan.startingCompleted,
-        failedCount: plan.startingFailed,
-        lastError: claimedJob.error_message,
-        cancelled: false,
-        claimLost: false,
-      })
-    }
-
-    const recordedVariationNumbers = await fetchRecordedImageVariationNumbers(
-      supabase,
-      claimedJob,
-      plan.variationNumbers
-    )
-    const hasUnrecordedVariations = plan.variationNumbers.some(
-      (variationNumber) => !recordedVariationNumbers.has(variationNumber)
-    )
-    const resources = hasUnrecordedVariations
-      ? await loadImageJobResources(supabase, claimedJob)
-      : { referenceImages: [] }
-    const variationResult = await processVariations(
-      supabase,
-      claimedJob,
-      plan,
-      recordedVariationNumbers,
-      resources,
-      config
-    )
+    const variationResult = await processImageJobVariations(supabase, claimedJob, config)
     return persistFinalImageJobState(supabase, claimedJob, variationResult)
   } catch (err) {
     const safeMessage = sanitizeWorkerErrorMessage(err, 'Generation job failed')
