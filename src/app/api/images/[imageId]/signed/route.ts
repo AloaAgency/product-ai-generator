@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { requireUuid } from '@/lib/request-guards'
+import { SIGNED_URL_TTL_SECONDS } from '@/lib/gallery-media'
 import { logger } from '@/lib/server-logger'
-
-const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 
 export async function GET(
   _request: NextRequest,

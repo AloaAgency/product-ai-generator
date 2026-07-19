@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { createSignedUrlMap } from '@/lib/gallery-media'
 import { logger } from '@/lib/server-logger'
-
-const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 
 export async function GET(
   _request: NextRequest,
@@ -52,25 +51,10 @@ export async function GET(
       img.thumb_storage_path,
     ].filter(Boolean)) as string[]
 
-    const [signedImagesResult, signedVideosResult] = await Promise.all([
-      imagePaths.length > 0
-        ? supabase.storage.from('generated-images').createSignedUrls(imagePaths, SIGNED_URL_TTL_SECONDS)
-        : Promise.resolve({ data: null }),
-      videoPaths.length > 0
-        ? supabase.storage.from('generated-videos').createSignedUrls(videoPaths, SIGNED_URL_TTL_SECONDS)
-        : Promise.resolve({ data: null }),
+    const [{ map: signedImagesMap }, { map: signedVideosMap }] = await Promise.all([
+      createSignedUrlMap(supabase, 'generated-images', imagePaths),
+      createSignedUrlMap(supabase, 'generated-videos', videoPaths),
     ])
-
-    const signedImagesMap = new Map<string, string>(
-      (signedImagesResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl!])
-    )
-    const signedVideosMap = new Map<string, string>(
-      (signedVideosResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl!])
-    )
 
     const signedImages = (images || []).map((img) => ({
       ...img,
