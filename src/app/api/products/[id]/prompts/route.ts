@@ -2,11 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { generateSceneTitle } from '@/lib/prompt-builder'
-import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
+import { parseRequestBody, MAX_LIST_ROWS, MAX_NAME_LENGTH, MAX_PROMPT_TEXT_LENGTH } from '@/lib/request-guards'
 import { logger } from '@/lib/server-logger'
-
-const MAX_NAME_LENGTH = 500
-const MAX_PROMPT_LENGTH = 10000
 
 export async function GET(
   request: NextRequest,
@@ -56,8 +53,8 @@ export async function POST(
     if (name.length > MAX_NAME_LENGTH) {
       return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
     }
-    if (prompt_text.length > MAX_PROMPT_LENGTH) {
-      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+    if (prompt_text.length > MAX_PROMPT_TEXT_LENGTH) {
+      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_TEXT_LENGTH} characters or fewer` }, { status: 400 })
     }
 
     // Generate the scene title before inserting so it rides along on the insert.

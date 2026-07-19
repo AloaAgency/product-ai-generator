@@ -2,11 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { normalizeDurationValue } from '@/lib/video-constants'
-import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
+import { parseRequestBody, MAX_LIST_ROWS, MAX_PROMPT_TEXT_LENGTH, MAX_TITLE_LENGTH } from '@/lib/request-guards'
 import { logger } from '@/lib/server-logger'
-
-const MAX_PROMPT_LENGTH = 10000
-const MAX_TITLE_LENGTH = 500
 
 export async function GET(
   request: NextRequest,
@@ -52,14 +49,14 @@ export async function POST(
     if (typeof body.title === 'string' && body.title.length > MAX_TITLE_LENGTH) {
       return NextResponse.json({ error: `title must be ${MAX_TITLE_LENGTH} characters or fewer` }, { status: 400 })
     }
-    if (typeof body.prompt_text === 'string' && body.prompt_text.length > MAX_PROMPT_LENGTH) {
-      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+    if (typeof body.prompt_text === 'string' && body.prompt_text.length > MAX_PROMPT_TEXT_LENGTH) {
+      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_TEXT_LENGTH} characters or fewer` }, { status: 400 })
     }
-    if (typeof body.end_frame_prompt === 'string' && body.end_frame_prompt.length > MAX_PROMPT_LENGTH) {
-      return NextResponse.json({ error: `end_frame_prompt must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+    if (typeof body.end_frame_prompt === 'string' && body.end_frame_prompt.length > MAX_PROMPT_TEXT_LENGTH) {
+      return NextResponse.json({ error: `end_frame_prompt must be ${MAX_PROMPT_TEXT_LENGTH} characters or fewer` }, { status: 400 })
     }
-    if (typeof body.motion_prompt === 'string' && body.motion_prompt.length > MAX_PROMPT_LENGTH) {
-      return NextResponse.json({ error: `motion_prompt must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+    if (typeof body.motion_prompt === 'string' && body.motion_prompt.length > MAX_PROMPT_TEXT_LENGTH) {
+      return NextResponse.json({ error: `motion_prompt must be ${MAX_PROMPT_TEXT_LENGTH} characters or fewer` }, { status: 400 })
     }
 
     const model = (body.generation_model as string | undefined) || 'veo3'

@@ -2,12 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { normalizeDurationValue } from '@/lib/video-constants'
-import { parseRequestBody } from '@/lib/request-guards'
+import { parseRequestBody, MAX_PROMPT_TEXT_LENGTH, MAX_TITLE_LENGTH } from '@/lib/request-guards'
 import { logger } from '@/lib/server-logger'
-
-// Must match the limits enforced by POST /api/products/[id]/scenes on the same table
-const MAX_PROMPT_LENGTH = 10000
-const MAX_TITLE_LENGTH = 500
 
 type Params = { params: Promise<{ id: string; sceneId: string }> }
 
@@ -23,8 +19,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       return NextResponse.json({ error: `title must be ${MAX_TITLE_LENGTH} characters or fewer` }, { status: 400 })
     }
     for (const field of ['prompt_text', 'end_frame_prompt', 'motion_prompt'] as const) {
-      if (typeof body[field] === 'string' && (body[field] as string).length > MAX_PROMPT_LENGTH) {
-        return NextResponse.json({ error: `${field} must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+      if (typeof body[field] === 'string' && (body[field] as string).length > MAX_PROMPT_TEXT_LENGTH) {
+        return NextResponse.json({ error: `${field} must be ${MAX_PROMPT_TEXT_LENGTH} characters or fewer` }, { status: 400 })
       }
     }
 
