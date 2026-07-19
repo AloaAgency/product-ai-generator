@@ -1072,6 +1072,41 @@ async function runVariationWithRetry(
   throw lastError instanceof Error ? lastError : new Error('Variation failed')
 }
 
+async function runVariationWorkerPool(
+  variationNumbers: number[],
+  parallelism: number,
+  shouldStop: () => Promise<boolean>,
+  processVariation: (variationNumber: number) => Promise<void>
+) {
+  let nextIndex = 0
+  let fatalError: unknown = null
+
+  const worker = async () => {
+    while (nextIndex < variationNumbers.length && fatalError === null) {
+      if (await shouldStop()) break
+      if (fatalError !== null) break
+
+      const variationNumber = variationNumbers[nextIndex]
+      nextIndex += 1
+
+      try {
+        await processVariation(variationNumber)
+      } catch (err) {
+        fatalError ??= err
+      }
+    }
+  }
+
+  const workerCount = Math.min(parallelism, variationNumbers.length)
+  await Promise.allSettled(
+    Array.from({ length: workerCount }, () => worker())
+  )
+
+  if (fatalError !== null) {
+    throw fatalError
+  }
+}
+
 function createShouldStopChecker(
   supabase: WorkerSupabase,
   job: Pick<ClaimedGenerationJobRecord, 'id' | 'started_at'>,
@@ -1113,6 +1148,35 @@ function createShouldStopChecker(
   }
 }
 
+async function processVariationAndPersistProgress(
+  supabase: WorkerSupabase,
+  job: ClaimedGenerationJobRecord,
+  variationNumber: number,
+  plan: VariationPlan,
+  recordedVariationNumbers: Set<number>,
+  resources: LoadedImageJobResources,
+  config: WorkerConfig,
+  progress: ProgressState,
+  progressPersister: ReturnType<typeof createProgressPersister>
+): Promise<boolean> {
+  try {
+    if (!recordedVariationNumbers.has(variationNumber)) {
+      await runVariationWithRetry(supabase, job, variationNumber, plan.promptSlug, resources, config)
+    }
+    progress.successCount += 1
+  } catch (err) {
+    progress.failCount += 1
+    progress.lastError = sanitizeWorkerErrorMessage(err, 'Variation failed')
+  }
+
+  progress.processed += 1
+  return progressPersister.persist({
+    successCount: progress.successCount,
+    failCount: progress.failCount,
+    lastError: progress.lastError,
+  })
+}
+
 async function processVariations(
   supabase: WorkerSupabase,
   job: ClaimedGenerationJobRecord,
@@ -1128,7 +1192,6 @@ async function processVariations(
     lastError: null,
   }
 
-  let nextIndex = 0
   const stopChecker = createShouldStopChecker(
     supabase,
     job,
@@ -1136,59 +1199,31 @@ async function processVariations(
     config.statusRefreshIntervalMs
   )
   const progressPersister = createProgressPersister(supabase, job, plan)
-  let fatalError: unknown = null
   let claimLost = false
 
-  const worker = async () => {
-    while (nextIndex < plan.variationNumbers.length && fatalError === null && !claimLost) {
-      if (await stopChecker.shouldStop()) {
-        break
-      }
-      if (fatalError !== null) {
-        break
-      }
-
-      const variationNumber = plan.variationNumbers[nextIndex]
-      nextIndex += 1
-
-      try {
-        if (!recordedVariationNumbers.has(variationNumber)) {
-          await runVariationWithRetry(supabase, job, variationNumber, plan.promptSlug, resources, config)
-        }
-        progress.successCount += 1
-      } catch (err) {
-        progress.failCount += 1
-        progress.lastError = sanitizeWorkerErrorMessage(err, 'Variation failed')
-      } finally {
-        progress.processed += 1
-        const persisted = await progressPersister.persist({
-          successCount: progress.successCount,
-          failCount: progress.failCount,
-          lastError: progress.lastError,
-        })
-        if (!persisted) {
-          // Cancellation or a newer claim made the conditional update a no-op.
-          // Stop assigning queued variations; in-flight work is still drained.
-          claimLost = true
-        }
+  await runVariationWorkerPool(
+    plan.variationNumbers,
+    config.parallelism,
+    async () => claimLost || stopChecker.shouldStop(),
+    async (variationNumber) => {
+      const persisted = await processVariationAndPersistProgress(
+        supabase,
+        job,
+        variationNumber,
+        plan,
+        recordedVariationNumbers,
+        resources,
+        config,
+        progress,
+        progressPersister
+      )
+      if (!persisted) {
+        // Cancellation or a newer claim made the conditional update a no-op.
+        // Stop assigning queued variations; in-flight work is still drained.
+        claimLost = true
       }
     }
-  }
-
-  const workerCount = Math.min(config.parallelism, plan.variationNumbers.length)
-  await Promise.allSettled(
-    Array.from({ length: workerCount }, async () => {
-      try {
-        await worker()
-      } catch (err) {
-        fatalError ??= err
-      }
-    })
   )
-
-  if (fatalError !== null) {
-    throw fatalError
-  }
 
   await progressPersister.flush()
 
