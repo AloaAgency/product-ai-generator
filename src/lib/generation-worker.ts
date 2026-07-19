@@ -139,6 +139,19 @@ type VariationProcessingResult = {
   claimLost: boolean
 }
 
+type GeneratedImageAsset = {
+  path: string
+  buffer: Buffer
+  mimeType: string
+  uploadFailureContext: string
+}
+
+type PreparedVariationAssets = {
+  image: GeneratedImageAsset
+  thumbnail: GeneratedImageAsset
+  preview: GeneratedImageAsset
+}
+
 const DEFAULT_TIME_BUDGET_MS = 760000
 const MAX_TIME_BUDGET_MS = 800000
 const DEFAULT_VARIATION_TIMEOUT_MS = 300000
@@ -876,6 +889,127 @@ function createProgressPersister(
   }
 }
 
+async function prepareVariationAssets(
+  job: GenerationJobRecord,
+  variationNumber: number,
+  promptSlug: string,
+  geminiApiKey: string | undefined,
+  referenceImages: Base64ReferenceImage[],
+  signal: AbortSignal
+): Promise<PreparedVariationAssets> {
+  const result = await generateGeminiImage({
+    prompt: job.final_prompt,
+    resolution: job.resolution as '2K' | '4K',
+    aspectRatio: job.aspect_ratio as '16:9' | '1:1' | '9:16',
+    referenceImages,
+    apiKey: geminiApiKey,
+    signal,
+  })
+
+  const imageBuffer = Buffer.from(result.base64Data, 'base64')
+  const extension = resolveExtension(result.mimeType)
+  const [thumbnail, preview] = await createThumbnailAndPreview(imageBuffer)
+  const storagePath = buildImageStoragePath(job.product_id, job.id, variationNumber, promptSlug, extension)
+
+  return {
+    image: {
+      path: storagePath,
+      buffer: imageBuffer,
+      mimeType: result.mimeType,
+      uploadFailureContext: 'Failed to upload generated image',
+    },
+    thumbnail: {
+      path: buildThumbnailPath(storagePath, thumbnail.extension),
+      buffer: thumbnail.buffer,
+      mimeType: thumbnail.mimeType,
+      uploadFailureContext: 'Failed to upload image thumbnail',
+    },
+    preview: {
+      path: buildPreviewPath(storagePath, preview.extension),
+      buffer: preview.buffer,
+      mimeType: preview.mimeType,
+      uploadFailureContext: 'Failed to upload image preview',
+    },
+  }
+}
+
+function listGeneratedImageAssets(assets: PreparedVariationAssets): GeneratedImageAsset[] {
+  return [assets.image, assets.thumbnail, assets.preview]
+}
+
+async function uploadGeneratedImageAssets(
+  supabase: WorkerSupabase,
+  assets: PreparedVariationAssets
+) {
+  const generatedAssets = listGeneratedImageAssets(assets)
+  const uploadResults = await Promise.allSettled(
+    generatedAssets.map((asset) => supabase.storage
+      .from('generated-images')
+      .upload(asset.path, asset.buffer, { contentType: asset.mimeType }))
+  )
+
+  const successfulUploads = generatedAssets.flatMap((asset, index) => {
+    const upload = uploadResults[index]
+    return upload?.status === 'fulfilled' && !upload.value.error ? [asset.path] : []
+  })
+  const failedUploadIndex = uploadResults.findIndex((upload) => (
+    upload.status === 'rejected' || Boolean(upload.value.error)
+  ))
+
+  if (failedUploadIndex === -1) return
+
+  await cleanupGeneratedImageAssets(supabase, successfulUploads)
+  const failedUpload = uploadResults[failedUploadIndex]
+  const failureMessage = failedUpload.status === 'rejected'
+    ? sanitizeWorkerErrorMessage(failedUpload.reason, 'upload request failed')
+    : failedUpload.value.error?.message || 'unknown upload failure'
+  throw new Error(`${generatedAssets[failedUploadIndex].uploadFailureContext}: ${failureMessage}`)
+}
+
+async function recordGeneratedImage(
+  supabase: WorkerSupabase,
+  job: GenerationJobRecord,
+  variationNumber: number,
+  assets: PreparedVariationAssets
+) {
+  const { error: insertError } = await supabase.from(T.generated_images).insert({
+    product_id: job.product_id,
+    job_id: job.id,
+    variation_number: variationNumber,
+    storage_path: assets.image.path,
+    thumb_storage_path: assets.thumbnail.path,
+    preview_storage_path: assets.preview.path,
+    mime_type: assets.image.mimeType,
+    file_size: assets.image.buffer.length,
+    approval_status: 'pending',
+  })
+
+  if (!insertError) return
+
+  if (isDuplicateGeneratedImageInsertError(insertError)) {
+    try {
+      const recorded = await fetchRecordedImageVariationNumbers(supabase, job, [variationNumber])
+      if (recorded.has(variationNumber)) {
+        return
+      }
+    } catch (err) {
+      // Fall through to the original insert error and cleanup path. A
+      // duplicate is only safe to treat as success after verification.
+      log.warn('Failed to verify duplicate generated image record', {
+        jobId: job.id,
+        variationNumber,
+        error: sanitizeWorkerErrorMessage(err, 'Duplicate verification failed'),
+      })
+    }
+  }
+
+  await cleanupGeneratedImageAssets(
+    supabase,
+    listGeneratedImageAssets(assets).map((asset) => asset.path)
+  )
+  throw new Error(`Failed to record generated image: ${insertError.message}`)
+}
+
 async function runVariation(
   supabase: WorkerSupabase,
   job: GenerationJobRecord,
@@ -889,92 +1023,16 @@ async function runVariation(
   const timeout = setTimeout(() => controller.abort(), variationTimeoutMs)
 
   try {
-    const result = await generateGeminiImage({
-      prompt: job.final_prompt,
-      resolution: job.resolution as '2K' | '4K',
-      aspectRatio: job.aspect_ratio as '16:9' | '1:1' | '9:16',
+    const assets = await prepareVariationAssets(
+      job,
+      variationNumber,
+      promptSlug,
+      geminiApiKey,
       referenceImages,
-      apiKey: geminiApiKey,
-      signal: controller.signal,
-    })
-
-    const imageBuffer = Buffer.from(result.base64Data, 'base64')
-    const extension = resolveExtension(result.mimeType)
-    const [thumbnail, preview] = await createThumbnailAndPreview(imageBuffer)
-
-    const storagePath = buildImageStoragePath(job.product_id, job.id, variationNumber, promptSlug, extension)
-    const thumbPath = buildThumbnailPath(storagePath, thumbnail.extension)
-    const previewPath = buildPreviewPath(storagePath, preview.extension)
-
-    const uploadResults = await Promise.allSettled([
-      supabase.storage
-        .from('generated-images')
-        .upload(storagePath, imageBuffer, { contentType: result.mimeType }),
-      supabase.storage
-        .from('generated-images')
-        .upload(thumbPath, thumbnail.buffer, { contentType: thumbnail.mimeType }),
-      supabase.storage
-        .from('generated-images')
-        .upload(previewPath, preview.buffer, { contentType: preview.mimeType }),
-    ])
-
-    const generatedPaths = [storagePath, thumbPath, previewPath]
-    const successfulUploads = generatedPaths.filter((_, index) => {
-      const upload = uploadResults[index]
-      return upload?.status === 'fulfilled' && !upload.value.error
-    })
-    const uploadErrors = uploadResults.map((upload) => {
-      if (upload.status === 'rejected') {
-        return sanitizeWorkerErrorMessage(upload.reason, 'upload request failed')
-      }
-      return upload.value.error?.message ?? null
-    })
-    const [imageUploadError, thumbUploadError, previewUploadError] = uploadErrors
-
-    if (imageUploadError || thumbUploadError || previewUploadError) {
-      await cleanupGeneratedImageAssets(supabase, successfulUploads)
-
-      if (imageUploadError) {
-        throw new Error(`Failed to upload generated image: ${imageUploadError}`)
-      }
-      if (thumbUploadError) {
-        throw new Error(`Failed to upload image thumbnail: ${thumbUploadError}`)
-      }
-      throw new Error(`Failed to upload image preview: ${previewUploadError || 'unknown upload failure'}`)
-    }
-
-    const { error: insertError } = await supabase.from(T.generated_images).insert({
-      product_id: job.product_id,
-      job_id: job.id,
-      variation_number: variationNumber,
-      storage_path: storagePath,
-      thumb_storage_path: thumbPath,
-      preview_storage_path: previewPath,
-      mime_type: result.mimeType,
-      file_size: imageBuffer.length,
-      approval_status: 'pending',
-    })
-
-    if (insertError) {
-      if (isDuplicateGeneratedImageInsertError(insertError)) {
-        try {
-          const recorded = await fetchRecordedImageVariationNumbers(supabase, job, [variationNumber])
-          if (recorded.has(variationNumber)) {
-            return
-          }
-        } catch (err) {
-          // Fall through to the original insert error and cleanup path. A
-          // duplicate is only safe to treat as success after verification.
-          log.warn('Failed to verify duplicate generated image record', {
-            jobId: job.id,
-            variationNumber,
-            error: sanitizeWorkerErrorMessage(err, 'Duplicate verification failed'),
-          })
-        }
-      }
-      await cleanupGeneratedImageAssets(supabase, generatedPaths)
-      throw new Error(`Failed to record generated image: ${insertError.message}`)
-    }
+      controller.signal
+    )
+    await uploadGeneratedImageAssets(supabase, assets)
+    await recordGeneratedImage(supabase, job, variationNumber, assets)
   } finally {
     clearTimeout(timeout)
   }
