@@ -359,6 +359,39 @@ async function getLatestJobResult(supabase: WorkerSupabase, jobId: string): Prom
   return createWorkerResult(jobId, data?.status || 'running', counts)
 }
 
+async function persistVideoJobOutcome(
+  supabase: WorkerSupabase,
+  job: ClaimedGenerationJobRecord,
+  outcome: {
+    status: 'completed' | 'failed'
+    counts: JobCounts
+    updates: Record<string, unknown>
+    context: string
+  }
+): Promise<WorkerResult> {
+  const updated = await updateGenerationJob(
+    supabase,
+    job.id,
+    {
+      ...outcome.updates,
+      status: outcome.status,
+      completed_at: new Date().toISOString(),
+    },
+    {
+      expectedStatuses: ['running'],
+      expectedStartedAt: job.started_at,
+      allowNoop: true,
+      context: outcome.context,
+    }
+  )
+
+  if (!updated) {
+    return resolveJobUpdateConflict(supabase, job.id, 1)
+  }
+
+  return createWorkerResult(job.id, outcome.status, outcome.counts, 1)
+}
+
 async function processVideoJob(
   job: ClaimedGenerationJobRecord,
   supabase: WorkerSupabase
@@ -371,30 +404,19 @@ async function processVideoJob(
 
   if (!job.scene_id) {
     const failedCounts = { ...counts, failed: counts.failed + 1 }
-    const updated = await updateGenerationJob(
+    return persistVideoJobOutcome(
       supabase,
-      job.id,
+      job,
       {
         status: 'failed',
-        failed_count: failedCounts.failed,
-        error_message: 'Video job missing scene_id',
-        completed_at: new Date().toISOString(),
-      },
-      {
-        expectedStatuses: ['running'],
-        expectedStartedAt: job.started_at,
-        allowNoop: true,
+        counts: failedCounts,
+        updates: {
+          failed_count: failedCounts.failed,
+          error_message: 'Video job missing scene_id',
+        },
         context: 'Failed to persist missing scene_id failure',
       }
     )
-    if (!updated) {
-      return resolveJobUpdateConflict(
-        supabase,
-        job.id,
-        1
-      )
-    }
-    return createWorkerResult(job.id, 'failed', failedCounts, 1)
   }
 
   try {
@@ -406,57 +428,35 @@ async function processVideoJob(
       return createWorkerResult(job.id, 'cancelled', counts)
     }
     const failedCounts = { ...counts, failed: counts.failed + 1 }
-    const updated = await updateGenerationJob(
+    return persistVideoJobOutcome(
       supabase,
-      job.id,
+      job,
       {
-        failed_count: failedCounts.failed,
         status: 'failed',
-        error_message: sanitizeWorkerErrorMessage(err, 'Video generation failed'),
-        completed_at: new Date().toISOString(),
-      },
-      {
-        expectedStatuses: ['running'],
-        expectedStartedAt: job.started_at,
-        allowNoop: true,
+        counts: failedCounts,
+        updates: {
+          failed_count: failedCounts.failed,
+          error_message: sanitizeWorkerErrorMessage(err, 'Video generation failed'),
+        },
         context: 'Failed to persist video generation failure',
       }
     )
-    if (!updated) {
-      return resolveJobUpdateConflict(
-        supabase,
-        job.id,
-        1
-      )
-    }
-    return createWorkerResult(job.id, 'failed', failedCounts, 1)
   }
 
   const completedCounts = { ...counts, completed: counts.completed + 1 }
-  const updated = await updateGenerationJob(
+  return persistVideoJobOutcome(
     supabase,
-    job.id,
+    job,
     {
-      completed_count: completedCounts.completed,
       status: 'completed',
-      error_message: null,
-      completed_at: new Date().toISOString(),
-    },
-    {
-      expectedStatuses: ['running'],
-      expectedStartedAt: job.started_at,
-      allowNoop: true,
+      counts: completedCounts,
+      updates: {
+        completed_count: completedCounts.completed,
+        error_message: null,
+      },
       context: 'Failed to persist completed video generation job',
     }
   )
-  if (!updated) {
-    return resolveJobUpdateConflict(
-      supabase,
-      job.id,
-      1
-    )
-  }
-  return createWorkerResult(job.id, 'completed', completedCounts, 1)
 }
 
 async function fetchProductRecord(supabase: WorkerSupabase, productId: string): Promise<ProductRecord> {
