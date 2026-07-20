@@ -173,19 +173,32 @@ function createTimeoutSignal(timeoutMs: number) {
   }
 }
 
-async function fetchWithTimeout(
+async function fetchWithTimeout<T>(
   input: string | URL | Request,
   init: RequestInit,
   timeoutMs: number,
-  errorContext: string
-) {
+  errorContext: string,
+  consumeResponse: (response: Response) => Promise<T>
+): Promise<T> {
   const { signal, clear } = createTimeoutSignal(timeoutMs)
+  let responseReceived = false
+
   try {
-    return await fetch(input, { ...init, signal })
+    const response = await fetch(input, { ...init, signal })
+    responseReceived = true
+    // Keep the timeout active until the response body has been consumed. A
+    // fetch promise resolves as soon as headers arrive, so clearing the timer
+    // before response.json()/arrayBuffer()/text() leaves stalled bodies able
+    // to hold a worker open indefinitely.
+    return await consumeResponse(response)
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error(`${errorContext} timed out after ${Math.round(timeoutMs / 1000)}s`)
     }
+
+    // Errors raised while validating or parsing a received response already
+    // contain the provider-specific context and should not be wrapped again.
+    if (responseReceived) throw error
 
     throw createExternalServiceError(errorContext, error instanceof Error ? error.message : String(error))
   } finally {
@@ -219,34 +232,42 @@ function getRetryDelayMs(attempt: number) {
   return EXTERNAL_FETCH_RETRY_BASE_MS * Math.pow(2, attempt)
 }
 
-async function fetchIdempotentWithRetry(
+async function fetchIdempotentWithRetry<T>(
   input: string | URL | Request,
   init: RequestInit,
   timeoutMs: number,
   errorContext: string,
+  consumeResponse: (response: Response) => Promise<T>,
   options: {
     statusErrorContext?: string
   } = {}
-) {
+): Promise<T> {
   let lastError: unknown = null
 
   for (let attempt = 0; attempt <= DEFAULT_EXTERNAL_FETCH_RETRIES; attempt += 1) {
+    let retryableStatus = false
+
     try {
-      const response = await fetchWithTimeout(input, init, timeoutMs, errorContext)
-      if (response.ok) return response
+      return await fetchWithTimeout(
+        input,
+        init,
+        timeoutMs,
+        errorContext,
+        async (response) => {
+          if (response.ok) return consumeResponse(response)
 
-      const error = createExternalServiceError(
-        `${options.statusErrorContext || errorContext} (${response.status})`,
-        await getResponseErrorMessage(response)
+          retryableStatus = shouldRetryExternalStatus(response.status)
+          throw createExternalServiceError(
+            `${options.statusErrorContext || errorContext} (${response.status})`,
+            await getResponseErrorMessage(response)
+          )
+        }
       )
-
-      if (attempt >= DEFAULT_EXTERNAL_FETCH_RETRIES || !shouldRetryExternalStatus(response.status)) {
-        throw error
-      }
-
-      lastError = error
     } catch (error) {
-      if (attempt >= DEFAULT_EXTERNAL_FETCH_RETRIES || !shouldRetryExternalError(error)) {
+      if (
+        attempt >= DEFAULT_EXTERNAL_FETCH_RETRIES ||
+        (!retryableStatus && !shouldRetryExternalError(error))
+      ) {
         throw error
       }
 
@@ -334,27 +355,28 @@ async function loadFrameRefsByImageId(
 }
 
 async function fetchFrameBytes(frameRef: FrameRef, label: 'start' | 'end') {
-  const response = await fetchIdempotentWithRetry(
+  return fetchIdempotentWithRetry(
     frameRef.url,
     {},
     getConfiguredTimeout(process.env.VIDEO_FRAME_FETCH_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
-    `Failed to fetch ${label} frame`
+    `Failed to fetch ${label} frame`,
+    async (response) => {
+      const contentLength = Number(response.headers.get('content-length'))
+      if (Number.isFinite(contentLength) && contentLength > MAX_FRAME_BYTES) {
+        throw new Error(`${label[0].toUpperCase()}${label.slice(1)} frame exceeds ${MAX_FRAME_BYTES} bytes`)
+      }
+
+      const buffer = Buffer.from(await response.arrayBuffer())
+      if (buffer.length > MAX_FRAME_BYTES) {
+        throw new Error(`${label[0].toUpperCase()}${label.slice(1)} frame exceeds ${MAX_FRAME_BYTES} bytes`)
+      }
+
+      return {
+        mimeType: frameRef.mimeType || getResponseMimeType(response, 'image/png'),
+        bytesBase64Encoded: buffer.toString('base64'),
+      }
+    }
   )
-
-  const contentLength = Number(response.headers.get('content-length'))
-  if (Number.isFinite(contentLength) && contentLength > MAX_FRAME_BYTES) {
-    throw new Error(`${label[0].toUpperCase()}${label.slice(1)} frame exceeds ${MAX_FRAME_BYTES} bytes`)
-  }
-
-  const buffer = Buffer.from(await response.arrayBuffer())
-  if (buffer.length > MAX_FRAME_BYTES) {
-    throw new Error(`${label[0].toUpperCase()}${label.slice(1)} frame exceeds ${MAX_FRAME_BYTES} bytes`)
-  }
-
-  return {
-    mimeType: frameRef.mimeType || getResponseMimeType(response, 'image/png'),
-    bytesBase64Encoded: buffer.toString('base64'),
-  }
 }
 
 // Thrown when the generation job was cancelled by the user while a video was
@@ -392,15 +414,14 @@ export async function pollVeoOperation(
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
     }
 
-    const statusResp = await fetchIdempotentWithRetry(
+    operation = await fetchIdempotentWithRetry(
       `${baseUrl}/${operationName}`,
       { headers: { 'x-goog-api-key': apiKey } },
       getConfiguredTimeout(process.env.VEO_REQUEST_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
       'Veo operation polling',
+      (response) => parseJsonResponse(response, 'Veo operation polling'),
       { statusErrorContext: 'Veo operation error' }
     )
-
-    operation = await parseJsonResponse(statusResp, 'Veo operation polling')
   }
 
   return operation
@@ -497,7 +518,7 @@ async function startVeoOperation(
   config: VeoConfig,
   payload: Record<string, unknown>
 ): Promise<string> {
-  const response = await fetchWithTimeout(
+  return fetchWithTimeout(
     `${config.baseUrl}/models/${config.model}:predictLongRunning`,
     {
       method: 'POST',
@@ -505,19 +526,20 @@ async function startVeoOperation(
       body: JSON.stringify(payload),
     },
     getConfiguredTimeout(process.env.VEO_REQUEST_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
-    'Veo API request'
+    'Veo API request',
+    async (response) => {
+      if (!response.ok) {
+        const message = await getResponseErrorMessage(response)
+        throw createExternalServiceError(`Veo API error (${response.status})`, message)
+      }
+
+      const operation = await parseJsonResponse<Record<string, unknown>>(response, 'Veo API request')
+      const operationName = typeof operation?.name === 'string' ? operation.name : null
+      if (!operationName) throw new Error('No operation name in Veo response')
+
+      return operationName
+    }
   )
-
-  if (!response.ok) {
-    const message = await getResponseErrorMessage(response)
-    throw createExternalServiceError(`Veo API error (${response.status})`, message)
-  }
-
-  const operation = await parseJsonResponse<Record<string, unknown>>(response, 'Veo API request')
-  const operationName = typeof operation?.name === 'string' ? operation.name : null
-  if (!operationName) throw new Error('No operation name in Veo response')
-
-  return operationName
 }
 
 function getVeoOperationErrorMessage(error: unknown) {
@@ -579,18 +601,19 @@ export function getVeoVideoUri(operation: Record<string, unknown>, baseUrl: stri
 }
 
 async function downloadVeoVideo(videoUri: string, apiKey: string) {
-  const videoResp = await fetchIdempotentWithRetry(
+  return fetchIdempotentWithRetry(
     videoUri,
     {
       headers: { 'x-goog-api-key': apiKey },
       redirect: 'follow',
     },
     getConfiguredTimeout(process.env.VEO_DOWNLOAD_TIMEOUT_MS, DEFAULT_DOWNLOAD_TIMEOUT_MS),
-    'Veo video download'
+    'Veo video download',
+    async (response) => {
+      const videoBuffer = Buffer.from(await response.arrayBuffer())
+      return getBufferResult(videoBuffer, getResponseMimeType(response, 'video/mp4'))
+    }
   )
-
-  const videoBuffer = Buffer.from(await videoResp.arrayBuffer())
-  return getBufferResult(videoBuffer, getResponseMimeType(videoResp, 'video/mp4'))
 }
 
 async function loadSceneOrThrow(
@@ -959,7 +982,7 @@ async function generateWithLtx(
   const config = getLtxConfig(settings)
   const { endpoint, payload } = buildLtxPayload(prompt, frameRefs, settings, config)
 
-  const response = await fetchWithTimeout(
+  return fetchWithTimeout(
     `${config.baseUrl}/${endpoint}`,
     {
       method: 'POST',
@@ -970,14 +993,15 @@ async function generateWithLtx(
       body: JSON.stringify(payload),
     },
     config.requestTimeoutMs,
-    'LTX API request'
+    'LTX API request',
+    async (response) => {
+      if (!response.ok) {
+        const message = await getResponseErrorMessage(response)
+        throw createExternalServiceError(`LTX API error (${response.status})`, message)
+      }
+
+      const videoBuffer = Buffer.from(await response.arrayBuffer())
+      return getBufferResult(videoBuffer, getResponseMimeType(response, 'video/mp4'))
+    }
   )
-
-  if (!response.ok) {
-    const message = await getResponseErrorMessage(response)
-    throw createExternalServiceError(`LTX API error (${response.status})`, message)
-  }
-
-  const videoBuffer = Buffer.from(await response.arrayBuffer())
-  return getBufferResult(videoBuffer, getResponseMimeType(response, 'video/mp4'))
 }
