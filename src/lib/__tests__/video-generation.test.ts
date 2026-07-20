@@ -154,6 +154,41 @@ describe('buildVeoRequestParts', () => {
     ).rejects.toThrow(/Start frame exceeds 20971520 bytes/)
   })
 
+  it('keeps frame timeouts active through body reads and retries stalled bodies', async () => {
+    const fetchMock = vi.spyOn(global, 'fetch').mockImplementation(async (_input, init) => {
+      const signal = init?.signal
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({ 'content-type': 'image/png' }),
+        arrayBuffer: async () => {
+          if (!signal?.aborted) throw new Error('expected the response body timeout to fire')
+          throw new DOMException('The operation was aborted.', 'AbortError')
+        },
+      } as unknown as Response
+    })
+    vi.spyOn(global, 'setTimeout').mockImplementation(((
+      callback: (...args: unknown[]) => void
+    ) => {
+      callback()
+      return 0 as unknown as ReturnType<typeof setTimeout>
+    }) as typeof setTimeout)
+
+    await withEnv({ VIDEO_FRAME_FETCH_TIMEOUT_MS: '1000' }, async () => {
+      await expect(
+        buildVeoRequestParts(
+          'Hero shot',
+          { start: { url: 'https://example.com/stalled.png', mimeType: 'image/png' } },
+          { resolution: '720p', durationSeconds: 8 },
+          'veo-3.1-generate-preview'
+        )
+      ).rejects.toThrow(/Failed to fetch start frame timed out after 1s/)
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
   it('ignores an end frame without a start frame and skips unsupported audio flags', async () => {
     const warnings: string[] = []
     vi.spyOn(global, 'fetch').mockImplementation(async () => {

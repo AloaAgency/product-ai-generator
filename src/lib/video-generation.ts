@@ -96,6 +96,7 @@ type SceneGenerationContext = {
   frameRefs: FrameRefs
   videoSettings: SceneVideoSettings
 }
+type JobCancellationChecker = (force?: boolean) => Promise<boolean>
 
 const isVeoModel = (model: string) => model.toLowerCase().startsWith('veo')
 
@@ -173,19 +174,32 @@ function createTimeoutSignal(timeoutMs: number) {
   }
 }
 
-async function fetchWithTimeout(
+async function fetchWithTimeout<T>(
   input: string | URL | Request,
   init: RequestInit,
   timeoutMs: number,
-  errorContext: string
-) {
+  errorContext: string,
+  consumeResponse: (response: Response) => Promise<T>
+): Promise<T> {
   const { signal, clear } = createTimeoutSignal(timeoutMs)
+  let responseReceived = false
+
   try {
-    return await fetch(input, { ...init, signal })
+    const response = await fetch(input, { ...init, signal })
+    responseReceived = true
+    // Keep the timeout active until the response body has been consumed. A
+    // fetch promise resolves as soon as headers arrive, so clearing the timer
+    // before response.json()/arrayBuffer()/text() leaves stalled bodies able
+    // to hold a worker open indefinitely.
+    return await consumeResponse(response)
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error(`${errorContext} timed out after ${Math.round(timeoutMs / 1000)}s`)
     }
+
+    // Errors raised while validating or parsing a received response already
+    // contain the provider-specific context and should not be wrapped again.
+    if (responseReceived) throw error
 
     throw createExternalServiceError(errorContext, error instanceof Error ? error.message : String(error))
   } finally {
@@ -219,34 +233,42 @@ function getRetryDelayMs(attempt: number) {
   return EXTERNAL_FETCH_RETRY_BASE_MS * Math.pow(2, attempt)
 }
 
-async function fetchIdempotentWithRetry(
+async function fetchIdempotentWithRetry<T>(
   input: string | URL | Request,
   init: RequestInit,
   timeoutMs: number,
   errorContext: string,
+  consumeResponse: (response: Response) => Promise<T>,
   options: {
     statusErrorContext?: string
   } = {}
-) {
+): Promise<T> {
   let lastError: unknown = null
 
   for (let attempt = 0; attempt <= DEFAULT_EXTERNAL_FETCH_RETRIES; attempt += 1) {
+    let retryableStatus = false
+
     try {
-      const response = await fetchWithTimeout(input, init, timeoutMs, errorContext)
-      if (response.ok) return response
+      return await fetchWithTimeout(
+        input,
+        init,
+        timeoutMs,
+        errorContext,
+        async (response) => {
+          if (response.ok) return consumeResponse(response)
 
-      const error = createExternalServiceError(
-        `${options.statusErrorContext || errorContext} (${response.status})`,
-        await getResponseErrorMessage(response)
+          retryableStatus = shouldRetryExternalStatus(response.status)
+          throw createExternalServiceError(
+            `${options.statusErrorContext || errorContext} (${response.status})`,
+            await getResponseErrorMessage(response)
+          )
+        }
       )
-
-      if (attempt >= DEFAULT_EXTERNAL_FETCH_RETRIES || !shouldRetryExternalStatus(response.status)) {
-        throw error
-      }
-
-      lastError = error
     } catch (error) {
-      if (attempt >= DEFAULT_EXTERNAL_FETCH_RETRIES || !shouldRetryExternalError(error)) {
+      if (
+        attempt >= DEFAULT_EXTERNAL_FETCH_RETRIES ||
+        (!retryableStatus && !shouldRetryExternalError(error))
+      ) {
         throw error
       }
 
@@ -334,27 +356,28 @@ async function loadFrameRefsByImageId(
 }
 
 async function fetchFrameBytes(frameRef: FrameRef, label: 'start' | 'end') {
-  const response = await fetchIdempotentWithRetry(
+  return fetchIdempotentWithRetry(
     frameRef.url,
     {},
     getConfiguredTimeout(process.env.VIDEO_FRAME_FETCH_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
-    `Failed to fetch ${label} frame`
+    `Failed to fetch ${label} frame`,
+    async (response) => {
+      const contentLength = Number(response.headers.get('content-length'))
+      if (Number.isFinite(contentLength) && contentLength > MAX_FRAME_BYTES) {
+        throw new Error(`${label[0].toUpperCase()}${label.slice(1)} frame exceeds ${MAX_FRAME_BYTES} bytes`)
+      }
+
+      const buffer = Buffer.from(await response.arrayBuffer())
+      if (buffer.length > MAX_FRAME_BYTES) {
+        throw new Error(`${label[0].toUpperCase()}${label.slice(1)} frame exceeds ${MAX_FRAME_BYTES} bytes`)
+      }
+
+      return {
+        mimeType: frameRef.mimeType || getResponseMimeType(response, 'image/png'),
+        bytesBase64Encoded: buffer.toString('base64'),
+      }
+    }
   )
-
-  const contentLength = Number(response.headers.get('content-length'))
-  if (Number.isFinite(contentLength) && contentLength > MAX_FRAME_BYTES) {
-    throw new Error(`${label[0].toUpperCase()}${label.slice(1)} frame exceeds ${MAX_FRAME_BYTES} bytes`)
-  }
-
-  const buffer = Buffer.from(await response.arrayBuffer())
-  if (buffer.length > MAX_FRAME_BYTES) {
-    throw new Error(`${label[0].toUpperCase()}${label.slice(1)} frame exceeds ${MAX_FRAME_BYTES} bytes`)
-  }
-
-  return {
-    mimeType: frameRef.mimeType || getResponseMimeType(response, 'image/png'),
-    bytesBase64Encoded: buffer.toString('base64'),
-  }
 }
 
 // Thrown when the generation job was cancelled by the user while a video was
@@ -373,7 +396,7 @@ export async function pollVeoOperation(
   apiKey: string,
   pollIntervalMs: number,
   timeoutMs: number,
-  shouldCancel?: () => Promise<boolean>
+  shouldCancel?: JobCancellationChecker
 ) {
   const startedAt = Date.now()
   let operation: Record<string, unknown> | null = null
@@ -392,15 +415,14 @@ export async function pollVeoOperation(
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
     }
 
-    const statusResp = await fetchIdempotentWithRetry(
+    operation = await fetchIdempotentWithRetry(
       `${baseUrl}/${operationName}`,
       { headers: { 'x-goog-api-key': apiKey } },
       getConfiguredTimeout(process.env.VEO_REQUEST_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
       'Veo operation polling',
+      (response) => parseJsonResponse(response, 'Veo operation polling'),
       { statusErrorContext: 'Veo operation error' }
     )
-
-    operation = await parseJsonResponse(statusResp, 'Veo operation polling')
   }
 
   return operation
@@ -497,7 +519,7 @@ async function startVeoOperation(
   config: VeoConfig,
   payload: Record<string, unknown>
 ): Promise<string> {
-  const response = await fetchWithTimeout(
+  return fetchWithTimeout(
     `${config.baseUrl}/models/${config.model}:predictLongRunning`,
     {
       method: 'POST',
@@ -505,19 +527,20 @@ async function startVeoOperation(
       body: JSON.stringify(payload),
     },
     getConfiguredTimeout(process.env.VEO_REQUEST_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS),
-    'Veo API request'
+    'Veo API request',
+    async (response) => {
+      if (!response.ok) {
+        const message = await getResponseErrorMessage(response)
+        throw createExternalServiceError(`Veo API error (${response.status})`, message)
+      }
+
+      const operation = await parseJsonResponse<Record<string, unknown>>(response, 'Veo API request')
+      const operationName = typeof operation?.name === 'string' ? operation.name : null
+      if (!operationName) throw new Error('No operation name in Veo response')
+
+      return operationName
+    }
   )
-
-  if (!response.ok) {
-    const message = await getResponseErrorMessage(response)
-    throw createExternalServiceError(`Veo API error (${response.status})`, message)
-  }
-
-  const operation = await parseJsonResponse<Record<string, unknown>>(response, 'Veo API request')
-  const operationName = typeof operation?.name === 'string' ? operation.name : null
-  if (!operationName) throw new Error('No operation name in Veo response')
-
-  return operationName
 }
 
 function getVeoOperationErrorMessage(error: unknown) {
@@ -579,18 +602,19 @@ export function getVeoVideoUri(operation: Record<string, unknown>, baseUrl: stri
 }
 
 async function downloadVeoVideo(videoUri: string, apiKey: string) {
-  const videoResp = await fetchIdempotentWithRetry(
+  return fetchIdempotentWithRetry(
     videoUri,
     {
       headers: { 'x-goog-api-key': apiKey },
       redirect: 'follow',
     },
     getConfiguredTimeout(process.env.VEO_DOWNLOAD_TIMEOUT_MS, DEFAULT_DOWNLOAD_TIMEOUT_MS),
-    'Veo video download'
+    'Veo video download',
+    async (response) => {
+      const videoBuffer = Buffer.from(await response.arrayBuffer())
+      return getBufferResult(videoBuffer, getResponseMimeType(response, 'video/mp4'))
+    }
   )
-
-  const videoBuffer = Buffer.from(await videoResp.arrayBuffer())
-  return getBufferResult(videoBuffer, getResponseMimeType(videoResp, 'video/mp4'))
 }
 
 async function loadSceneOrThrow(
@@ -676,6 +700,17 @@ async function resolveFrameRefs(
   const endFrameRef = endFrameImageId
     ? frameRefsByImageId.get(endFrameImageId)
     : undefined
+
+  // A configured frame is part of the user's generation request. Silently
+  // dropping a deleted image or a missing signed URL changes image-to-video
+  // into text-to-video (and can change Veo duration constraints), so fail
+  // before contacting the provider instead.
+  if (scene.start_frame_image_id && !startFrameRef) {
+    throw new Error('Configured start frame image is unavailable')
+  }
+  if (endFrameImageId && !endFrameRef) {
+    throw new Error('Configured end frame image is unavailable')
+  }
 
   return {
     ...(startFrameRef ? { start: startFrameRef } : {}),
@@ -812,9 +847,9 @@ function createJobCancellationChecker(
   let lastCheckAt = 0
   let cancelled = false
 
-  return async () => {
+  return async (force = false) => {
     if (cancelled) return true
-    if (Date.now() - lastCheckAt < minIntervalMs) return cancelled
+    if (!force && Date.now() - lastCheckAt < minIntervalMs) return cancelled
 
     lastCheckAt = Date.now()
     const { data, error } = await supabase
@@ -832,6 +867,15 @@ function createJobCancellationChecker(
   }
 }
 
+async function throwIfVideoJobCancelled(
+  shouldCancel: JobCancellationChecker | undefined,
+  force = false
+) {
+  if (shouldCancel && await shouldCancel(force)) {
+    throw new VideoJobCancelledError()
+  }
+}
+
 export async function generateSceneVideo(
   productId: string,
   sceneId: string,
@@ -846,6 +890,10 @@ export async function generateSceneVideo(
   const isVeo = isVeoModel(resolvedModel)
   const shouldCancel = jobId ? createJobCancellationChecker(supabase, jobId) : undefined
 
+  // Check after context loading but before billing either provider. LTX does
+  // not expose a poll loop, so this is its only pre-request cancellation gate.
+  await throwIfVideoJobCancelled(shouldCancel, true)
+
   // Generate video
   let result: VideoGenerationResult
 
@@ -857,16 +905,25 @@ export async function generateSceneVideo(
     throw new Error(`Unsupported model: ${resolvedModel}`)
   }
 
-  const storagePath = await uploadGeneratedVideo(
-    supabase,
-    productId,
-    sceneId,
-    scene.motion_prompt,
-    result
-  )
-  const thumbStoragePath = await uploadVideoThumbnail(supabase, storagePath, result.buffer)
+  // A cancellation can race the final provider response. Force a fresh status
+  // read before persisting anything, including for synchronous LTX requests.
+  await throwIfVideoJobCancelled(shouldCancel, true)
 
+  let storagePath: string | null = null
+  let thumbStoragePath: string | null = null
   try {
+    storagePath = await uploadGeneratedVideo(
+      supabase,
+      productId,
+      sceneId,
+      scene.motion_prompt,
+      result
+    )
+    await throwIfVideoJobCancelled(shouldCancel, true)
+
+    thumbStoragePath = await uploadVideoThumbnail(supabase, storagePath, result.buffer)
+    await throwIfVideoJobCancelled(shouldCancel, true)
+
     return await createGeneratedVideoRecord(supabase, scene, productId, jobId, storagePath, thumbStoragePath, result)
   } catch (error) {
     await cleanupUploadedVideoAssets(supabase, [storagePath, thumbStoragePath])
@@ -883,7 +940,7 @@ async function generateWithVeo3(
   frameRefs: FrameRefs,
   settings: SceneVideoSettings,
   apiKeyOverride?: string | null,
-  shouldCancel?: () => Promise<boolean>
+  shouldCancel?: JobCancellationChecker
 ): Promise<VideoGenerationResult> {
   const config = getVeoConfig(apiKeyOverride)
   const { instance, parameters } = await buildVeoRequestParts(prompt, frameRefs, settings, config.model)
@@ -959,7 +1016,7 @@ async function generateWithLtx(
   const config = getLtxConfig(settings)
   const { endpoint, payload } = buildLtxPayload(prompt, frameRefs, settings, config)
 
-  const response = await fetchWithTimeout(
+  return fetchWithTimeout(
     `${config.baseUrl}/${endpoint}`,
     {
       method: 'POST',
@@ -970,14 +1027,15 @@ async function generateWithLtx(
       body: JSON.stringify(payload),
     },
     config.requestTimeoutMs,
-    'LTX API request'
+    'LTX API request',
+    async (response) => {
+      if (!response.ok) {
+        const message = await getResponseErrorMessage(response)
+        throw createExternalServiceError(`LTX API error (${response.status})`, message)
+      }
+
+      const videoBuffer = Buffer.from(await response.arrayBuffer())
+      return getBufferResult(videoBuffer, getResponseMimeType(response, 'video/mp4'))
+    }
   )
-
-  if (!response.ok) {
-    const message = await getResponseErrorMessage(response)
-    throw createExternalServiceError(`LTX API error (${response.status})`, message)
-  }
-
-  const videoBuffer = Buffer.from(await response.arrayBuffer())
-  return getBufferResult(videoBuffer, getResponseMimeType(response, 'video/mp4'))
 }
