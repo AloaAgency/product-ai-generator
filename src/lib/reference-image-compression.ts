@@ -46,8 +46,14 @@ function isRetriableStorageError(message: string | null | undefined): boolean {
 /**
  * Run a Supabase operation that resolves to `{ error }`, retrying with linear
  * backoff while the error looks transient. Thrown errors (e.g. a network
- * exception before a response is formed) are treated the same way. Returns the
- * final result (successful or not) so existing error-mapping logic is unchanged.
+ * exception before a response is formed) are treated the same way, and a
+ * terminal exception is converted into an `{ error }` result rather than
+ * rethrown: every caller in this module maps error results into a
+ * CompressionResult, and the batch routes rely on that no-throw contract to
+ * keep one bad item from aborting a whole mapWithConcurrency pool (a rethrow
+ * at the db-update stage would also skip the orphaned-upload cleanup below).
+ * Returns the final result (successful or not) so existing error-mapping
+ * logic is unchanged.
  */
 async function withStorageRetry<TResult extends { error: { message?: string } | null }>(
   op: () => PromiseLike<TResult>,
@@ -74,7 +80,11 @@ async function withStorageRetry<TResult extends { error: { message?: string } | 
         await sleep(STORAGE_RETRY_BASE_MS * (attempt + 1))
         continue
       }
-      throw err
+      // Terminal exception: synthesize an error result so callers flow through
+      // the same failure mapping as a returned `{ error }`. `data` is left
+      // undefined, which download-style call sites already treat as a failure.
+      logger.warn(`${label}: terminal exception: ${redactSensitiveText(message)}`)
+      return { error: { message } } as unknown as TResult
     }
   }
   // Unreachable in practice: the loop always returns on the final attempt.

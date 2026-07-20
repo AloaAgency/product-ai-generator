@@ -463,6 +463,92 @@ describe('processReferenceImageCompression — transient-error retries', () => {
 })
 
 // ---------------------------------------------------------------------------
+// No-throw contract — storage-client exceptions become error results
+//
+// The batch compress routes run this function through mapWithConcurrency and
+// rely on failures being reported via the result's `error` field: a rethrow
+// would abort the whole pool. These tests pin that contract for exceptions
+// (as opposed to `{ error }` results) thrown by the storage client.
+// ---------------------------------------------------------------------------
+
+describe('processReferenceImageCompression — no-throw contract on storage exceptions', () => {
+  const compressedResult = {
+    buffer: Buffer.from('compressed-webp'),
+    mimeType: 'image/webp',
+    extension: 'webp',
+    originalSize: 200,
+    compressedSize: 50,
+    wasCompressed: true,
+  }
+
+  it('resolves to an error result when download throws a non-retriable exception', async () => {
+    mockDownload.mockRejectedValue(new Error('unexpected boom'))
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(1)
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('unexpected boom')
+  })
+
+  it('resolves to an error result when a retriable download exception persists past max attempts', async () => {
+    mockDownload.mockRejectedValue(new TypeError('fetch failed'))
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(3)
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('fetch failed')
+  })
+
+  it('retries a retriable download exception and succeeds on a later attempt', async () => {
+    mockDownload
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce({ data: makeBlob('png-data'), error: null })
+    mockCompress.mockResolvedValue({
+      ...compressedResult,
+      originalSize: 8,
+      compressedSize: 8,
+      wasCompressed: false,
+    })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(2)
+    expect(result.error).toBeUndefined()
+  })
+
+  it('resolves to an error result (no DB update) when upload throws', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('big-png'), error: null })
+    mockCompress.mockResolvedValue(compressedResult)
+    mockUpload.mockRejectedValue(new Error('upload exploded'))
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('upload exploded')
+    expect(mockDbUpdate).not.toHaveBeenCalled()
+    expect(mockRemove).not.toHaveBeenCalled()
+  })
+
+  it('cleans up the orphaned upload when the DB update throws after a successful upload', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('big-png'), error: null })
+    mockCompress.mockResolvedValue(compressedResult)
+    mockUpload.mockResolvedValue({ error: null })
+    mockDbUpdate.mockRejectedValue(new Error('db connection lost'))
+    mockRemove.mockResolvedValue({ error: null })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, 'org/product/ref-image.png')
+
+    // The exception flows through the same path as a returned dbError:
+    // the unreachable compressed copy is removed, and the failure is reported.
+    expect(mockRemove).toHaveBeenCalledWith(['org/product/ref-image.webp'])
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('db connection lost')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Extension replacement logic — storage path variations
 // ---------------------------------------------------------------------------
 
