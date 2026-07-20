@@ -136,7 +136,9 @@ export const buildPreviewPath = (storagePath: string, extension: string): string
 
 // Hard ceiling applied before any Sharp pipeline runs. Prevents memory
 // exhaustion if upstream size limits (e.g. multipart validation) are bypassed.
-const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
+// Exported so callers holding a not-yet-materialised source (e.g. a downloaded
+// Blob) can reject oversized payloads before copying them into a Buffer.
+export const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
 
 // Decoded-dimension guard for user-supplied images. A file that is small on
 // disk but claims huge pixel dimensions (a "pixel bomb") would pass the buffer
@@ -188,8 +190,14 @@ export function assertImageDimensions(w: number, h: number, context: string): vo
 async function readImageMetadata(buffer: Buffer, context: string): Promise<sharp.Metadata> {
   try {
     return await sharp(buffer).metadata()
-  } catch {
-    throw new Error(`${context}: could not read image metadata (file may be corrupt or unsupported)`)
+  } catch (err) {
+    // Keep Sharp's own diagnosis (e.g. "Input buffer contains unsupported image
+    // format") — matching how encodeWebP surfaces its failures — so operators
+    // can distinguish a truncated upload from an unsupported codec.
+    const detail = err instanceof Error && err.message ? ` — ${err.message}` : ''
+    throw new Error(
+      `${context}: could not read image metadata (file may be corrupt or unsupported)${detail}`
+    )
   }
 }
 

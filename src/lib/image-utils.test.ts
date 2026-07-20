@@ -424,6 +424,15 @@ describe('compressReferenceImage', () => {
     await expect(compressReferenceImage(garbage)).rejects.toThrow()
   })
 
+  it('includes context and a diagnostic detail when metadata cannot be read', async () => {
+    const garbage = Buffer.from('this is definitely not an image format at all')
+    // The contextualised wrapper must survive, and Sharp's own diagnosis is
+    // appended after an em-dash so corrupt-vs-unsupported is distinguishable.
+    await expect(compressReferenceImage(garbage)).rejects.toThrow(
+      /^compressReferenceImage: could not read image metadata .* — .+/
+    )
+  })
+
   it('throws when image dimensions exceed the per-side limit (pixel bomb guard)', async () => {
     // Sharp's create helper lets us synthesize an image with huge declared
     // dimensions without actually allocating the full bitmap in the test.

@@ -1,5 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/server'
-import { compressReferenceImage, type CompressResult } from '@/lib/image-utils'
+import { compressReferenceImage, MAX_BUFFER_BYTES, type CompressResult } from '@/lib/image-utils'
 import { T } from '@/lib/db-tables'
 import { sanitizePublicErrorMessage } from '@/lib/request-guards'
 import { redactSensitiveText } from '@/lib/redact-secrets'
@@ -30,6 +30,12 @@ function isRetriableStorageError(message: string | null | undefined): boolean {
     m.includes('fetch failed') ||
     m.includes('econnreset') ||
     m.includes('econnrefused') ||
+    // Node errno codes for timed-out connects, transient DNS failures and
+    // broken pipes — all as transient as ECONNRESET but spelled differently
+    // (note ETIMEDOUT does not contain the substring "timeout").
+    m.includes('etimedout') ||
+    m.includes('eai_again') ||
+    m.includes('epipe') ||
     m.includes('socket hang up') ||
     m.includes('rate limit') ||
     m.includes('429') ||
@@ -46,8 +52,14 @@ function isRetriableStorageError(message: string | null | undefined): boolean {
 /**
  * Run a Supabase operation that resolves to `{ error }`, retrying with linear
  * backoff while the error looks transient. Thrown errors (e.g. a network
- * exception before a response is formed) are treated the same way. Returns the
- * final result (successful or not) so existing error-mapping logic is unchanged.
+ * exception before a response is formed) are treated the same way, and a
+ * terminal exception is converted into an `{ error }` result rather than
+ * rethrown: every caller in this module maps error results into a
+ * CompressionResult, and the batch routes rely on that no-throw contract to
+ * keep one bad item from aborting a whole mapWithConcurrency pool (a rethrow
+ * at the db-update stage would also skip the orphaned-upload cleanup below).
+ * Returns the final result (successful or not) so existing error-mapping
+ * logic is unchanged.
  */
 async function withStorageRetry<TResult extends { error: { message?: string } | null }>(
   op: () => PromiseLike<TResult>,
@@ -74,7 +86,11 @@ async function withStorageRetry<TResult extends { error: { message?: string } | 
         await sleep(STORAGE_RETRY_BASE_MS * (attempt + 1))
         continue
       }
-      throw err
+      // Terminal exception: synthesize an error result so callers flow through
+      // the same failure mapping as a returned `{ error }`. `data` is left
+      // undefined, which download-style call sites already treat as a failure.
+      logger.warn(`${label}: terminal exception: ${redactSensitiveText(message)}`)
+      return { error: { message } } as unknown as TResult
     }
   }
   // Unreachable in practice: the loop always returns on the final attempt.
@@ -122,6 +138,20 @@ export async function processReferenceImageCompression(
       originalSize: 0,
       compressedSize: 0,
       error: sanitizePublicErrorMessage(downloadError?.message, { fallback: 'Download failed' }),
+    }
+  }
+
+  // Reject oversized objects before materialising the Blob: arrayBuffer()
+  // copies the entire payload into memory, so without this check a >100 MB
+  // object is fully duplicated only to be rejected by the same ceiling inside
+  // compressReferenceImage. Checking Blob.size costs nothing and fails first.
+  if (fileData.size > MAX_BUFFER_BYTES) {
+    return {
+      imageId,
+      wasCompressed: false,
+      originalSize: fileData.size,
+      compressedSize: fileData.size,
+      error: `File exceeds maximum size limit (${MAX_BUFFER_BYTES / 1024 / 1024} MB)`,
     }
   }
 

@@ -59,6 +59,9 @@ const mockCompress = vi.fn()
 
 vi.mock('@/lib/image-utils', () => ({
   compressReferenceImage: (...args: unknown[]) => mockCompress(...args),
+  // Mirror the real ceiling — the module under test imports it for the
+  // pre-materialisation Blob.size guard.
+  MAX_BUFFER_BYTES: 100 * 1024 * 1024,
 }))
 
 // ---------------------------------------------------------------------------
@@ -443,6 +446,44 @@ describe('processReferenceImageCompression — transient-error retries', () => {
     expect(result.error).toBeUndefined()
   })
 
+  it('retries an ETIMEDOUT download exception (errno spelling, no "timeout" substring)', async () => {
+    mockDownload
+      .mockRejectedValueOnce(new Error('connect ETIMEDOUT 203.0.113.10:443'))
+      .mockResolvedValueOnce({ data: makeBlob('png-data'), error: null })
+    mockCompress.mockResolvedValue({
+      buffer: Buffer.from('png-data'),
+      mimeType: 'image/png',
+      extension: 'png',
+      originalSize: 8,
+      compressedSize: 8,
+      wasCompressed: false,
+    })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(2)
+    expect(result.error).toBeUndefined()
+  })
+
+  it('retries a transient DNS failure (EAI_AGAIN)', async () => {
+    mockDownload
+      .mockRejectedValueOnce(new Error('getaddrinfo EAI_AGAIN storage.example.supabase.co'))
+      .mockResolvedValueOnce({ data: makeBlob('png-data'), error: null })
+    mockCompress.mockResolvedValue({
+      buffer: Buffer.from('png-data'),
+      mimeType: 'image/png',
+      extension: 'png',
+      originalSize: 8,
+      compressedSize: 8,
+      wasCompressed: false,
+    })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(2)
+    expect(result.error).toBeUndefined()
+  })
+
   it('does NOT retry a deterministic upload error (quota)', async () => {
     mockDownload.mockResolvedValue({ data: makeBlob('big-png'), error: null })
     mockCompress.mockResolvedValue({
@@ -459,6 +500,138 @@ describe('processReferenceImageCompression — transient-error retries', () => {
 
     expect(mockUpload).toHaveBeenCalledTimes(1)
     expect(result.error).toBe('bucket quota exceeded')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Oversized-download guard — reject before materialising the Blob
+// ---------------------------------------------------------------------------
+
+describe('processReferenceImageCompression — oversized download guard', () => {
+  it('rejects an over-limit object without materialising or compressing it', async () => {
+    const arrayBufferSpy = vi.fn()
+    // A stub with an oversized `size` — arrayBuffer must never be called, so
+    // no real allocation is needed to exercise the guard.
+    mockDownload.mockResolvedValue({
+      data: { size: 101 * 1024 * 1024, arrayBuffer: arrayBufferSpy },
+      error: null,
+    })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toMatch(/exceeds maximum size limit/)
+    expect(result.originalSize).toBe(101 * 1024 * 1024)
+    expect(arrayBufferSpy).not.toHaveBeenCalled()
+    expect(mockCompress).not.toHaveBeenCalled()
+    expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  it('allows an object exactly at the limit through to compression', async () => {
+    const exactly = 100 * 1024 * 1024
+    mockDownload.mockResolvedValue({
+      data: { size: exactly, arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(8)) },
+      error: null,
+    })
+    mockCompress.mockResolvedValue({
+      buffer: Buffer.alloc(8),
+      mimeType: 'image/png',
+      extension: 'png',
+      originalSize: 8,
+      compressedSize: 8,
+      wasCompressed: false,
+    })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(result.error).toBeUndefined()
+    expect(mockCompress).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// No-throw contract — storage-client exceptions become error results
+//
+// The batch compress routes run this function through mapWithConcurrency and
+// rely on failures being reported via the result's `error` field: a rethrow
+// would abort the whole pool. These tests pin that contract for exceptions
+// (as opposed to `{ error }` results) thrown by the storage client.
+// ---------------------------------------------------------------------------
+
+describe('processReferenceImageCompression — no-throw contract on storage exceptions', () => {
+  const compressedResult = {
+    buffer: Buffer.from('compressed-webp'),
+    mimeType: 'image/webp',
+    extension: 'webp',
+    originalSize: 200,
+    compressedSize: 50,
+    wasCompressed: true,
+  }
+
+  it('resolves to an error result when download throws a non-retriable exception', async () => {
+    mockDownload.mockRejectedValue(new Error('unexpected boom'))
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(1)
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('unexpected boom')
+  })
+
+  it('resolves to an error result when a retriable download exception persists past max attempts', async () => {
+    mockDownload.mockRejectedValue(new TypeError('fetch failed'))
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(3)
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('fetch failed')
+  })
+
+  it('retries a retriable download exception and succeeds on a later attempt', async () => {
+    mockDownload
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce({ data: makeBlob('png-data'), error: null })
+    mockCompress.mockResolvedValue({
+      ...compressedResult,
+      originalSize: 8,
+      compressedSize: 8,
+      wasCompressed: false,
+    })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(2)
+    expect(result.error).toBeUndefined()
+  })
+
+  it('resolves to an error result (no DB update) when upload throws', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('big-png'), error: null })
+    mockCompress.mockResolvedValue(compressedResult)
+    mockUpload.mockRejectedValue(new Error('upload exploded'))
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('upload exploded')
+    expect(mockDbUpdate).not.toHaveBeenCalled()
+    expect(mockRemove).not.toHaveBeenCalled()
+  })
+
+  it('cleans up the orphaned upload when the DB update throws after a successful upload', async () => {
+    mockDownload.mockResolvedValue({ data: makeBlob('big-png'), error: null })
+    mockCompress.mockResolvedValue(compressedResult)
+    mockUpload.mockResolvedValue({ error: null })
+    mockDbUpdate.mockRejectedValue(new Error('db connection lost'))
+    mockRemove.mockResolvedValue({ error: null })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, 'org/product/ref-image.png')
+
+    // The exception flows through the same path as a returned dbError:
+    // the unreachable compressed copy is removed, and the failure is reported.
+    expect(mockRemove).toHaveBeenCalledWith(['org/product/ref-image.webp'])
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toBe('db connection lost')
   })
 })
 
