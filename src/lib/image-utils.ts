@@ -188,8 +188,14 @@ export function assertImageDimensions(w: number, h: number, context: string): vo
 async function readImageMetadata(buffer: Buffer, context: string): Promise<sharp.Metadata> {
   try {
     return await sharp(buffer).metadata()
-  } catch {
-    throw new Error(`${context}: could not read image metadata (file may be corrupt or unsupported)`)
+  } catch (err) {
+    // Keep Sharp's own diagnosis (e.g. "Input buffer contains unsupported image
+    // format") — matching how encodeWebP surfaces its failures — so operators
+    // can distinguish a truncated upload from an unsupported codec.
+    const detail = err instanceof Error && err.message ? ` — ${err.message}` : ''
+    throw new Error(
+      `${context}: could not read image metadata (file may be corrupt or unsupported)${detail}`
+    )
   }
 }
 
