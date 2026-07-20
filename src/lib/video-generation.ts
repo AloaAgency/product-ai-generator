@@ -701,6 +701,17 @@ async function resolveFrameRefs(
     ? frameRefsByImageId.get(endFrameImageId)
     : undefined
 
+  // A configured frame is part of the user's generation request. Silently
+  // dropping a deleted image or a missing signed URL changes image-to-video
+  // into text-to-video (and can change Veo duration constraints), so fail
+  // before contacting the provider instead.
+  if (scene.start_frame_image_id && !startFrameRef) {
+    throw new Error('Configured start frame image is unavailable')
+  }
+  if (endFrameImageId && !endFrameRef) {
+    throw new Error('Configured end frame image is unavailable')
+  }
+
   return {
     ...(startFrameRef ? { start: startFrameRef } : {}),
     ...(endFrameRef ? { end: endFrameRef } : {}),
