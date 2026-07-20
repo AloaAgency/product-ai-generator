@@ -96,6 +96,7 @@ type SceneGenerationContext = {
   frameRefs: FrameRefs
   videoSettings: SceneVideoSettings
 }
+type JobCancellationChecker = (force?: boolean) => Promise<boolean>
 
 const isVeoModel = (model: string) => model.toLowerCase().startsWith('veo')
 
@@ -395,7 +396,7 @@ export async function pollVeoOperation(
   apiKey: string,
   pollIntervalMs: number,
   timeoutMs: number,
-  shouldCancel?: () => Promise<boolean>
+  shouldCancel?: JobCancellationChecker
 ) {
   const startedAt = Date.now()
   let operation: Record<string, unknown> | null = null
@@ -835,9 +836,9 @@ function createJobCancellationChecker(
   let lastCheckAt = 0
   let cancelled = false
 
-  return async () => {
+  return async (force = false) => {
     if (cancelled) return true
-    if (Date.now() - lastCheckAt < minIntervalMs) return cancelled
+    if (!force && Date.now() - lastCheckAt < minIntervalMs) return cancelled
 
     lastCheckAt = Date.now()
     const { data, error } = await supabase
@@ -855,6 +856,15 @@ function createJobCancellationChecker(
   }
 }
 
+async function throwIfVideoJobCancelled(
+  shouldCancel: JobCancellationChecker | undefined,
+  force = false
+) {
+  if (shouldCancel && await shouldCancel(force)) {
+    throw new VideoJobCancelledError()
+  }
+}
+
 export async function generateSceneVideo(
   productId: string,
   sceneId: string,
@@ -869,6 +879,10 @@ export async function generateSceneVideo(
   const isVeo = isVeoModel(resolvedModel)
   const shouldCancel = jobId ? createJobCancellationChecker(supabase, jobId) : undefined
 
+  // Check after context loading but before billing either provider. LTX does
+  // not expose a poll loop, so this is its only pre-request cancellation gate.
+  await throwIfVideoJobCancelled(shouldCancel, true)
+
   // Generate video
   let result: VideoGenerationResult
 
@@ -880,16 +894,25 @@ export async function generateSceneVideo(
     throw new Error(`Unsupported model: ${resolvedModel}`)
   }
 
-  const storagePath = await uploadGeneratedVideo(
-    supabase,
-    productId,
-    sceneId,
-    scene.motion_prompt,
-    result
-  )
-  const thumbStoragePath = await uploadVideoThumbnail(supabase, storagePath, result.buffer)
+  // A cancellation can race the final provider response. Force a fresh status
+  // read before persisting anything, including for synchronous LTX requests.
+  await throwIfVideoJobCancelled(shouldCancel, true)
 
+  let storagePath: string | null = null
+  let thumbStoragePath: string | null = null
   try {
+    storagePath = await uploadGeneratedVideo(
+      supabase,
+      productId,
+      sceneId,
+      scene.motion_prompt,
+      result
+    )
+    await throwIfVideoJobCancelled(shouldCancel, true)
+
+    thumbStoragePath = await uploadVideoThumbnail(supabase, storagePath, result.buffer)
+    await throwIfVideoJobCancelled(shouldCancel, true)
+
     return await createGeneratedVideoRecord(supabase, scene, productId, jobId, storagePath, thumbStoragePath, result)
   } catch (error) {
     await cleanupUploadedVideoAssets(supabase, [storagePath, thumbStoragePath])
@@ -906,7 +929,7 @@ async function generateWithVeo3(
   frameRefs: FrameRefs,
   settings: SceneVideoSettings,
   apiKeyOverride?: string | null,
-  shouldCancel?: () => Promise<boolean>
+  shouldCancel?: JobCancellationChecker
 ): Promise<VideoGenerationResult> {
   const config = getVeoConfig(apiKeyOverride)
   const { instance, parameters } = await buildVeoRequestParts(prompt, frameRefs, settings, config.model)

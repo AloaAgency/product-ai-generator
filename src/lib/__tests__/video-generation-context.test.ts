@@ -19,7 +19,7 @@ vi.mock('@/lib/image-utils', async (importOriginal) => {
   }
 })
 
-import { generateSceneVideo } from '../video-generation'
+import { generateSceneVideo, VideoJobCancelledError } from '../video-generation'
 
 type EnvPatch = Record<string, string | undefined>
 type SupabaseError = { message: string }
@@ -88,6 +88,7 @@ function createSupabaseMock(options: {
   project?: { global_style_settings: null } | null
   projectError?: SupabaseError | null
   insertError?: SupabaseError | null
+  jobStatuses?: string[]
 } = {}) {
   const sceneEqFilters: Array<[string, unknown]> = []
   const generatedImageInserts: Array<Record<string, unknown>> = []
@@ -140,6 +141,16 @@ function createSupabaseMock(options: {
     }),
   }
 
+  const jobStatuses = [...(options.jobStatuses || [])]
+  const generationJobQuery = {
+    select: vi.fn(() => generationJobQuery),
+    eq: vi.fn(() => generationJobQuery),
+    single: vi.fn(async () => ({
+      data: { status: jobStatuses.shift() || 'running' },
+      error: null,
+    })),
+  }
+
   const upload = vi.fn(async () => ({ error: null }))
   const remove = vi.fn(async () => ({ error: null }))
   const storage = {
@@ -152,6 +163,7 @@ function createSupabaseMock(options: {
       if (table === T.products) return productQuery
       if (table === T.projects) return projectQuery
       if (table === T.generated_images) return generatedImagesTable
+      if (table === T.generation_jobs) return generationJobQuery
       throw new Error(`Unexpected table: ${table}`)
     }),
     storage,
@@ -161,6 +173,8 @@ function createSupabaseMock(options: {
     client,
     generatedImageInserts,
     sceneEqFilters,
+    upload,
+    remove,
     get sceneSelectColumns() {
       return sceneSelectColumns
     },
@@ -242,5 +256,34 @@ describe('generateSceneVideo context loading', () => {
     )
 
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('cleans up an uploaded video when cancellation wins the persistence race', async () => {
+    const supabase = createSupabaseMock({
+      scene: buildSceneFixture(),
+      // Before provider request, after provider response, after video upload.
+      jobStatuses: ['running', 'running', 'cancelled'],
+    })
+    createServiceClientMock.mockReturnValue(supabase.client)
+    const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(Buffer.from('video'), {
+        status: 200,
+        headers: { 'content-type': 'video/mp4' },
+      })
+    )
+
+    await withEnv({ LTX_API_KEY: 'ltx-secret' }, async () => {
+      await expect(
+        generateSceneVideo('product-1', 'scene-1', 'ltx', 'job-1')
+      ).rejects.toThrow(VideoJobCancelledError)
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(supabase.upload).toHaveBeenCalledTimes(1)
+    expect(supabase.remove).toHaveBeenCalledWith([
+      expect.stringMatching(/^products\/product-1\/scenes\/scene-1\/video-product-spin-\d+\.mp4$/),
+    ])
+    expect(extractVideoThumbnailMock).not.toHaveBeenCalled()
+    expect(supabase.generatedImageInserts).toHaveLength(0)
   })
 })
