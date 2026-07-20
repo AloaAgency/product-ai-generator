@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { parseRequestBody, MAX_LIST_ROWS } from '@/lib/request-guards'
+import { parseRequestBody, MAX_LIST_ROWS, MAX_NAME_LENGTH } from '@/lib/request-guards'
 import { logger } from '@/lib/server-logger'
-
-const MAX_NAME_LENGTH = 500
 
 export async function GET(
   request: NextRequest,

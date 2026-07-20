@@ -13,13 +13,13 @@ import {
   parseRequestBody,
   sanitizeStorageFileExtension,
 } from '@/lib/request-guards'
+import { createSignedUrlMap } from '@/lib/gallery-media'
 import { logger } from '@/lib/server-logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
 export const dynamic = 'force-dynamic'
 
-const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 // Bounded: each upload holds a full-size image in memory during Sharp re-encode.
 const UPLOAD_CONCURRENCY = 3
 
@@ -230,19 +230,7 @@ export async function GET(
       .map((img) => img.storage_path)
       .filter(Boolean) as string[]
 
-    let signedMap = new Map<string, string>()
-    if (paths.length > 0) {
-      const { data: signed } = await supabase.storage
-        .from('reference-images')
-        .createSignedUrls(paths, SIGNED_URL_TTL_SECONDS)
-      if (signed) {
-        signedMap = new Map(
-          signed
-            .filter((item) => item?.signedUrl && item?.path)
-            .map((item) => [item.path!, item.signedUrl!])
-        )
-      }
-    }
+    const { map: signedMap } = await createSignedUrlMap(supabase, 'reference-images', paths)
 
     const images = (data || []).map((img) => ({
       ...img,

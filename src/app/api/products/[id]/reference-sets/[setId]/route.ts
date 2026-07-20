@@ -1,12 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { parseRequestBody } from '@/lib/request-guards'
+import { parseRequestBody, MAX_NAME_LENGTH, MAX_DESCRIPTION_LENGTH } from '@/lib/request-guards'
 import { logger } from '@/lib/server-logger'
-
-// Must match the limits enforced by the POST route on the same table
-const MAX_NAME_LENGTH = 500
-const MAX_DESCRIPTION_LENGTH = 5000
 
 export async function PATCH(
   request: NextRequest,

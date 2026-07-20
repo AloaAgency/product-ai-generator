@@ -1,13 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import { parseRequestBody, isUuid, MAX_LIST_ROWS } from '@/lib/request-guards'
+import { parseRequestBody, isUuid, MAX_LIST_ROWS, MAX_NAME_LENGTH, MAX_DESCRIPTION_LENGTH } from '@/lib/request-guards'
 import { logger } from '@/lib/server-logger'
 
 const PLACEHOLDER_USER_ID = '00000000-0000-0000-0000-000000000000'
-
-const MAX_NAME_LENGTH = 500
-const MAX_DESCRIPTION_LENGTH = 5000
 
 export async function GET(request: NextRequest) {
   try {

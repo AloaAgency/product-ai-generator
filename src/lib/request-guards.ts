@@ -7,6 +7,15 @@ const UUID_PATTERN =
 const DEFAULT_MAX_ERROR_MESSAGE_LENGTH = 200
 
 export const MAX_PROMPT_TEXT_LENGTH = 10_000
+// Shared field limits for user-named records (projects, products, reference
+// sets, templates, storyboards, scenes). Each pair of create/update routes
+// used to re-declare these with "must match the POST route" comments — a
+// single source of truth removes that drift risk. The values feed 400-error
+// messages, so changing one changes the corresponding response text.
+export const MAX_NAME_LENGTH = 500
+export const MAX_TITLE_LENGTH = 500
+export const MAX_DESCRIPTION_LENGTH = 5000
+export const MAX_STORYBOARD_IMAGES = 200
 // Upper bound for unpaginated collection queries — prevents unbounded result
 // sets from exhausting memory/bandwidth as tenant data grows.
 export const MAX_LIST_ROWS = 500

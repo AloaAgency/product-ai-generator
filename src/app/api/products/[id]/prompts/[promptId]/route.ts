@@ -2,12 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { generateSceneTitle } from '@/lib/prompt-builder'
-import { parseRequestBody } from '@/lib/request-guards'
+import { parseRequestBody, MAX_NAME_LENGTH, MAX_PROMPT_TEXT_LENGTH } from '@/lib/request-guards'
 import { logger } from '@/lib/server-logger'
-
-// Must match the limits enforced by the POST route on the same table
-const MAX_NAME_LENGTH = 500
-const MAX_PROMPT_LENGTH = 10000
 
 export async function PATCH(
   request: NextRequest,
@@ -32,8 +28,8 @@ export async function PATCH(
       if (typeof body.prompt_text !== 'string' || body.prompt_text.trim().length === 0) {
         return NextResponse.json({ error: 'prompt_text must be a non-empty string' }, { status: 400 })
       }
-      if (body.prompt_text.length > MAX_PROMPT_LENGTH) {
-        return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+      if (body.prompt_text.length > MAX_PROMPT_TEXT_LENGTH) {
+        return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_TEXT_LENGTH} characters or fewer` }, { status: 400 })
       }
     }
 
