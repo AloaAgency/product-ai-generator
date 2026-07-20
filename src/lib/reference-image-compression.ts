@@ -1,5 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/server'
-import { compressReferenceImage, type CompressResult } from '@/lib/image-utils'
+import { compressReferenceImage, MAX_BUFFER_BYTES, type CompressResult } from '@/lib/image-utils'
 import { T } from '@/lib/db-tables'
 import { sanitizePublicErrorMessage } from '@/lib/request-guards'
 import { redactSensitiveText } from '@/lib/redact-secrets'
@@ -132,6 +132,20 @@ export async function processReferenceImageCompression(
       originalSize: 0,
       compressedSize: 0,
       error: sanitizePublicErrorMessage(downloadError?.message, { fallback: 'Download failed' }),
+    }
+  }
+
+  // Reject oversized objects before materialising the Blob: arrayBuffer()
+  // copies the entire payload into memory, so without this check a >100 MB
+  // object is fully duplicated only to be rejected by the same ceiling inside
+  // compressReferenceImage. Checking Blob.size costs nothing and fails first.
+  if (fileData.size > MAX_BUFFER_BYTES) {
+    return {
+      imageId,
+      wasCompressed: false,
+      originalSize: fileData.size,
+      compressedSize: fileData.size,
+      error: `File exceeds maximum size limit (${MAX_BUFFER_BYTES / 1024 / 1024} MB)`,
     }
   }
 

@@ -136,7 +136,9 @@ export const buildPreviewPath = (storagePath: string, extension: string): string
 
 // Hard ceiling applied before any Sharp pipeline runs. Prevents memory
 // exhaustion if upstream size limits (e.g. multipart validation) are bypassed.
-const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
+// Exported so callers holding a not-yet-materialised source (e.g. a downloaded
+// Blob) can reject oversized payloads before copying them into a Buffer.
+export const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
 
 // Decoded-dimension guard for user-supplied images. A file that is small on
 // disk but claims huge pixel dimensions (a "pixel bomb") would pass the buffer

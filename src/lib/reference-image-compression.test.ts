@@ -59,6 +59,9 @@ const mockCompress = vi.fn()
 
 vi.mock('@/lib/image-utils', () => ({
   compressReferenceImage: (...args: unknown[]) => mockCompress(...args),
+  // Mirror the real ceiling — the module under test imports it for the
+  // pre-materialisation Blob.size guard.
+  MAX_BUFFER_BYTES: 100 * 1024 * 1024,
 }))
 
 // ---------------------------------------------------------------------------
@@ -459,6 +462,52 @@ describe('processReferenceImageCompression — transient-error retries', () => {
 
     expect(mockUpload).toHaveBeenCalledTimes(1)
     expect(result.error).toBe('bucket quota exceeded')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Oversized-download guard — reject before materialising the Blob
+// ---------------------------------------------------------------------------
+
+describe('processReferenceImageCompression — oversized download guard', () => {
+  it('rejects an over-limit object without materialising or compressing it', async () => {
+    const arrayBufferSpy = vi.fn()
+    // A stub with an oversized `size` — arrayBuffer must never be called, so
+    // no real allocation is needed to exercise the guard.
+    mockDownload.mockResolvedValue({
+      data: { size: 101 * 1024 * 1024, arrayBuffer: arrayBufferSpy },
+      error: null,
+    })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(result.wasCompressed).toBe(false)
+    expect(result.error).toMatch(/exceeds maximum size limit/)
+    expect(result.originalSize).toBe(101 * 1024 * 1024)
+    expect(arrayBufferSpy).not.toHaveBeenCalled()
+    expect(mockCompress).not.toHaveBeenCalled()
+    expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  it('allows an object exactly at the limit through to compression', async () => {
+    const exactly = 100 * 1024 * 1024
+    mockDownload.mockResolvedValue({
+      data: { size: exactly, arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(8)) },
+      error: null,
+    })
+    mockCompress.mockResolvedValue({
+      buffer: Buffer.alloc(8),
+      mimeType: 'image/png',
+      extension: 'png',
+      originalSize: 8,
+      compressedSize: 8,
+      wasCompressed: false,
+    })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(result.error).toBeUndefined()
+    expect(mockCompress).toHaveBeenCalledTimes(1)
   })
 })
 
