@@ -446,6 +446,44 @@ describe('processReferenceImageCompression — transient-error retries', () => {
     expect(result.error).toBeUndefined()
   })
 
+  it('retries an ETIMEDOUT download exception (errno spelling, no "timeout" substring)', async () => {
+    mockDownload
+      .mockRejectedValueOnce(new Error('connect ETIMEDOUT 203.0.113.10:443'))
+      .mockResolvedValueOnce({ data: makeBlob('png-data'), error: null })
+    mockCompress.mockResolvedValue({
+      buffer: Buffer.from('png-data'),
+      mimeType: 'image/png',
+      extension: 'png',
+      originalSize: 8,
+      compressedSize: 8,
+      wasCompressed: false,
+    })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(2)
+    expect(result.error).toBeUndefined()
+  })
+
+  it('retries a transient DNS failure (EAI_AGAIN)', async () => {
+    mockDownload
+      .mockRejectedValueOnce(new Error('getaddrinfo EAI_AGAIN storage.example.supabase.co'))
+      .mockResolvedValueOnce({ data: makeBlob('png-data'), error: null })
+    mockCompress.mockResolvedValue({
+      buffer: Buffer.from('png-data'),
+      mimeType: 'image/png',
+      extension: 'png',
+      originalSize: 8,
+      compressedSize: 8,
+      wasCompressed: false,
+    })
+
+    const result = await processReferenceImageCompression(FAKE_IMAGE_ID, FAKE_STORAGE_PATH)
+
+    expect(mockDownload).toHaveBeenCalledTimes(2)
+    expect(result.error).toBeUndefined()
+  })
+
   it('does NOT retry a deterministic upload error (quota)', async () => {
     mockDownload.mockResolvedValue({ data: makeBlob('big-png'), error: null })
     mockCompress.mockResolvedValue({

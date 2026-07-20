@@ -30,6 +30,12 @@ function isRetriableStorageError(message: string | null | undefined): boolean {
     m.includes('fetch failed') ||
     m.includes('econnreset') ||
     m.includes('econnrefused') ||
+    // Node errno codes for timed-out connects, transient DNS failures and
+    // broken pipes — all as transient as ECONNRESET but spelled differently
+    // (note ETIMEDOUT does not contain the substring "timeout").
+    m.includes('etimedout') ||
+    m.includes('eai_again') ||
+    m.includes('epipe') ||
     m.includes('socket hang up') ||
     m.includes('rate limit') ||
     m.includes('429') ||
