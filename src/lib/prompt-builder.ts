@@ -95,9 +95,11 @@ const STYLE_PROMPT_KEYS: ReadonlyArray<keyof GlobalStyleSettings> = [
 /**
  * Truncate, sanitize double-quotes, and strip newlines from a field before AI interpolation.
  * Used by both prompt-building functions so they enforce identical injection / payload limits.
+ * Single combined pass — one regex scan and one output string instead of two of
+ * each, since this runs on every AI-interpolated field of every prompt build.
  */
 function sanitizeField(value: string, maxLen: number): string {
-  return value.slice(0, maxLen).replace(/"/g, '″').replace(/[\r\n]/g, ' ')
+  return value.slice(0, maxLen).replace(/["\r\n]/g, (c) => (c === '"' ? '″' : ' '))
 }
 
 /**
