@@ -35,6 +35,7 @@ const API_REQUEST_TIMEOUT_MS = 15_000
 const AI_REQUEST_TIMEOUT_MS = 60_000
 const UPLOAD_REQUEST_TIMEOUT_MS = 120_000
 const GALLERY_PAGE_SIZE = 48
+const GENERATION_JOBS_PAGE_SIZE = 50
 const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const requestVersions = new Map<string, number>()
 const successfulRequests = new Set<string>()
@@ -105,6 +106,7 @@ const clearProductScopedSliceScopes = () => {
   sliceScopes.set('referenceSets', '_')
   sliceScopes.set('promptTemplates', '_')
   sliceScopes.set('generationJobs', '_')
+  sliceScopes.set('generationJobsMore', '_')
   sliceScopes.set('currentJob', '_')
   sliceScopes.set('gallery', '_')
   sliceScopes.set('settingsTemplates', '_')
@@ -243,6 +245,7 @@ const cancelProductScopedRequests = (productId: string) => {
     'referenceSets',
     'promptTemplates',
     'generationJobs',
+    'generationJobsMore',
     'currentJob',
     'gallery',
     'settingsTemplates',
@@ -534,6 +537,23 @@ const reconcileEntityList = <T extends { id: string }>(previous: T[], next: T[])
   return didChange ? reconciled : previous
 }
 
+const mergeFirstEntityPage = <T extends { id: string }>(previous: T[], next: T[]) => {
+  if (previous.length === 0 || next.length === 0) {
+    return reconcileEntityList(previous, next)
+  }
+
+  const reconciledPage = reconcileEntityList(previous, next)
+  const pageIds = new Set(next.map((entity) => entity.id))
+  const merged = [
+    ...reconciledPage,
+    ...previous.filter((entity) => !pageIds.has(entity.id)),
+  ]
+
+  return merged.length === previous.length && merged.every((entity, index) => entity === previous[index])
+    ? previous
+    : merged
+}
+
 type CurrentGenerationJob = GenerationJob & { images?: GeneratedImage[] }
 
 const reconcileCurrentJob = (
@@ -573,12 +593,14 @@ const getProductScopedState = () => ({
   referenceImages: {},
   promptTemplates: [],
   generationJobs: [],
+  generationJobsHasMore: false,
   currentJob: null,
   galleryImages: [],
   galleryTotal: 0,
   galleryHasMore: false,
   loadingRefSets: false,
   loadingJobs: false,
+  loadingJobsMore: false,
   loadingGallery: false,
   loadingGalleryMore: false,
   settingsTemplates: [],
@@ -718,9 +740,12 @@ interface AppState {
 
   // Generation
   generationJobs: GenerationJob[]
+  generationJobsHasMore: boolean
   currentJob: (GenerationJob & { images?: GeneratedImage[] }) | null
   loadingJobs: boolean
-  fetchGenerationJobs: (productId: string) => Promise<void>
+  loadingJobsMore: boolean
+  fetchGenerationJobs: (productId: string, options?: { replace?: boolean }) => Promise<void>
+  fetchGenerationJobsMore: (productId: string) => Promise<void>
   startGeneration: (productId: string, data: {
     prompt_template_id?: string
     prompt_text: string
@@ -1036,6 +1061,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         referenceImages: {},
         promptTemplates: [],
         generationJobs: [],
+        generationJobsHasMore: false,
         currentJob: null,
         galleryImages: [],
         galleryTotal: 0,
@@ -1043,6 +1069,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         settingsTemplates: [],
         ...(cancelledSlices.has('referenceSets') ? { loadingRefSets: false } : {}),
         ...(cancelledSlices.has('generationJobs') ? { loadingJobs: false } : {}),
+        ...(cancelledSlices.has('generationJobsMore') ? { loadingJobsMore: false } : {}),
         ...(cancelledSlices.has('gallery')
           ? { loadingGallery: false, loadingGalleryMore: false }
           : {}),
@@ -1505,13 +1532,23 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Generation
   generationJobs: [],
+  generationJobsHasMore: false,
   currentJob: null,
   loadingJobs: false,
-  fetchGenerationJobs: async (productId) => {
+  loadingJobsMore: false,
+  fetchGenerationJobs: async (productId, options) => {
     const scopedProductId = requireUuid(productId, 'product id')
+    const shouldReplace = options?.replace === true
     const requestKey = buildRequestKey('generationJobs', scopedProductId)
     if (updateSliceScope('generationJobs', requestKey)) {
-      set({ generationJobs: [], currentJob: null, loadingJobs: false })
+      updateSliceScope('generationJobsMore', '_')
+      set({
+        generationJobs: [],
+        generationJobsHasMore: false,
+        currentJob: null,
+        loadingJobs: false,
+        loadingJobsMore: false,
+      })
     }
     const requestVersion = beginTrackedSliceRequest('generationJobs', requestKey)
     const shouldShowLoading = get().generationJobs.length === 0
@@ -1531,8 +1568,17 @@ export const useAppStore = create<AppState>((set, get) => ({
         return
       markRequestSuccessful(requestKey)
       set((state) => {
-        const generationJobs = reconcileEntityList(state.generationJobs, data)
-        return generationJobs === state.generationJobs ? state : { generationJobs }
+        const wasEmpty = state.generationJobs.length === 0
+        const generationJobs = shouldReplace
+          ? reconcileEntityList(state.generationJobs, data)
+          : mergeFirstEntityPage(state.generationJobs, data)
+        const generationJobsHasMore = wasEmpty || shouldReplace
+          ? data.length === GENERATION_JOBS_PAGE_SIZE
+          : state.generationJobsHasMore
+        return generationJobs === state.generationJobs &&
+          generationJobsHasMore === state.generationJobsHasMore
+          ? state
+          : { generationJobs, generationJobsHasMore }
       })
     } catch (error) {
       if (
@@ -1546,6 +1592,63 @@ export const useAppStore = create<AppState>((set, get) => ({
     } finally {
       if (shouldShowLoading && isLatestRequest(requestKey, requestVersion) && isCurrentSliceScope('generationJobs', requestKey)) {
         set({ loadingJobs: false })
+      }
+    }
+  },
+  fetchGenerationJobsMore: async (productId) => {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const state = get()
+    const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
+    if (
+      !state.generationJobsHasMore ||
+      state.loadingJobsMore ||
+      !isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)
+    ) {
+      return
+    }
+
+    const offset = state.generationJobs.length
+    const requestKey = buildRequestKey('generationJobsMore', scopedProductId, String(offset))
+    updateSliceScope('generationJobsMore', requestKey)
+    const requestVersion = beginTrackedSliceRequest('generationJobsMore', requestKey)
+    set({ loadingJobsMore: true })
+    try {
+      const params = new URLSearchParams({
+        limit: String(GENERATION_JOBS_PAGE_SIZE),
+        offset: String(offset),
+      })
+      const data = requireArrayResponse<GenerationJob>(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/generate?${params}`, { signal })
+        ),
+        'Failed to load more generation jobs'
+      )
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('generationJobsMore', requestKey) ||
+        !isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)
+      ) {
+        return
+      }
+
+      set((currentState) => {
+        const existingIds = new Set(currentState.generationJobs.map((job) => job.id))
+        const reconciledPage = reconcileEntityList(currentState.generationJobs, data)
+        const uniqueJobs = reconciledPage.filter((job) => !existingIds.has(job.id))
+        const generationJobs = uniqueJobs.length > 0
+          ? [...currentState.generationJobs, ...uniqueJobs]
+          : currentState.generationJobs
+        const generationJobsHasMore = data.length === GENERATION_JOBS_PAGE_SIZE
+        return generationJobs === currentState.generationJobs &&
+          generationJobsHasMore === currentState.generationJobsHasMore
+          ? currentState
+          : { generationJobs, generationJobsHasMore }
+      })
+    } catch (error) {
+      logStoreError('GenerationJobsMore', error)
+    } finally {
+      if (isLatestRequest(requestKey, requestVersion) && isCurrentSliceScope('generationJobsMore', requestKey)) {
+        set({ loadingJobsMore: false })
       }
     }
   },
@@ -1682,7 +1785,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           ),
         })
       } else {
-        await get().fetchGenerationJobs(scopedProductId)
+        await get().fetchGenerationJobs(scopedProductId, { replace: true })
       }
     }
   },
@@ -1700,7 +1803,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (getResponseCount(result, 'cleared_failed') === failedJobs.length) {
         set({ generationJobs: jobs.filter((job) => job.status !== 'failed') })
       } else {
-        await get().fetchGenerationJobs(scopedProductId)
+        await get().fetchGenerationJobs(scopedProductId, { replace: true })
       }
     }
   },

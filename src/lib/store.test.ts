@@ -82,11 +82,13 @@ describe('useAppStore async scope guards', () => {
       referenceImages: {},
       promptTemplates: [],
       generationJobs: [],
+      generationJobsHasMore: false,
       currentJob: null,
       galleryImages: [],
       galleryTotal: 0,
       galleryHasMore: false,
       loadingRefSets: false,
+      loadingJobsMore: false,
       loadingGallery: false,
       loadingGalleryMore: false,
       settingsTemplates: [],
@@ -670,6 +672,49 @@ describe('useAppStore async scope guards', () => {
 
     expect(useAppStore.getState().generationJobs).toBe(firstJobs)
     expect(useAppStore.getState().generationJobs[0]).toBe(firstJob)
+  })
+
+  it('loads generation history incrementally from the paginated jobs endpoint', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) =>
+      makeGenerationJob({ id: `job-${index}` })
+    )
+    const secondPage = [
+      makeGenerationJob({ id: 'job-50' }),
+      makeGenerationJob({ id: 'job-51' }),
+    ]
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/generate`) {
+        return Promise.resolve(jsonResponse(firstPage))
+      }
+      if (url === `/api/products/${productA}/generate?limit=50&offset=50`) {
+        return Promise.resolve(jsonResponse(secondPage))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGenerationJobs(productA)
+    expect(useAppStore.getState().generationJobs).toHaveLength(50)
+    expect(useAppStore.getState().generationJobsHasMore).toBe(true)
+
+    await useAppStore.getState().fetchGenerationJobsMore(productA)
+
+    expect(useAppStore.getState().generationJobs).toHaveLength(52)
+    expect(useAppStore.getState().generationJobs.slice(-2).map((job) => job.id)).toEqual([
+      'job-50',
+      'job-51',
+    ])
+    expect(useAppStore.getState().generationJobsHasMore).toBe(false)
+    expect(useAppStore.getState().loadingJobsMore).toBe(false)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/products/${productA}/generate?limit=50&offset=50`,
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
   })
 
   it('preserves current job and image identities when status polling is unchanged', async () => {
