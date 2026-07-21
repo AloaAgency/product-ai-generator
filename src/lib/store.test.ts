@@ -598,6 +598,57 @@ describe('useAppStore async scope guards', () => {
     )
   })
 
+  it('caps concurrent signed uploads for large reference image batches', async () => {
+    let activeUploads = 0
+    let maxActiveUploads = 0
+    let uploadCalls = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (
+        url === `/api/products/${productA}/reference-sets/${referenceSetA}/images/upload-urls` &&
+        method === 'POST'
+      ) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          files?: Array<{ clientId: string; name: string }>
+        }
+        return jsonResponse((body.files ?? []).map((file, index) => ({
+          clientId: file.clientId,
+          signedUrl: `/signed-upload/${file.clientId}`,
+          storage_path: `references/${file.name}`,
+          file_name: file.name,
+          mime_type: 'image/png',
+          file_size: 1,
+          display_order: index,
+        })))
+      }
+      if (url.startsWith('/signed-upload/') && method === 'PUT') {
+        uploadCalls += 1
+        activeUploads += 1
+        maxActiveUploads = Math.max(maxActiveUploads, activeUploads)
+        await new Promise((resolve) => setTimeout(resolve, 2))
+        activeUploads -= 1
+        return new Response(null, { status: 200 })
+      }
+      if (
+        url === `/api/products/${productA}/reference-sets/${referenceSetA}/images` &&
+        method === 'POST'
+      ) {
+        return jsonResponse([])
+      }
+      return jsonResponse({ error: 'Unexpected request' }, 500)
+    }))
+
+    const files = Array.from(
+      { length: 10 },
+      (_, index) => new File(['x'], `photo-${index}.png`, { type: 'image/png' })
+    )
+    await useAppStore.getState().uploadReferenceImages(productA, referenceSetA, files)
+
+    expect(uploadCalls).toBe(10)
+    expect(maxActiveUploads).toBe(4)
+  })
+
   it('rejects malformed upload signing responses with a stable error', async () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)

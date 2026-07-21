@@ -25,6 +25,7 @@ import {
 } from './request-guards'
 import { logger } from '@/lib/logger'
 import { isClientDevelopmentRuntime } from '@/lib/client-runtime'
+import { mapWithConcurrency } from '@/lib/concurrency'
 
 const DEFAULT_ERROR_MESSAGE = 'Request failed'
 const MAX_SUGGESTED_PROMPT_COUNT = 10
@@ -36,6 +37,7 @@ const AI_REQUEST_TIMEOUT_MS = 60_000
 const UPLOAD_REQUEST_TIMEOUT_MS = 120_000
 const GALLERY_PAGE_SIZE = 48
 const GENERATION_JOBS_PAGE_SIZE = 50
+const REFERENCE_UPLOAD_CONCURRENCY = 4
 const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const requestVersions = new Map<string, number>()
 const successfulRequests = new Set<string>()
@@ -1335,35 +1337,49 @@ export const useAppStore = create<AppState>((set, get) => ({
     const signedPayload = normalizeSignedUploadPayload(signed)
 
     const fileMap = new Map(uploadSpecs.map((spec, idx) => [spec.clientId, validatedFiles[idx]]))
-    const uploadResultPromises = signedPayload.map(async (item) => {
-      if (!('signedUrl' in item)) {
-        return {
-          clientId: item.clientId,
-          storage_path: '',
-          file_name: '',
-          mime_type: '',
-          file_size: 0,
-          display_order: 0,
-          error: item.error || 'Failed to sign upload',
+    const uploadResults = await mapWithConcurrency(
+      signedPayload,
+      REFERENCE_UPLOAD_CONCURRENCY,
+      async (item) => {
+        if (!('signedUrl' in item)) {
+          return {
+            clientId: item.clientId,
+            storage_path: '',
+            file_name: '',
+            mime_type: '',
+            file_size: 0,
+            display_order: 0,
+            error: item.error || 'Failed to sign upload',
+          }
         }
-      }
 
-      const file = fileMap.get(item.clientId)
-      if (!file) {
-        return {
-          clientId: item.clientId,
-          storage_path: '',
-          file_name: item.file_name,
-          mime_type: item.mime_type,
-          file_size: item.file_size,
-          display_order: item.display_order,
-          error: 'Missing file data',
+        const file = fileMap.get(item.clientId)
+        if (!file) {
+          return {
+            clientId: item.clientId,
+            storage_path: '',
+            file_name: item.file_name,
+            mime_type: item.mime_type,
+            file_size: item.file_size,
+            display_order: item.display_order,
+            error: 'Missing file data',
+          }
         }
-      }
 
-      try {
-        const uploadResp = await uploadToSignedUrl(item.signedUrl, file)
-        if (!uploadResp.ok) {
+        try {
+          const uploadResp = await uploadToSignedUrl(item.signedUrl, file)
+          if (!uploadResp.ok) {
+            return {
+              clientId: item.clientId,
+              storage_path: item.storage_path,
+              file_name: item.file_name,
+              mime_type: item.mime_type,
+              file_size: item.file_size,
+              display_order: item.display_order,
+              error: `Upload failed (${uploadResp.status})`,
+            }
+          }
+        } catch (error) {
           return {
             clientId: item.clientId,
             storage_path: item.storage_path,
@@ -1371,10 +1387,11 @@ export const useAppStore = create<AppState>((set, get) => ({
             mime_type: item.mime_type,
             file_size: item.file_size,
             display_order: item.display_order,
-            error: `Upload failed (${uploadResp.status})`,
+            error:
+              extractErrorMessage(error instanceof Error ? error.message : null) || 'Upload failed',
           }
         }
-      } catch (error) {
+
         return {
           clientId: item.clientId,
           storage_path: item.storage_path,
@@ -1382,22 +1399,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           mime_type: item.mime_type,
           file_size: item.file_size,
           display_order: item.display_order,
-          error:
-            extractErrorMessage(error instanceof Error ? error.message : null) || 'Upload failed',
         }
       }
-
-      return {
-        clientId: item.clientId,
-        storage_path: item.storage_path,
-        file_name: item.file_name,
-        mime_type: item.mime_type,
-        file_size: item.file_size,
-        display_order: item.display_order,
-      }
-    })
-
-    const uploadResults = await Promise.all(uploadResultPromises)
+    )
 
     const successfulUploads = uploadResults.filter((u) => !u.error)
     let payload: Array<ReferenceImage & { error?: string; file?: string }> = []
