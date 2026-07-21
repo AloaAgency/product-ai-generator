@@ -243,6 +243,33 @@ describe('useAppStore async scope guards', () => {
     expect(useAppStore.getState().galleryHasMore).toBe(false)
   })
 
+  it('preserves gallery identities when polling returns unchanged images', async () => {
+    const image = makeGeneratedImage({
+      public_url: 'https://example.test/image',
+      thumb_public_url: 'https://example.test/thumb',
+    })
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url.startsWith(`/api/products/${productA}/gallery?`)) {
+        return Promise.resolve(jsonResponse({ images: [image], total: 1, has_more: false }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGallery(productA)
+    const firstImages = useAppStore.getState().galleryImages
+    const firstImage = firstImages[0]
+
+    await useAppStore.getState().fetchGallery(productA)
+
+    expect(useAppStore.getState().galleryImages).toBe(firstImages)
+    expect(useAppStore.getState().galleryImages[0]).toBe(firstImage)
+  })
+
   it('ignores a reference-set fetch that resolves after the current product changes', async () => {
     const pendingReferenceSets = deferred<Response>()
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
@@ -957,6 +984,30 @@ describe('useAppStore async scope guards', () => {
       useAppStore.getState().updateImageApproval(generatedImageA, 'approved')
     ).rejects.toThrow('Failed to update image')
     expect(useAppStore.getState().galleryImages).toEqual([image])
+  })
+
+  it('does not rebuild the current job when an approval update targets another image', async () => {
+    const galleryImage = makeGeneratedImage()
+    const currentJobImage = makeGeneratedImage({
+      id: generatedImageB,
+      storage_path: 'images/b.png',
+    })
+    const currentJob = { ...makeGenerationJob(), images: [currentJobImage] }
+    useAppStore.setState({ galleryImages: [galleryImage], currentJob })
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === `/api/images/${generatedImageA}` && init?.method === 'PATCH') {
+        return Promise.resolve(jsonResponse({
+          image: { id: generatedImageA, approval_status: 'approved' },
+        }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().updateImageApproval(generatedImageA, 'approved')
+
+    expect(useAppStore.getState().galleryImages[0].approval_status).toBe('approved')
+    expect(useAppStore.getState().currentJob).toBe(currentJob)
+    expect(useAppStore.getState().currentJob?.images).toBe(currentJob.images)
   })
 
   it.each([

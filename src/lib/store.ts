@@ -519,8 +519,8 @@ const areShallowEqualRecords = (previous: object, next: object) => {
 }
 
 const reconcileEntityList = <T extends { id: string }>(previous: T[], next: T[]) => {
-  if (previous.length === 0) return next
   if (next.length === 0) return previous.length === 0 ? previous : next
+  if (previous.length === 0) return next
 
   const previousById = new Map(previous.map((entity) => [entity.id, entity]))
   let didChange = previous.length !== next.length
@@ -576,8 +576,10 @@ const mergeUpdatedImage = (images: GeneratedImage[], imageId: string, updated: P
   let didChange = false
   const nextImages = images.map((image) => {
     if (image.id !== imageId) return image
+    const nextImage = { ...image, ...updated }
+    if (areShallowEqualRecords(image, nextImage)) return image
     didChange = true
-    return { ...image, ...updated }
+    return nextImage
   })
 
   return didChange ? nextImages : images
@@ -623,15 +625,20 @@ const mergeGalleryImagesPreservingLoadedUrls = (
   previousImages: GeneratedImage[],
   nextImages: GeneratedImage[]
 ) => {
-  if (previousImages.length === 0 || nextImages.length === 0) return nextImages
+  if (nextImages.length === 0) return previousImages.length === 0 ? previousImages : nextImages
+  if (previousImages.length === 0) return nextImages
 
   const previousById = new Map(previousImages.map((image) => [image.id, image]))
+  let didChange = previousImages.length !== nextImages.length
 
-  return nextImages.map((image) => {
+  const reconciled = nextImages.map((image, index) => {
     const previous = previousById.get(image.id)
-    if (!previous) return image
+    if (!previous) {
+      didChange = true
+      return image
+    }
 
-    return {
+    const merged = {
       ...image,
       public_url:
         previous.storage_path === image.storage_path && previous.public_url
@@ -646,7 +653,12 @@ const mergeGalleryImagesPreservingLoadedUrls = (
           ? previous.preview_public_url
           : image.preview_public_url,
     }
+    const nextImage = areShallowEqualRecords(previous, merged) ? previous : merged
+    if (nextImage !== previousImages[index]) didChange = true
+    return nextImage
   })
+
+  return didChange ? reconciled : previousImages
 }
 
 const getGalleryQueryString = (
@@ -1875,11 +1887,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       )
         return
       markRequestSuccessful(requestKey)
-      set((state) => ({
-        galleryImages: mergeGalleryImagesPreservingLoadedUrls(state.galleryImages, data.images),
-        galleryTotal: data.total,
-        galleryHasMore: data.has_more,
-      }))
+      set((state) => {
+        const galleryImages = mergeGalleryImagesPreservingLoadedUrls(state.galleryImages, data.images)
+        if (
+          galleryImages === state.galleryImages &&
+          data.total === state.galleryTotal &&
+          data.has_more === state.galleryHasMore
+        ) {
+          return state
+        }
+        return {
+          galleryImages,
+          galleryTotal: data.total,
+          galleryHasMore: data.has_more,
+        }
+      })
     } catch (error) {
       if (
         isLatestRequest(requestKey, requestVersion) &&
@@ -1920,11 +1942,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((state) => {
         const existingIds = new Set(state.galleryImages.map((img) => img.id))
         const unique = newImages.filter((img: GeneratedImage) => !existingIds.has(img.id))
-        return {
-          galleryImages: [...state.galleryImages, ...unique],
-          galleryTotal: data.total,
-          galleryHasMore: data.has_more,
-        }
+        const galleryImages = unique.length > 0
+          ? [...state.galleryImages, ...unique]
+          : state.galleryImages
+        return galleryImages === state.galleryImages &&
+          data.total === state.galleryTotal &&
+          data.has_more === state.galleryHasMore
+          ? state
+          : {
+              galleryImages,
+              galleryTotal: data.total,
+              galleryHasMore: data.has_more,
+            }
       })
     } catch (error) {
       logStoreError('GalleryMore', error)
@@ -1951,15 +1980,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       'Failed to update image'
     ) as Partial<GeneratedImage>
     invalidateRequestKeys(activeGalleryScope, activeCurrentJobScope)
-    set((s) => ({
-      galleryImages: mergeUpdatedImage(s.galleryImages, scopedImageId, updated),
-      currentJob: s.currentJob?.images
-        ? {
-            ...s.currentJob,
-            images: mergeUpdatedImage(s.currentJob.images, scopedImageId, updated),
-          }
-        : s.currentJob,
-    }))
+    set((s) => {
+      const galleryImages = mergeUpdatedImage(s.galleryImages, scopedImageId, updated)
+      const currentJobImages = s.currentJob?.images
+        ? mergeUpdatedImage(s.currentJob.images, scopedImageId, updated)
+        : undefined
+      const currentJob = s.currentJob?.images && currentJobImages !== s.currentJob.images
+        ? { ...s.currentJob, images: currentJobImages }
+        : s.currentJob
+      return galleryImages === s.galleryImages && currentJob === s.currentJob
+        ? s
+        : { galleryImages, currentJob }
+    })
   },
   deleteImage: async (imageId) => {
     const scopedImageId = requireUuid(imageId, 'image id')
@@ -1968,15 +2000,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api(`/api/images/${buildApiPath(scopedImageId)}`, { method: 'DELETE' })
     const idSet = new Set([scopedImageId])
     invalidateRequestKeys(activeGalleryScope, activeCurrentJobScope)
-    set((s) => ({
-      ...updateGalleryStateAfterRemoval(s, idSet),
-      currentJob: s.currentJob?.images
-        ? {
-            ...s.currentJob,
-            images: removeImagesById(s.currentJob.images, idSet),
-          }
-        : s.currentJob,
-    }))
+    set((s) => {
+      const galleryState = updateGalleryStateAfterRemoval(s, idSet)
+      const currentJobImages = s.currentJob?.images
+        ? removeImagesById(s.currentJob.images, idSet)
+        : undefined
+      const currentJob = s.currentJob?.images && currentJobImages !== s.currentJob.images
+        ? { ...s.currentJob, images: currentJobImages }
+        : s.currentJob
+      return galleryState.galleryImages === s.galleryImages &&
+        galleryState.galleryTotal === s.galleryTotal &&
+        galleryState.galleryHasMore === s.galleryHasMore &&
+        currentJob === s.currentJob
+        ? s
+        : { ...galleryState, currentJob }
+    })
   },
   bulkDeleteImages: async (imageIds) => {
     const sanitizedIds = sanitizeUuidArray(imageIds, 'image id')
@@ -1989,15 +2027,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const idSet = new Set(sanitizedIds)
     invalidateRequestKeys(activeGalleryScope, activeCurrentJobScope)
-    set((s) => ({
-      ...updateGalleryStateAfterRemoval(s, idSet),
-      currentJob: s.currentJob?.images
-        ? {
-            ...s.currentJob,
-            images: removeImagesById(s.currentJob.images, idSet),
-          }
-        : s.currentJob,
-    }))
+    set((s) => {
+      const galleryState = updateGalleryStateAfterRemoval(s, idSet)
+      const currentJobImages = s.currentJob?.images
+        ? removeImagesById(s.currentJob.images, idSet)
+        : undefined
+      const currentJob = s.currentJob?.images && currentJobImages !== s.currentJob.images
+        ? { ...s.currentJob, images: currentJobImages }
+        : s.currentJob
+      return galleryState.galleryImages === s.galleryImages &&
+        galleryState.galleryTotal === s.galleryTotal &&
+        galleryState.galleryHasMore === s.galleryHasMore &&
+        currentJob === s.currentJob
+        ? s
+        : { ...galleryState, currentJob }
+    })
   },
 
   // Settings Templates
