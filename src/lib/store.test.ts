@@ -648,6 +648,57 @@ describe('useAppStore async scope guards', () => {
     expect(useAppStore.getState().generationJobs).toEqual([])
   })
 
+  it('preserves generation job identities when polling returns unchanged data', async () => {
+    const job = makeGenerationJob()
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/generate`) {
+        return Promise.resolve(jsonResponse([job]))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGenerationJobs(productA)
+    const firstJobs = useAppStore.getState().generationJobs
+    const firstJob = firstJobs[0]
+
+    await useAppStore.getState().fetchGenerationJobs(productA)
+
+    expect(useAppStore.getState().generationJobs).toBe(firstJobs)
+    expect(useAppStore.getState().generationJobs[0]).toBe(firstJob)
+  })
+
+  it('preserves current job and image identities when status polling is unchanged', async () => {
+    const job = makeGenerationJob()
+    const image = makeGeneratedImage()
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/generate/${generationJobA}`) {
+        return Promise.resolve(jsonResponse({ job, images: [image] }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchJobStatus(productA, generationJobA)
+    const firstCurrentJob = useAppStore.getState().currentJob
+    const firstImages = firstCurrentJob?.images
+    const firstImage = firstImages?.[0]
+
+    await useAppStore.getState().fetchJobStatus(productA, generationJobA)
+
+    expect(useAppStore.getState().currentJob).toBe(firstCurrentJob)
+    expect(useAppStore.getState().currentJob?.images).toBe(firstImages)
+    expect(useAppStore.getState().currentJob?.images?.[0]).toBe(firstImage)
+  })
+
   it('reconciles a queue clear without re-fetching matching generation jobs', async () => {
     const pendingJob = makeGenerationJob({
       status: 'pending',

@@ -499,6 +499,59 @@ const getInFlightRequest = <T>(key: string, request: (signal: AbortSignal) => Pr
   return nextRequest
 }
 
+const areShallowEqualRecords = (previous: object, next: object) => {
+  if (previous === next) return true
+
+  const previousRecord = previous as Record<string, unknown>
+  const nextRecord = next as Record<string, unknown>
+  const previousKeys = Object.keys(previousRecord)
+  const nextKeys = Object.keys(nextRecord)
+  if (previousKeys.length !== nextKeys.length) return false
+
+  return previousKeys.every(
+    (key) =>
+      Object.prototype.hasOwnProperty.call(nextRecord, key) &&
+      Object.is(previousRecord[key], nextRecord[key])
+  )
+}
+
+const reconcileEntityList = <T extends { id: string }>(previous: T[], next: T[]) => {
+  if (previous.length === 0) return next
+  if (next.length === 0) return previous.length === 0 ? previous : next
+
+  const previousById = new Map(previous.map((entity) => [entity.id, entity]))
+  let didChange = previous.length !== next.length
+  const reconciled = next.map((entity, index) => {
+    const previousEntity = previousById.get(entity.id)
+    const nextEntity =
+      previousEntity && areShallowEqualRecords(previousEntity, entity)
+        ? previousEntity
+        : entity
+    if (nextEntity !== previous[index]) didChange = true
+    return nextEntity
+  })
+
+  return didChange ? reconciled : previous
+}
+
+type CurrentGenerationJob = GenerationJob & { images?: GeneratedImage[] }
+
+const reconcileCurrentJob = (
+  previous: CurrentGenerationJob | null,
+  job: GenerationJob,
+  images: GeneratedImage[] | undefined
+): CurrentGenerationJob => {
+  const previousImages = previous?.id === job.id ? previous.images : undefined
+  const reconciledImages = images === undefined
+    ? undefined
+    : reconcileEntityList(previousImages ?? [], images)
+  const next = { ...job, images: reconciledImages }
+
+  return previous?.id === job.id && areShallowEqualRecords(previous, next)
+    ? previous
+    : next
+}
+
 const mergeUpdatedImage = (images: GeneratedImage[], imageId: string, updated: Partial<GeneratedImage>) => {
   let didChange = false
   const nextImages = images.map((image) => {
@@ -1477,7 +1530,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       )
         return
       markRequestSuccessful(requestKey)
-      set({ generationJobs: data })
+      set((state) => {
+        const generationJobs = reconcileEntityList(state.generationJobs, data)
+        return generationJobs === state.generationJobs ? state : { generationJobs }
+      })
     } catch (error) {
       if (
         isLatestRequest(requestKey, requestVersion) &&
@@ -1558,7 +1614,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const images = data.images === undefined
         ? undefined
         : requireArrayResponse<GeneratedImage>(data.images, 'Failed to load job images')
-      set({ currentJob: { ...job, images } })
+      set((state) => {
+        const currentJob = reconcileCurrentJob(state.currentJob, job, images)
+        return currentJob === state.currentJob ? state : { currentJob }
+      })
     } catch (error) {
       if (
         isLatestRequest(requestKey, requestVersion) &&
