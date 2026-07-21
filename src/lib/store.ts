@@ -25,6 +25,7 @@ import {
 } from './request-guards'
 import { logger } from '@/lib/logger'
 import { isClientDevelopmentRuntime } from '@/lib/client-runtime'
+import { mapWithConcurrency } from '@/lib/concurrency'
 
 const DEFAULT_ERROR_MESSAGE = 'Request failed'
 const MAX_SUGGESTED_PROMPT_COUNT = 10
@@ -35,6 +36,8 @@ const API_REQUEST_TIMEOUT_MS = 15_000
 const AI_REQUEST_TIMEOUT_MS = 60_000
 const UPLOAD_REQUEST_TIMEOUT_MS = 120_000
 const GALLERY_PAGE_SIZE = 48
+const GENERATION_JOBS_PAGE_SIZE = 50
+const REFERENCE_UPLOAD_CONCURRENCY = 4
 const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const requestVersions = new Map<string, number>()
 const successfulRequests = new Set<string>()
@@ -105,6 +108,7 @@ const clearProductScopedSliceScopes = () => {
   sliceScopes.set('referenceSets', '_')
   sliceScopes.set('promptTemplates', '_')
   sliceScopes.set('generationJobs', '_')
+  sliceScopes.set('generationJobsMore', '_')
   sliceScopes.set('currentJob', '_')
   sliceScopes.set('gallery', '_')
   sliceScopes.set('settingsTemplates', '_')
@@ -243,6 +247,7 @@ const cancelProductScopedRequests = (productId: string) => {
     'referenceSets',
     'promptTemplates',
     'generationJobs',
+    'generationJobsMore',
     'currentJob',
     'gallery',
     'settingsTemplates',
@@ -499,12 +504,84 @@ const getInFlightRequest = <T>(key: string, request: (signal: AbortSignal) => Pr
   return nextRequest
 }
 
+const areShallowEqualRecords = (previous: object, next: object) => {
+  if (previous === next) return true
+
+  const previousRecord = previous as Record<string, unknown>
+  const nextRecord = next as Record<string, unknown>
+  const previousKeys = Object.keys(previousRecord)
+  const nextKeys = Object.keys(nextRecord)
+  if (previousKeys.length !== nextKeys.length) return false
+
+  return previousKeys.every(
+    (key) =>
+      Object.prototype.hasOwnProperty.call(nextRecord, key) &&
+      Object.is(previousRecord[key], nextRecord[key])
+  )
+}
+
+const reconcileEntityList = <T extends { id: string }>(previous: T[], next: T[]) => {
+  if (next.length === 0) return previous.length === 0 ? previous : next
+  if (previous.length === 0) return next
+
+  const previousById = new Map(previous.map((entity) => [entity.id, entity]))
+  let didChange = previous.length !== next.length
+  const reconciled = next.map((entity, index) => {
+    const previousEntity = previousById.get(entity.id)
+    const nextEntity =
+      previousEntity && areShallowEqualRecords(previousEntity, entity)
+        ? previousEntity
+        : entity
+    if (nextEntity !== previous[index]) didChange = true
+    return nextEntity
+  })
+
+  return didChange ? reconciled : previous
+}
+
+const mergeFirstEntityPage = <T extends { id: string }>(previous: T[], next: T[]) => {
+  if (previous.length === 0 || next.length === 0) {
+    return reconcileEntityList(previous, next)
+  }
+
+  const reconciledPage = reconcileEntityList(previous, next)
+  const pageIds = new Set(next.map((entity) => entity.id))
+  const merged = [
+    ...reconciledPage,
+    ...previous.filter((entity) => !pageIds.has(entity.id)),
+  ]
+
+  return merged.length === previous.length && merged.every((entity, index) => entity === previous[index])
+    ? previous
+    : merged
+}
+
+type CurrentGenerationJob = GenerationJob & { images?: GeneratedImage[] }
+
+const reconcileCurrentJob = (
+  previous: CurrentGenerationJob | null,
+  job: GenerationJob,
+  images: GeneratedImage[] | undefined
+): CurrentGenerationJob => {
+  const previousImages = previous?.id === job.id ? previous.images : undefined
+  const reconciledImages = images === undefined
+    ? undefined
+    : reconcileEntityList(previousImages ?? [], images)
+  const next = { ...job, images: reconciledImages }
+
+  return previous?.id === job.id && areShallowEqualRecords(previous, next)
+    ? previous
+    : next
+}
+
 const mergeUpdatedImage = (images: GeneratedImage[], imageId: string, updated: Partial<GeneratedImage>) => {
   let didChange = false
   const nextImages = images.map((image) => {
     if (image.id !== imageId) return image
+    const nextImage = { ...image, ...updated }
+    if (areShallowEqualRecords(image, nextImage)) return image
     didChange = true
-    return { ...image, ...updated }
+    return nextImage
   })
 
   return didChange ? nextImages : images
@@ -520,12 +597,14 @@ const getProductScopedState = () => ({
   referenceImages: {},
   promptTemplates: [],
   generationJobs: [],
+  generationJobsHasMore: false,
   currentJob: null,
   galleryImages: [],
   galleryTotal: 0,
   galleryHasMore: false,
   loadingRefSets: false,
   loadingJobs: false,
+  loadingJobsMore: false,
   loadingGallery: false,
   loadingGalleryMore: false,
   settingsTemplates: [],
@@ -548,15 +627,20 @@ const mergeGalleryImagesPreservingLoadedUrls = (
   previousImages: GeneratedImage[],
   nextImages: GeneratedImage[]
 ) => {
-  if (previousImages.length === 0 || nextImages.length === 0) return nextImages
+  if (nextImages.length === 0) return previousImages.length === 0 ? previousImages : nextImages
+  if (previousImages.length === 0) return nextImages
 
   const previousById = new Map(previousImages.map((image) => [image.id, image]))
+  let didChange = previousImages.length !== nextImages.length
 
-  return nextImages.map((image) => {
+  const reconciled = nextImages.map((image, index) => {
     const previous = previousById.get(image.id)
-    if (!previous) return image
+    if (!previous) {
+      didChange = true
+      return image
+    }
 
-    return {
+    const merged = {
       ...image,
       public_url:
         previous.storage_path === image.storage_path && previous.public_url
@@ -571,7 +655,12 @@ const mergeGalleryImagesPreservingLoadedUrls = (
           ? previous.preview_public_url
           : image.preview_public_url,
     }
+    const nextImage = areShallowEqualRecords(previous, merged) ? previous : merged
+    if (nextImage !== previousImages[index]) didChange = true
+    return nextImage
   })
+
+  return didChange ? reconciled : previousImages
 }
 
 const getGalleryQueryString = (
@@ -665,9 +754,12 @@ interface AppState {
 
   // Generation
   generationJobs: GenerationJob[]
+  generationJobsHasMore: boolean
   currentJob: (GenerationJob & { images?: GeneratedImage[] }) | null
   loadingJobs: boolean
-  fetchGenerationJobs: (productId: string) => Promise<void>
+  loadingJobsMore: boolean
+  fetchGenerationJobs: (productId: string, options?: { replace?: boolean }) => Promise<void>
+  fetchGenerationJobsMore: (productId: string) => Promise<void>
   startGeneration: (productId: string, data: {
     prompt_template_id?: string
     prompt_text: string
@@ -983,6 +1075,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         referenceImages: {},
         promptTemplates: [],
         generationJobs: [],
+        generationJobsHasMore: false,
         currentJob: null,
         galleryImages: [],
         galleryTotal: 0,
@@ -990,6 +1083,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         settingsTemplates: [],
         ...(cancelledSlices.has('referenceSets') ? { loadingRefSets: false } : {}),
         ...(cancelledSlices.has('generationJobs') ? { loadingJobs: false } : {}),
+        ...(cancelledSlices.has('generationJobsMore') ? { loadingJobsMore: false } : {}),
         ...(cancelledSlices.has('gallery')
           ? { loadingGallery: false, loadingGalleryMore: false }
           : {}),
@@ -1243,35 +1337,49 @@ export const useAppStore = create<AppState>((set, get) => ({
     const signedPayload = normalizeSignedUploadPayload(signed)
 
     const fileMap = new Map(uploadSpecs.map((spec, idx) => [spec.clientId, validatedFiles[idx]]))
-    const uploadResultPromises = signedPayload.map(async (item) => {
-      if (!('signedUrl' in item)) {
-        return {
-          clientId: item.clientId,
-          storage_path: '',
-          file_name: '',
-          mime_type: '',
-          file_size: 0,
-          display_order: 0,
-          error: item.error || 'Failed to sign upload',
+    const uploadResults = await mapWithConcurrency(
+      signedPayload,
+      REFERENCE_UPLOAD_CONCURRENCY,
+      async (item) => {
+        if (!('signedUrl' in item)) {
+          return {
+            clientId: item.clientId,
+            storage_path: '',
+            file_name: '',
+            mime_type: '',
+            file_size: 0,
+            display_order: 0,
+            error: item.error || 'Failed to sign upload',
+          }
         }
-      }
 
-      const file = fileMap.get(item.clientId)
-      if (!file) {
-        return {
-          clientId: item.clientId,
-          storage_path: '',
-          file_name: item.file_name,
-          mime_type: item.mime_type,
-          file_size: item.file_size,
-          display_order: item.display_order,
-          error: 'Missing file data',
+        const file = fileMap.get(item.clientId)
+        if (!file) {
+          return {
+            clientId: item.clientId,
+            storage_path: '',
+            file_name: item.file_name,
+            mime_type: item.mime_type,
+            file_size: item.file_size,
+            display_order: item.display_order,
+            error: 'Missing file data',
+          }
         }
-      }
 
-      try {
-        const uploadResp = await uploadToSignedUrl(item.signedUrl, file)
-        if (!uploadResp.ok) {
+        try {
+          const uploadResp = await uploadToSignedUrl(item.signedUrl, file)
+          if (!uploadResp.ok) {
+            return {
+              clientId: item.clientId,
+              storage_path: item.storage_path,
+              file_name: item.file_name,
+              mime_type: item.mime_type,
+              file_size: item.file_size,
+              display_order: item.display_order,
+              error: `Upload failed (${uploadResp.status})`,
+            }
+          }
+        } catch (error) {
           return {
             clientId: item.clientId,
             storage_path: item.storage_path,
@@ -1279,10 +1387,11 @@ export const useAppStore = create<AppState>((set, get) => ({
             mime_type: item.mime_type,
             file_size: item.file_size,
             display_order: item.display_order,
-            error: `Upload failed (${uploadResp.status})`,
+            error:
+              extractErrorMessage(error instanceof Error ? error.message : null) || 'Upload failed',
           }
         }
-      } catch (error) {
+
         return {
           clientId: item.clientId,
           storage_path: item.storage_path,
@@ -1290,22 +1399,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           mime_type: item.mime_type,
           file_size: item.file_size,
           display_order: item.display_order,
-          error:
-            extractErrorMessage(error instanceof Error ? error.message : null) || 'Upload failed',
         }
       }
-
-      return {
-        clientId: item.clientId,
-        storage_path: item.storage_path,
-        file_name: item.file_name,
-        mime_type: item.mime_type,
-        file_size: item.file_size,
-        display_order: item.display_order,
-      }
-    })
-
-    const uploadResults = await Promise.all(uploadResultPromises)
+    )
 
     const successfulUploads = uploadResults.filter((u) => !u.error)
     let payload: Array<ReferenceImage & { error?: string; file?: string }> = []
@@ -1452,13 +1548,23 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Generation
   generationJobs: [],
+  generationJobsHasMore: false,
   currentJob: null,
   loadingJobs: false,
-  fetchGenerationJobs: async (productId) => {
+  loadingJobsMore: false,
+  fetchGenerationJobs: async (productId, options) => {
     const scopedProductId = requireUuid(productId, 'product id')
+    const shouldReplace = options?.replace === true
     const requestKey = buildRequestKey('generationJobs', scopedProductId)
     if (updateSliceScope('generationJobs', requestKey)) {
-      set({ generationJobs: [], currentJob: null, loadingJobs: false })
+      updateSliceScope('generationJobsMore', '_')
+      set({
+        generationJobs: [],
+        generationJobsHasMore: false,
+        currentJob: null,
+        loadingJobs: false,
+        loadingJobsMore: false,
+      })
     }
     const requestVersion = beginTrackedSliceRequest('generationJobs', requestKey)
     const shouldShowLoading = get().generationJobs.length === 0
@@ -1477,7 +1583,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       )
         return
       markRequestSuccessful(requestKey)
-      set({ generationJobs: data })
+      set((state) => {
+        const wasEmpty = state.generationJobs.length === 0
+        const generationJobs = shouldReplace
+          ? reconcileEntityList(state.generationJobs, data)
+          : mergeFirstEntityPage(state.generationJobs, data)
+        const generationJobsHasMore = wasEmpty || shouldReplace
+          ? data.length === GENERATION_JOBS_PAGE_SIZE
+          : state.generationJobsHasMore
+        return generationJobs === state.generationJobs &&
+          generationJobsHasMore === state.generationJobsHasMore
+          ? state
+          : { generationJobs, generationJobsHasMore }
+      })
     } catch (error) {
       if (
         isLatestRequest(requestKey, requestVersion) &&
@@ -1490,6 +1608,63 @@ export const useAppStore = create<AppState>((set, get) => ({
     } finally {
       if (shouldShowLoading && isLatestRequest(requestKey, requestVersion) && isCurrentSliceScope('generationJobs', requestKey)) {
         set({ loadingJobs: false })
+      }
+    }
+  },
+  fetchGenerationJobsMore: async (productId) => {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const state = get()
+    const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
+    if (
+      !state.generationJobsHasMore ||
+      state.loadingJobsMore ||
+      !isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)
+    ) {
+      return
+    }
+
+    const offset = state.generationJobs.length
+    const requestKey = buildRequestKey('generationJobsMore', scopedProductId, String(offset))
+    updateSliceScope('generationJobsMore', requestKey)
+    const requestVersion = beginTrackedSliceRequest('generationJobsMore', requestKey)
+    set({ loadingJobsMore: true })
+    try {
+      const params = new URLSearchParams({
+        limit: String(GENERATION_JOBS_PAGE_SIZE),
+        offset: String(offset),
+      })
+      const data = requireArrayResponse<GenerationJob>(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/generate?${params}`, { signal })
+        ),
+        'Failed to load more generation jobs'
+      )
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('generationJobsMore', requestKey) ||
+        !isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)
+      ) {
+        return
+      }
+
+      set((currentState) => {
+        const existingIds = new Set(currentState.generationJobs.map((job) => job.id))
+        const reconciledPage = reconcileEntityList(currentState.generationJobs, data)
+        const uniqueJobs = reconciledPage.filter((job) => !existingIds.has(job.id))
+        const generationJobs = uniqueJobs.length > 0
+          ? [...currentState.generationJobs, ...uniqueJobs]
+          : currentState.generationJobs
+        const generationJobsHasMore = data.length === GENERATION_JOBS_PAGE_SIZE
+        return generationJobs === currentState.generationJobs &&
+          generationJobsHasMore === currentState.generationJobsHasMore
+          ? currentState
+          : { generationJobs, generationJobsHasMore }
+      })
+    } catch (error) {
+      logStoreError('GenerationJobsMore', error)
+    } finally {
+      if (isLatestRequest(requestKey, requestVersion) && isCurrentSliceScope('generationJobsMore', requestKey)) {
+        set({ loadingJobsMore: false })
       }
     }
   },
@@ -1558,7 +1733,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const images = data.images === undefined
         ? undefined
         : requireArrayResponse<GeneratedImage>(data.images, 'Failed to load job images')
-      set({ currentJob: { ...job, images } })
+      set((state) => {
+        const currentJob = reconcileCurrentJob(state.currentJob, job, images)
+        return currentJob === state.currentJob ? state : { currentJob }
+      })
     } catch (error) {
       if (
         isLatestRequest(requestKey, requestVersion) &&
@@ -1623,7 +1801,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           ),
         })
       } else {
-        await get().fetchGenerationJobs(scopedProductId)
+        await get().fetchGenerationJobs(scopedProductId, { replace: true })
       }
     }
   },
@@ -1641,7 +1819,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (getResponseCount(result, 'cleared_failed') === failedJobs.length) {
         set({ generationJobs: jobs.filter((job) => job.status !== 'failed') })
       } else {
-        await get().fetchGenerationJobs(scopedProductId)
+        await get().fetchGenerationJobs(scopedProductId, { replace: true })
       }
     }
   },
@@ -1713,11 +1891,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       )
         return
       markRequestSuccessful(requestKey)
-      set((state) => ({
-        galleryImages: mergeGalleryImagesPreservingLoadedUrls(state.galleryImages, data.images),
-        galleryTotal: data.total,
-        galleryHasMore: data.has_more,
-      }))
+      set((state) => {
+        const galleryImages = mergeGalleryImagesPreservingLoadedUrls(state.galleryImages, data.images)
+        if (
+          galleryImages === state.galleryImages &&
+          data.total === state.galleryTotal &&
+          data.has_more === state.galleryHasMore
+        ) {
+          return state
+        }
+        return {
+          galleryImages,
+          galleryTotal: data.total,
+          galleryHasMore: data.has_more,
+        }
+      })
     } catch (error) {
       if (
         isLatestRequest(requestKey, requestVersion) &&
@@ -1758,11 +1946,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((state) => {
         const existingIds = new Set(state.galleryImages.map((img) => img.id))
         const unique = newImages.filter((img: GeneratedImage) => !existingIds.has(img.id))
-        return {
-          galleryImages: [...state.galleryImages, ...unique],
-          galleryTotal: data.total,
-          galleryHasMore: data.has_more,
-        }
+        const galleryImages = unique.length > 0
+          ? [...state.galleryImages, ...unique]
+          : state.galleryImages
+        return galleryImages === state.galleryImages &&
+          data.total === state.galleryTotal &&
+          data.has_more === state.galleryHasMore
+          ? state
+          : {
+              galleryImages,
+              galleryTotal: data.total,
+              galleryHasMore: data.has_more,
+            }
       })
     } catch (error) {
       logStoreError('GalleryMore', error)
@@ -1789,15 +1984,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       'Failed to update image'
     ) as Partial<GeneratedImage>
     invalidateRequestKeys(activeGalleryScope, activeCurrentJobScope)
-    set((s) => ({
-      galleryImages: mergeUpdatedImage(s.galleryImages, scopedImageId, updated),
-      currentJob: s.currentJob?.images
-        ? {
-            ...s.currentJob,
-            images: mergeUpdatedImage(s.currentJob.images, scopedImageId, updated),
-          }
-        : s.currentJob,
-    }))
+    set((s) => {
+      const galleryImages = mergeUpdatedImage(s.galleryImages, scopedImageId, updated)
+      const currentJobImages = s.currentJob?.images
+        ? mergeUpdatedImage(s.currentJob.images, scopedImageId, updated)
+        : undefined
+      const currentJob = s.currentJob?.images && currentJobImages !== s.currentJob.images
+        ? { ...s.currentJob, images: currentJobImages }
+        : s.currentJob
+      return galleryImages === s.galleryImages && currentJob === s.currentJob
+        ? s
+        : { galleryImages, currentJob }
+    })
   },
   deleteImage: async (imageId) => {
     const scopedImageId = requireUuid(imageId, 'image id')
@@ -1806,15 +2004,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     await api(`/api/images/${buildApiPath(scopedImageId)}`, { method: 'DELETE' })
     const idSet = new Set([scopedImageId])
     invalidateRequestKeys(activeGalleryScope, activeCurrentJobScope)
-    set((s) => ({
-      ...updateGalleryStateAfterRemoval(s, idSet),
-      currentJob: s.currentJob?.images
-        ? {
-            ...s.currentJob,
-            images: removeImagesById(s.currentJob.images, idSet),
-          }
-        : s.currentJob,
-    }))
+    set((s) => {
+      const galleryState = updateGalleryStateAfterRemoval(s, idSet)
+      const currentJobImages = s.currentJob?.images
+        ? removeImagesById(s.currentJob.images, idSet)
+        : undefined
+      const currentJob = s.currentJob?.images && currentJobImages !== s.currentJob.images
+        ? { ...s.currentJob, images: currentJobImages }
+        : s.currentJob
+      return galleryState.galleryImages === s.galleryImages &&
+        galleryState.galleryTotal === s.galleryTotal &&
+        galleryState.galleryHasMore === s.galleryHasMore &&
+        currentJob === s.currentJob
+        ? s
+        : { ...galleryState, currentJob }
+    })
   },
   bulkDeleteImages: async (imageIds) => {
     const sanitizedIds = sanitizeUuidArray(imageIds, 'image id')
@@ -1827,15 +2031,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const idSet = new Set(sanitizedIds)
     invalidateRequestKeys(activeGalleryScope, activeCurrentJobScope)
-    set((s) => ({
-      ...updateGalleryStateAfterRemoval(s, idSet),
-      currentJob: s.currentJob?.images
-        ? {
-            ...s.currentJob,
-            images: removeImagesById(s.currentJob.images, idSet),
-          }
-        : s.currentJob,
-    }))
+    set((s) => {
+      const galleryState = updateGalleryStateAfterRemoval(s, idSet)
+      const currentJobImages = s.currentJob?.images
+        ? removeImagesById(s.currentJob.images, idSet)
+        : undefined
+      const currentJob = s.currentJob?.images && currentJobImages !== s.currentJob.images
+        ? { ...s.currentJob, images: currentJobImages }
+        : s.currentJob
+      return galleryState.galleryImages === s.galleryImages &&
+        galleryState.galleryTotal === s.galleryTotal &&
+        galleryState.galleryHasMore === s.galleryHasMore &&
+        currentJob === s.currentJob
+        ? s
+        : { ...galleryState, currentJob }
+    })
   },
 
   // Settings Templates

@@ -82,11 +82,13 @@ describe('useAppStore async scope guards', () => {
       referenceImages: {},
       promptTemplates: [],
       generationJobs: [],
+      generationJobsHasMore: false,
       currentJob: null,
       galleryImages: [],
       galleryTotal: 0,
       galleryHasMore: false,
       loadingRefSets: false,
+      loadingJobsMore: false,
       loadingGallery: false,
       loadingGalleryMore: false,
       settingsTemplates: [],
@@ -239,6 +241,33 @@ describe('useAppStore async scope guards', () => {
     expect(useAppStore.getState().galleryImages).toEqual([image])
     expect(useAppStore.getState().galleryTotal).toBe(1)
     expect(useAppStore.getState().galleryHasMore).toBe(false)
+  })
+
+  it('preserves gallery identities when polling returns unchanged images', async () => {
+    const image = makeGeneratedImage({
+      public_url: 'https://example.test/image',
+      thumb_public_url: 'https://example.test/thumb',
+    })
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url.startsWith(`/api/products/${productA}/gallery?`)) {
+        return Promise.resolve(jsonResponse({ images: [image], total: 1, has_more: false }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGallery(productA)
+    const firstImages = useAppStore.getState().galleryImages
+    const firstImage = firstImages[0]
+
+    await useAppStore.getState().fetchGallery(productA)
+
+    expect(useAppStore.getState().galleryImages).toBe(firstImages)
+    expect(useAppStore.getState().galleryImages[0]).toBe(firstImage)
   })
 
   it('ignores a reference-set fetch that resolves after the current product changes', async () => {
@@ -569,6 +598,57 @@ describe('useAppStore async scope guards', () => {
     )
   })
 
+  it('caps concurrent signed uploads for large reference image batches', async () => {
+    let activeUploads = 0
+    let maxActiveUploads = 0
+    let uploadCalls = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (
+        url === `/api/products/${productA}/reference-sets/${referenceSetA}/images/upload-urls` &&
+        method === 'POST'
+      ) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          files?: Array<{ clientId: string; name: string }>
+        }
+        return jsonResponse((body.files ?? []).map((file, index) => ({
+          clientId: file.clientId,
+          signedUrl: `/signed-upload/${file.clientId}`,
+          storage_path: `references/${file.name}`,
+          file_name: file.name,
+          mime_type: 'image/png',
+          file_size: 1,
+          display_order: index,
+        })))
+      }
+      if (url.startsWith('/signed-upload/') && method === 'PUT') {
+        uploadCalls += 1
+        activeUploads += 1
+        maxActiveUploads = Math.max(maxActiveUploads, activeUploads)
+        await new Promise((resolve) => setTimeout(resolve, 2))
+        activeUploads -= 1
+        return new Response(null, { status: 200 })
+      }
+      if (
+        url === `/api/products/${productA}/reference-sets/${referenceSetA}/images` &&
+        method === 'POST'
+      ) {
+        return jsonResponse([])
+      }
+      return jsonResponse({ error: 'Unexpected request' }, 500)
+    }))
+
+    const files = Array.from(
+      { length: 10 },
+      (_, index) => new File(['x'], `photo-${index}.png`, { type: 'image/png' })
+    )
+    await useAppStore.getState().uploadReferenceImages(productA, referenceSetA, files)
+
+    expect(uploadCalls).toBe(10)
+    expect(maxActiveUploads).toBe(4)
+  })
+
   it('rejects malformed upload signing responses with a stable error', async () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -646,6 +726,100 @@ describe('useAppStore async scope guards', () => {
       })
     ).rejects.toThrow('Failed to start generation')
     expect(useAppStore.getState().generationJobs).toEqual([])
+  })
+
+  it('preserves generation job identities when polling returns unchanged data', async () => {
+    const job = makeGenerationJob()
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/generate`) {
+        return Promise.resolve(jsonResponse([job]))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGenerationJobs(productA)
+    const firstJobs = useAppStore.getState().generationJobs
+    const firstJob = firstJobs[0]
+
+    await useAppStore.getState().fetchGenerationJobs(productA)
+
+    expect(useAppStore.getState().generationJobs).toBe(firstJobs)
+    expect(useAppStore.getState().generationJobs[0]).toBe(firstJob)
+  })
+
+  it('loads generation history incrementally from the paginated jobs endpoint', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) =>
+      makeGenerationJob({ id: `job-${index}` })
+    )
+    const secondPage = [
+      makeGenerationJob({ id: 'job-50' }),
+      makeGenerationJob({ id: 'job-51' }),
+    ]
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/generate`) {
+        return Promise.resolve(jsonResponse(firstPage))
+      }
+      if (url === `/api/products/${productA}/generate?limit=50&offset=50`) {
+        return Promise.resolve(jsonResponse(secondPage))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchGenerationJobs(productA)
+    expect(useAppStore.getState().generationJobs).toHaveLength(50)
+    expect(useAppStore.getState().generationJobsHasMore).toBe(true)
+
+    await useAppStore.getState().fetchGenerationJobsMore(productA)
+
+    expect(useAppStore.getState().generationJobs).toHaveLength(52)
+    expect(useAppStore.getState().generationJobs.slice(-2).map((job) => job.id)).toEqual([
+      'job-50',
+      'job-51',
+    ])
+    expect(useAppStore.getState().generationJobsHasMore).toBe(false)
+    expect(useAppStore.getState().loadingJobsMore).toBe(false)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/products/${productA}/generate?limit=50&offset=50`,
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+  })
+
+  it('preserves current job and image identities when status polling is unchanged', async () => {
+    const job = makeGenerationJob()
+    const image = makeGeneratedImage()
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/products/${productA}`) {
+        return Promise.resolve(jsonResponse({ id: productA, name: 'Product A' }))
+      }
+      if (url === `/api/products/${productA}/generate/${generationJobA}`) {
+        return Promise.resolve(jsonResponse({ job, images: [image] }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().fetchProduct(productA)
+    await useAppStore.getState().fetchJobStatus(productA, generationJobA)
+    const firstCurrentJob = useAppStore.getState().currentJob
+    const firstImages = firstCurrentJob?.images
+    const firstImage = firstImages?.[0]
+
+    await useAppStore.getState().fetchJobStatus(productA, generationJobA)
+
+    expect(useAppStore.getState().currentJob).toBe(firstCurrentJob)
+    expect(useAppStore.getState().currentJob?.images).toBe(firstImages)
+    expect(useAppStore.getState().currentJob?.images?.[0]).toBe(firstImage)
   })
 
   it('reconciles a queue clear without re-fetching matching generation jobs', async () => {
@@ -861,6 +1035,30 @@ describe('useAppStore async scope guards', () => {
       useAppStore.getState().updateImageApproval(generatedImageA, 'approved')
     ).rejects.toThrow('Failed to update image')
     expect(useAppStore.getState().galleryImages).toEqual([image])
+  })
+
+  it('does not rebuild the current job when an approval update targets another image', async () => {
+    const galleryImage = makeGeneratedImage()
+    const currentJobImage = makeGeneratedImage({
+      id: generatedImageB,
+      storage_path: 'images/b.png',
+    })
+    const currentJob = { ...makeGenerationJob(), images: [currentJobImage] }
+    useAppStore.setState({ galleryImages: [galleryImage], currentJob })
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === `/api/images/${generatedImageA}` && init?.method === 'PATCH') {
+        return Promise.resolve(jsonResponse({
+          image: { id: generatedImageA, approval_status: 'approved' },
+        }))
+      }
+      return Promise.resolve(jsonResponse({ error: 'Unexpected request' }, 500))
+    }))
+
+    await useAppStore.getState().updateImageApproval(generatedImageA, 'approved')
+
+    expect(useAppStore.getState().galleryImages[0].approval_status).toBe('approved')
+    expect(useAppStore.getState().currentJob).toBe(currentJob)
+    expect(useAppStore.getState().currentJob?.images).toBe(currentJob.images)
   })
 
   it.each([
