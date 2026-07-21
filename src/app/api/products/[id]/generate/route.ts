@@ -129,17 +129,20 @@ export async function POST(
         .select(`global_style_settings, ${T.projects}!fk_products_project(global_style_settings)`)
         .eq('id', productId)
         .single(),
+      // id/type and id/reference_set_id are the only columns read from these two
+      // tables below — selecting them explicitly keeps storage paths, URLs, and
+      // file metadata (which can span many rows per job) out of the payload.
       uniqueSetIds.length > 0
         ? supabase
             .from(T.reference_sets)
-            .select('*')
+            .select('id, type')
             .in('id', uniqueSetIds)
             .eq('product_id', productId)
         : Promise.resolve({ data: [], error: null }),
       uniqueSetIds.length > 0
         ? supabase
             .from(T.reference_images)
-            .select('*')
+            .select('id, reference_set_id')
             .in('reference_set_id', uniqueSetIds)
             .order('display_order', { ascending: true })
         : Promise.resolve({ data: [], error: null }),
@@ -158,8 +161,8 @@ export async function POST(
       return NextResponse.json({ error: 'Failed to load reference sets' }, { status: 500 })
     }
 
-    const refSetsById = new Map<string, ReferenceSet>(
-      (refSetsResult.data || []).map(rs => [rs.id, rs as ReferenceSet])
+    const refSetsById = new Map<string, Pick<ReferenceSet, 'id' | 'type'>>(
+      (refSetsResult.data || []).map(rs => [rs.id, rs as Pick<ReferenceSet, 'id' | 'type'>])
     )
     if (refSetsById.size !== uniqueSetIds.length) {
       return NextResponse.json({ error: 'One or more reference sets not found for this product' }, { status: 400 })
@@ -177,8 +180,8 @@ export async function POST(
       }
     }
 
-    const imagesBySetId = new Map<string, ReferenceImage[]>()
-    for (const img of (refImagesResult.data || []) as ReferenceImage[]) {
+    const imagesBySetId = new Map<string, Pick<ReferenceImage, 'id' | 'reference_set_id'>[]>()
+    for (const img of (refImagesResult.data || []) as Pick<ReferenceImage, 'id' | 'reference_set_id'>[]) {
       if (!img.reference_set_id) continue
       const arr = imagesBySetId.get(img.reference_set_id) ?? []
       arr.push(img)
