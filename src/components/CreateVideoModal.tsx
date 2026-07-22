@@ -4,7 +4,13 @@ import { useEffect, useId, useMemo, useState } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { getSafeErrorMessage } from './errorDisplay.helpers'
+import { FallbackImage } from './FallbackImage'
 import { api } from '@/lib/api-client'
+import {
+  MAX_NAME_LENGTH,
+  MAX_PROMPT_TEXT_LENGTH,
+  requireUuid,
+} from '@/lib/request-guards'
 import {
   VEO_RESOLUTIONS,
   VEO_ASPECT_RATIOS,
@@ -88,6 +94,8 @@ export function CreateVideoModal({
     setCreating(true)
     setError(null)
     try {
+      const scopedProductId = requireUuid(productId, 'product id')
+      const sourceImageId = requireUuid(imageId, 'image id')
       const trimmed = motionPrompt.trim()
       const finalMotionPrompt = trimmed || DEFAULT_MOTION_PROMPT
       const title = trimmed
@@ -99,7 +107,7 @@ export function CreateVideoModal({
       // Step 1: create a start-frame-only scene (no end frame = single-frame
       // image-to-video). Duration is forced to 8s by the API when a reference
       // frame is present.
-      const scene = await api(`/api/products/${productId}/scenes`, {
+      const scene = await api(`/api/products/${encodeURIComponent(scopedProductId)}/scenes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -107,7 +115,7 @@ export function CreateVideoModal({
           motion_prompt: finalMotionPrompt,
           generation_model: 'veo3',
           paired: false,
-          start_frame_image_id: imageId,
+          start_frame_image_id: sourceImageId,
           end_frame_image_id: null,
           video_resolution: resolution,
           video_aspect_ratio: aspectRatio,
@@ -116,13 +124,14 @@ export function CreateVideoModal({
       })
 
       // Step 2: enqueue the Veo video job.
-      await api(`/api/products/${productId}/scenes/${scene.id}/generate-video`, {
+      const sceneId = requireUuid(String(scene?.id ?? ''), 'scene id')
+      await api(`/api/products/${encodeURIComponent(scopedProductId)}/scenes/${encodeURIComponent(sceneId)}/generate-video`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'veo3' }),
       })
 
-      await fetchGenerationJobs(productId)
+      await fetchGenerationJobs(scopedProductId)
 
       onQueued('Video generation queued — it will appear in the gallery once ready.')
       onClose()
@@ -214,14 +223,16 @@ export function CreateVideoModal({
           {/* Source image + intro */}
           <div className="flex gap-3">
             <div className="h-20 w-20 shrink-0 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800">
-              {previewUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={previewUrl} alt="Source frame" className="h-full w-full object-cover" />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center">
-                  <ImageIcon className="h-6 w-6 text-zinc-600" />
-                </div>
-              )}
+              <FallbackImage
+                sources={[previewUrl]}
+                alt="Source frame"
+                className="h-full w-full object-cover"
+                fallback={(
+                  <div className="flex h-full w-full items-center justify-center">
+                    <ImageIcon className="h-6 w-6 text-zinc-600" />
+                  </div>
+                )}
+              />
             </div>
             <p className="flex-1 text-xs leading-relaxed text-zinc-400">
               Veo 3.1 will animate this image as the starting frame. Add a motion prompt for direction,
@@ -266,6 +277,7 @@ export function CreateVideoModal({
               setMotionPrompt(e.target.value)
               if (loadedTemplateId) setLoadedTemplateId(null)
             }}
+            maxLength={MAX_PROMPT_TEXT_LENGTH}
             autoFocus
           />
 
@@ -286,6 +298,7 @@ export function CreateVideoModal({
                 placeholder="Prompt name"
                 value={templateName}
                 onChange={(e) => setTemplateName(e.target.value)}
+                maxLength={MAX_NAME_LENGTH}
                 className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none"
                 autoFocus
                 onKeyDown={(e) => {

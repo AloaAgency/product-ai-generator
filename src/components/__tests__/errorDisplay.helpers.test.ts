@@ -33,6 +33,12 @@ test('getSafeErrorMessage hides webhook verification-stage diagnostics', () => {
   assert.equal(getSafeErrorMessage('Request timestamp expired'), fallback)
 })
 
+test('getSafeErrorMessage hides unlabeled raw provider credentials', () => {
+  const fallback = 'Something went wrong. Try again or contact support if the issue persists.'
+  assert.equal(getSafeErrorMessage(`Provider rejected AIza${'a'.repeat(32)}`), fallback)
+  assert.equal(getSafeErrorMessage(`Provider rejected sk-${'b'.repeat(24)}`), fallback)
+})
+
 test('getSafeErrorContext redacts secrets and truncates large payloads', () => {
   const context = getSafeErrorContext({
     request: {
@@ -48,4 +54,19 @@ test('getSafeErrorContext redacts secrets and truncates large payloads', () => {
   assert.doesNotMatch(context || '', /secret-token/)
   assert.doesNotMatch(context || '', /secret-signature/)
   assert.ok((context || '').length <= 1200)
+})
+
+test('getSafeErrorContext redacts raw provider keys and credential metadata', () => {
+  const googleKey = `AIza${'a'.repeat(32)}`
+  const context = getSafeErrorContext({
+    providerMessage: `Request rejected for ${googleKey}`,
+    clientCredential: 'credential-value',
+    privateKey: 'private-value',
+    sessionId: 'session-value',
+  })
+
+  assert.ok(context)
+  assert.doesNotMatch(context || '', new RegExp(googleKey))
+  assert.doesNotMatch(context || '', /credential-value|private-value|session-value/)
+  assert.match(context || '', /\[redacted\]/)
 })

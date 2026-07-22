@@ -6,6 +6,7 @@ import {
   MAX_BUG_REPORT_FILE_SIZE,
   MAX_BUG_REPORT_IMAGES,
   MAX_BUG_REPORT_TITLE_LENGTH,
+  hasAllowedBugReportFileSignature,
   normalizeBugReportMultiline,
   normalizeBugReportSingleLine,
 } from '@/components/bugReportWidget.helpers'
@@ -43,12 +44,16 @@ interface ImageUpload {
 const getSafeBugReportError = (error: unknown) =>
   redactSensitiveText(error instanceof Error ? error.message : String(error ?? 'unknown error')).slice(0, 240)
 
-const validateBugReportImage = (file: File) => {
+const validateBugReportImage = async (file: File) => {
   if (!ALLOWED_BUG_REPORT_TYPES.includes(file.type)) {
     return 'Unsupported screenshot format'
   }
   if (file.size > MAX_BUG_REPORT_FILE_SIZE) {
     return 'Screenshot exceeds 5MB limit'
+  }
+  const header = new Uint8Array(await file.slice(0, 12).arrayBuffer())
+  if (!hasAllowedBugReportFileSignature(file.type, header)) {
+    return 'Screenshot content does not match its declared format'
   }
   return null
 }
@@ -112,7 +117,7 @@ export async function POST(request: NextRequest) {
           MAX_BUG_REPORT_CAPTION_LENGTH
         ) || `Screenshot ${i + 1}`
         if (file && file instanceof File) {
-          const imageError = validateBugReportImage(file)
+          const imageError = await validateBugReportImage(file)
           if (imageError) {
             return NextResponse.json({ success: false, message: `${file.name}: ${imageError}` }, { status: 400 })
           }

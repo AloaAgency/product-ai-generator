@@ -54,6 +54,14 @@ test('image URL helpers reject unsafe protocols and preserve safe absolute or re
     '/api/images/123'
   )
   assert.equal(
+    getDisplayImageUrl(buildImage({ public_url: '//attacker.example/image.png' })),
+    null
+  )
+  assert.equal(
+    getDisplayImageUrl(buildImage({ public_url: '/\\attacker.example/image.png' })),
+    null
+  )
+  assert.equal(
     getLightboxThumbnailUrl(buildImage({ thumb_public_url: 'https://example.com/thumb.png' })),
     'https://example.com/thumb.png'
   )
