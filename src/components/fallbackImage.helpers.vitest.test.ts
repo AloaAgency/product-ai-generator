@@ -25,6 +25,8 @@ describe('FallbackImage source filtering', () => {
       'data:image/svg+xml,<svg></svg>',
       'ftp://example.com/file.png',
       '//example.com/protocol-relative.png',
+      '/\\example.com/backslash-relative.png',
+      '/api/images\\..\\external.png',
       'https://example.com/safe.png',
       ' https://example.com/safe.png ',
       '',

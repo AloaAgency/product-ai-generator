@@ -6,7 +6,10 @@ const sanitizeUrlCandidate = (value?: string | null) => {
   if (!value) return null
   const trimmed = value.trim()
   if (!trimmed) return null
-  if (trimmed.startsWith('/')) return trimmed
+  // Browsers normalize backslashes in special-scheme URLs, so `/\\attacker`
+  // can become a protocol-relative request just like `//attacker`. Only allow
+  // unambiguous root-relative paths here.
+  if (trimmed.startsWith('/')) return trimmed.includes('\\') || trimmed.startsWith('//') ? null : trimmed
 
   try {
     const parsed = new URL(trimmed)

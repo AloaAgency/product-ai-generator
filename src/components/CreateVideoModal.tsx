@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useState } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { getSafeErrorMessage } from './errorDisplay.helpers'
+import { FallbackImage } from './FallbackImage'
 import { api } from '@/lib/api-client'
 import {
   VEO_RESOLUTIONS,
@@ -214,14 +215,16 @@ export function CreateVideoModal({
           {/* Source image + intro */}
           <div className="flex gap-3">
             <div className="h-20 w-20 shrink-0 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800">
-              {previewUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={previewUrl} alt="Source frame" className="h-full w-full object-cover" />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center">
-                  <ImageIcon className="h-6 w-6 text-zinc-600" />
-                </div>
-              )}
+              <FallbackImage
+                sources={[previewUrl]}
+                alt="Source frame"
+                className="h-full w-full object-cover"
+                fallback={(
+                  <div className="flex h-full w-full items-center justify-center">
+                    <ImageIcon className="h-6 w-6 text-zinc-600" />
+                  </div>
+                )}
+              />
             </div>
             <p className="flex-1 text-xs leading-relaxed text-zinc-400">
               Veo 3.1 will animate this image as the starting frame. Add a motion prompt for direction,

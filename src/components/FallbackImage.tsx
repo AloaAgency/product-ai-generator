@@ -12,7 +12,9 @@ const SAFE_IMAGE_SOURCE_PROTOCOLS = new Set(['http:', 'https:', 'blob:'])
 export const normalizeFallbackImageSource = (source: string | null | undefined) => {
   const trimmed = source?.trim()
   if (!trimmed) return null
-  if (trimmed.startsWith('/')) return trimmed.startsWith('//') ? null : trimmed
+  if (trimmed.startsWith('/')) {
+    return trimmed.startsWith('//') || trimmed.includes('\\') ? null : trimmed
+  }
 
   try {
     const parsed = new URL(trimmed)

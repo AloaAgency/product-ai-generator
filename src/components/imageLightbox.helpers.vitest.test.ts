@@ -87,6 +87,12 @@ describe('imageLightbox.helpers — url fallback chains', () => {
     expect(getPreviewImageUrl(image)).toBe('https://example.com/thumb-signed.png')
   })
 
+  it('rejects protocol-relative and backslash-normalized relative urls', () => {
+    expect(getDisplayImageUrl(buildImage({ public_url: '//attacker.example/image.png' }))).toBe(null)
+    expect(getDisplayImageUrl(buildImage({ public_url: '/\\attacker.example/image.png' }))).toBe(null)
+    expect(getDisplayImageUrl(buildImage({ public_url: '/api/images\\..\\external.png' }))).toBe(null)
+  })
+
   it('prefers the full signed url and falls back to public for getFullImageUrl', () => {
     expect(getFullImageUrl(buildImage({ signed_url: 'https://example.com/s.png', public_url: 'https://example.com/p.png' }))).toBe(
       'https://example.com/s.png'
