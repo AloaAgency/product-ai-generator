@@ -28,6 +28,11 @@ describe('getSafeErrorMessage — message sanitization', () => {
     expect(getSafeErrorMessage('Authorization: Bearer abc123')).toBe(GENERIC)
   })
 
+  it('hides raw provider credentials even when no secret field label is present', () => {
+    expect(getSafeErrorMessage(`Provider rejected AIza${'a'.repeat(32)}`)).toBe(GENERIC)
+    expect(getSafeErrorMessage(`Provider rejected sk-${'b'.repeat(24)}`)).toBe(GENERIC)
+  })
+
   it('does not expose webhook verification-stage diagnostics', () => {
     expect(getSafeErrorMessage('Webhook timestamp outside the allowed tolerance')).toBe(GENERIC)
     expect(getSafeErrorMessage('HMAC mismatch')).toBe(GENERIC)
@@ -86,6 +91,22 @@ describe('getSafeErrorContext — context sanitization', () => {
 
     expect(context).not.toBe(null)
     expect(context).not.toContain('topsecretsig')
+    expect(context).toContain('[redacted]')
+  })
+
+  it('redacts raw credentials and additional credential-bearing keys', () => {
+    const googleKey = `AIza${'a'.repeat(32)}`
+    const context = getSafeErrorContext({
+      providerMessage: `Request rejected for ${googleKey}`,
+      clientCredential: 'credential-value',
+      privateKey: 'private-value',
+      sessionId: 'session-value',
+    })
+
+    expect(context).not.toContain(googleKey)
+    expect(context).not.toContain('credential-value')
+    expect(context).not.toContain('private-value')
+    expect(context).not.toContain('session-value')
     expect(context).toContain('[redacted]')
   })
 
