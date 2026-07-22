@@ -5,6 +5,7 @@ import {
   buildBugReportSubmission,
   clampBugReportText,
   createBugReportFormData,
+  hasAllowedBugReportFileSignature,
   MAX_BUG_REPORT_CAPTION_LENGTH,
   MAX_BUG_REPORT_FILE_SIZE,
   MAX_BUG_REPORT_DESCRIPTION_LENGTH,
@@ -44,6 +45,15 @@ test('validateBugReportFiles caps uploads once the screenshot limit is reached',
 
   assert.deepEqual(result.acceptedFiles, [])
   assert.deepEqual(result.errors, ['Maximum 5 images allowed'])
+})
+
+test('hasAllowedBugReportFileSignature rejects MIME-spoofed and truncated files', () => {
+  assert.equal(
+    hasAllowedBugReportFileSignature('image/png', [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    true
+  )
+  assert.equal(hasAllowedBugReportFileSignature('image/png', Array.from(new TextEncoder().encode('<html>'))), false)
+  assert.equal(hasAllowedBugReportFileSignature('image/jpeg', [0xff, 0xd8]), false)
 })
 
 test('buildBugReportSubmission trims fields and fills default screenshot captions', () => {
