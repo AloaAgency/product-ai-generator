@@ -169,6 +169,11 @@ function createMockSupabase(
   const updates: Array<{ table: string; values: Record<string, unknown> }> = []
   const filters: Array<{ table: string; column: string; value: unknown }> = []
   const removals: Array<{ bucket: string; paths: string[] }> = []
+  const storageCalls: Array<{
+    bucket: string
+    type: 'upload' | 'download'
+    path: string
+  }> = []
   const queryQueue = [...queryResponses]
   const storageQueue = [...storageResponses]
 
@@ -202,8 +207,14 @@ function createMockSupabase(
   const storage = {
     from(bucket: string) {
       return {
-        upload: vi.fn(async () => nextStorage(bucket, 'upload')),
-        download: vi.fn(async () => nextStorage(bucket, 'download')),
+        upload: vi.fn(async (path: string) => {
+          storageCalls.push({ bucket, type: 'upload', path })
+          return nextStorage(bucket, 'upload')
+        }),
+        download: vi.fn(async (path: string) => {
+          storageCalls.push({ bucket, type: 'download', path })
+          return nextStorage(bucket, 'download')
+        }),
         remove: vi.fn(async (paths: string[]) => {
           removals.push({ bucket, paths })
           return nextStorage(bucket, 'remove')
@@ -216,6 +227,7 @@ function createMockSupabase(
     updates,
     filters,
     removals,
+    storageCalls,
     storage,
     from(table: string) {
       const state: {
@@ -284,6 +296,43 @@ describe('processGenerationJob', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('rejects invalid job ids before constructing a service client', async () => {
+    const { createServiceClient } = await import('@/lib/supabase/server')
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob('../not-a-job')).rejects.toThrow(
+      'Invalid generation job id'
+    )
+    expect(createServiceClient).not.toHaveBeenCalled()
+  })
+
+  it('surfaces atomic claim failures without attempting a second status write', async () => {
+    const jobId = '01010101-0101-4101-8101-010101010101'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        error: { message: 'claim transaction unavailable' },
+      },
+    ])
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).rejects.toThrow(
+      'Failed to claim generation job: claim transaction unavailable'
+    )
+    expect(serviceClientState.current.updates).toEqual([
+      {
+        table: 'prodai_generation_jobs',
+        values: expect.objectContaining({ status: 'running' }),
+      },
+    ])
+    expect(serviceClientState.current.filters).toEqual(expect.arrayContaining([
+      { table: 'prodai_generation_jobs', column: 'id', value: jobId },
+      { table: 'prodai_generation_jobs', column: 'status', value: 'pending' },
+    ]))
   })
 
   it('returns running jobs without reclaiming them', async () => {
@@ -711,6 +760,115 @@ describe('processGenerationJob', () => {
     })
   })
 
+  it('serializes out-of-order parallel progress writes so counters never regress', async () => {
+    const jobId = '35353535-3535-4353-8353-353535353535'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId, { variation_count: 2 }),
+        },
+        recordedVariationRows(),
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { global_style_settings: null, prodai_projects: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+      ]
+    )
+
+    const imageResult = {
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-out-of-order-progress',
+      raw: {},
+    }
+    const firstVariation = createDeferred<typeof imageResult>()
+    const secondVariation = createDeferred<typeof imageResult>()
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage)
+      .mockImplementationOnce(() => firstVariation.promise)
+      .mockImplementationOnce(() => secondVariation.promise)
+
+    const { processGenerationJob } = await import('../generation-worker')
+    const result = processGenerationJob(jobId, { batchSize: 2, parallelism: 2 })
+
+    await vi.waitFor(() => {
+      expect(generateGeminiImage).toHaveBeenCalledTimes(2)
+    })
+    secondVariation.resolve(imageResult)
+    await vi.waitFor(() => {
+      expect(serviceClientState.current?.updates).toHaveLength(2)
+    })
+    expect(serviceClientState.current.updates[1]?.values).toMatchObject({
+      completed_count: 1,
+      failed_count: 0,
+    })
+
+    firstVariation.resolve(imageResult)
+
+    await expect(result).resolves.toMatchObject({
+      jobId,
+      processed: 2,
+      completed: 2,
+      failed: 0,
+      status: 'completed',
+    })
+    const persistedCompletedCounts = serviceClientState.current.updates
+      .map(({ values }) => values.completed_count)
+      .filter((value): value is number => typeof value === 'number')
+    expect(persistedCompletedCounts).toEqual([1, 2, 2])
+  })
+
   it('finalizes claimed image jobs with no remaining variations without loading resources', async () => {
     const jobId = '12121212-1212-4212-8212-121212121212'
     serviceClientState.current = createMockSupabase([
@@ -868,6 +1026,210 @@ describe('processGenerationJob', () => {
       status: 'completed',
       completed_count: 1,
       failed_count: 0,
+    })
+  })
+
+  it('does not retry a non-retriable generation failure', async () => {
+    const jobId = '41414141-4141-4141-8141-414141414141'
+    process.env.GENERATION_VARIATION_RETRIES = '5'
+    process.env.GENERATION_RETRY_BASE_MS = '1'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId),
+      },
+      recordedVariationRows(),
+      {
+        table: 'prodai_generation_job_reference_sets',
+        type: 'select-order',
+        data: [jobRefSetsRow()],
+      },
+      {
+        table: 'prodai_products',
+        type: 'select-single',
+        data: { global_style_settings: null, prodai_projects: null },
+      },
+      {
+        table: 'prodai_reference_images',
+        type: 'select-order',
+        data: [],
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'running', started_at: CLAIM_STARTED_AT },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockRejectedValue(new Error('Prompt violates provider policy'))
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 1,
+      status: 'failed',
+    })
+    expect(generateGeminiImage).toHaveBeenCalledTimes(1)
+    expect(serviceClientState.current.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: 'Prompt violates provider policy',
+    })
+  })
+
+  it('counts an exhausted retriable variation once after all configured attempts', async () => {
+    const jobId = '42424242-4242-4242-8242-424242424242'
+    process.env.GENERATION_VARIATION_RETRIES = '2'
+    process.env.GENERATION_RETRY_BASE_MS = '1'
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId),
+      },
+      recordedVariationRows(),
+      {
+        table: 'prodai_generation_job_reference_sets',
+        type: 'select-order',
+        data: [jobRefSetsRow()],
+      },
+      {
+        table: 'prodai_products',
+        type: 'select-single',
+        data: { global_style_settings: null, prodai_projects: null },
+      },
+      {
+        table: 'prodai_reference_images',
+        type: 'select-order',
+        data: [],
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'running', started_at: CLAIM_STARTED_AT },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockRejectedValue(new Error('503 service unavailable'))
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 1,
+      status: 'failed',
+    })
+    expect(generateGeminiImage).toHaveBeenCalledTimes(3)
+    expect(serviceClientState.current.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: '503 service unavailable',
+    })
+  })
+
+  it('aborts a timed-out provider request and records one failed variation', async () => {
+    const jobId = '43434343-4343-4343-8343-434343434343'
+    process.env.GENERATION_VARIATION_TIMEOUT_MS = '25'
+    process.env.GENERATION_VARIATION_RETRIES = '0'
+    vi.useFakeTimers()
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId),
+      },
+      recordedVariationRows(),
+      {
+        table: 'prodai_generation_job_reference_sets',
+        type: 'select-order',
+        data: [jobRefSetsRow()],
+      },
+      {
+        table: 'prodai_products',
+        type: 'select-single',
+        data: { global_style_settings: null, prodai_projects: null },
+      },
+      {
+        table: 'prodai_reference_images',
+        type: 'select-order',
+        data: [],
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'running', started_at: CLAIM_STARTED_AT },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    let providerSignal: AbortSignal | undefined
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockImplementation(({ signal }) => {
+      providerSignal = signal
+      return new Promise((_, reject) => {
+        signal?.addEventListener(
+          'abort',
+          () => reject(new Error('provider request aborted')),
+          { once: true }
+        )
+      })
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+    const result = processGenerationJob(jobId)
+    await vi.advanceTimersByTimeAsync(25)
+
+    await expect(result).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 1,
+      status: 'failed',
+    })
+    expect(providerSignal?.aborted).toBe(true)
+    expect(generateGeminiImage).toHaveBeenCalledTimes(1)
+    expect(serviceClientState.current.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: 'provider request aborted',
     })
   })
 
@@ -1060,6 +1422,107 @@ describe('processGenerationJob', () => {
       column: 'started_at',
       value: CLAIM_STARTED_AT,
     })
+  })
+
+  it('honors explicit reference selection order and prefers the product Gemini key', async () => {
+    const jobId = '54545454-5454-4545-8545-545454545454'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId),
+        },
+        recordedVariationRows(),
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [
+            jobRefSetsRow('refs-1', {
+              image_count: 1,
+              selected_image_ids: ['ref-3', 'missing-ref', 'ref-1'],
+            }),
+          ],
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: {
+            global_style_settings: { gemini_api_key: 'product-key' },
+            prodai_projects: {
+              global_style_settings: { gemini_api_key: 'project-key' },
+            },
+          },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [
+            { id: 'ref-1', reference_set_id: 'refs-1', storage_path: 'refs/first.png', mime_type: 'image/png', display_order: 1 },
+            { id: 'ref-2', reference_set_id: 'refs-1', storage_path: 'refs/second.png', mime_type: 'image/png', display_order: 2 },
+            { id: 'ref-3', reference_set_id: 'refs-1', storage_path: 'refs/third.png', mime_type: 'image/png', display_order: 3 },
+          ],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'reference-images', type: 'download', data: createDownloadPayload('third') },
+        { bucket: 'reference-images', type: 'download', data: createDownloadPayload('first') },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockResolvedValue({
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-explicit-selection',
+      raw: {},
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 1,
+      failed: 0,
+      status: 'completed',
+    })
+    expect(generateGeminiImage).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'product-key',
+      referenceImages: [
+        { mimeType: 'image/png', base64: Buffer.from('third').toString('base64') },
+        { mimeType: 'image/png', base64: Buffer.from('first').toString('base64') },
+      ],
+    }))
+    expect(serviceClientState.current.storageCalls.filter(
+      ({ type }) => type === 'download'
+    )).toEqual([
+      { bucket: 'reference-images', type: 'download', path: 'refs/third.png' },
+      { bucket: 'reference-images', type: 'download', path: 'refs/first.png' },
+    ])
   })
 
   it('retries transient reference image stream failures before generating', async () => {
@@ -1546,6 +2009,63 @@ describe('processGenerationJob', () => {
     expect(generateGeminiImage).toHaveBeenCalledTimes(1)
   })
 
+  it('does not start generation after a status refresh detects a newer claim lease', async () => {
+    const jobId = '64646464-6464-4646-8646-646464646464'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId),
+      },
+      recordedVariationRows(),
+      {
+        table: 'prodai_generation_job_reference_sets',
+        type: 'select-order',
+        data: [jobRefSetsRow()],
+      },
+      {
+        table: 'prodai_products',
+        type: 'select-single',
+        data: { global_style_settings: null, prodai_projects: null },
+      },
+      {
+        table: 'prodai_reference_images',
+        type: 'select-order',
+        data: [],
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: {
+          status: 'running',
+          started_at: '2026-01-01T00:05:00.000Z',
+        },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: {
+          status: 'running',
+          completed_count: 0,
+          failed_count: 0,
+        },
+      },
+    ])
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 0,
+      completed: 0,
+      failed: 0,
+      status: 'running',
+    })
+    expect(generateGeminiImage).not.toHaveBeenCalled()
+    expect(serviceClientState.current.updates).toHaveLength(1)
+  })
+
   it('stops before the next variation after the job is cancelled during status refresh', async () => {
     const jobId = '66666666-6666-4666-8666-666666666666'
     vi.useFakeTimers()
@@ -1950,6 +2470,44 @@ describe('processGenerationJob', () => {
     })
   })
 
+  it('fails malformed video jobs without calling the video provider', async () => {
+    const jobId = '91919191-9191-4919-8919-919191919191'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createVideoJobRecord(jobId, {
+          scene_id: null,
+          completed_count: 2,
+          failed_count: 1,
+        }),
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    const { generateSceneVideo } = await import('@/lib/video-generation')
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 2,
+      failed: 2,
+      status: 'failed',
+    })
+    expect(generateSceneVideo).not.toHaveBeenCalled()
+    expect(serviceClientState.current.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 2,
+      error_message: 'Video job missing scene_id',
+      completed_at: expect.any(String),
+    })
+  })
+
   it('sanitizes video generation failures before persisting them', async () => {
     const jobId = '99999999-9999-4999-8999-999999999999'
     serviceClientState.current = createMockSupabase([
@@ -2048,6 +2606,55 @@ describe('processGenerationJob', () => {
       status: 'cancelled',
     })
     expect(serviceClientState.current?.updates).toHaveLength(2)
+  })
+
+  it('preserves cancellation when it races a failed video completion update', async () => {
+    const jobId = '90909090-9090-4909-8909-909090909090'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createVideoJobRecord(jobId),
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: null,
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: {
+          status: 'cancelled',
+          completed_count: 0,
+          failed_count: 0,
+        },
+      },
+    ])
+
+    const { generateSceneVideo } = await import('@/lib/video-generation')
+    vi.mocked(generateSceneVideo).mockRejectedValue(new Error('provider unavailable'))
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 0,
+      status: 'cancelled',
+    })
+    expect(serviceClientState.current.updates).toHaveLength(2)
+    expect(serviceClientState.current.updates[1]?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: 'provider unavailable',
+    })
+    expect(serviceClientState.current.filters).toContainEqual({
+      table: 'prodai_generation_jobs',
+      column: 'started_at',
+      value: CLAIM_STARTED_AT,
+    })
   })
 
   it('fails when it cannot load the latest job state after another worker claims the job first', async () => {
