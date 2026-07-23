@@ -169,6 +169,11 @@ function createMockSupabase(
   const updates: Array<{ table: string; values: Record<string, unknown> }> = []
   const filters: Array<{ table: string; column: string; value: unknown }> = []
   const removals: Array<{ bucket: string; paths: string[] }> = []
+  const storageCalls: Array<{
+    bucket: string
+    type: 'upload' | 'download'
+    path: string
+  }> = []
   const queryQueue = [...queryResponses]
   const storageQueue = [...storageResponses]
 
@@ -202,8 +207,14 @@ function createMockSupabase(
   const storage = {
     from(bucket: string) {
       return {
-        upload: vi.fn(async () => nextStorage(bucket, 'upload')),
-        download: vi.fn(async () => nextStorage(bucket, 'download')),
+        upload: vi.fn(async (path: string) => {
+          storageCalls.push({ bucket, type: 'upload', path })
+          return nextStorage(bucket, 'upload')
+        }),
+        download: vi.fn(async (path: string) => {
+          storageCalls.push({ bucket, type: 'download', path })
+          return nextStorage(bucket, 'download')
+        }),
         remove: vi.fn(async (paths: string[]) => {
           removals.push({ bucket, paths })
           return nextStorage(bucket, 'remove')
@@ -216,6 +227,7 @@ function createMockSupabase(
     updates,
     filters,
     removals,
+    storageCalls,
     storage,
     from(table: string) {
       const state: {
@@ -1410,6 +1422,107 @@ describe('processGenerationJob', () => {
       column: 'started_at',
       value: CLAIM_STARTED_AT,
     })
+  })
+
+  it('honors explicit reference selection order and prefers the product Gemini key', async () => {
+    const jobId = '54545454-5454-4545-8545-545454545454'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId),
+        },
+        recordedVariationRows(),
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [
+            jobRefSetsRow('refs-1', {
+              image_count: 1,
+              selected_image_ids: ['ref-3', 'missing-ref', 'ref-1'],
+            }),
+          ],
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: {
+            global_style_settings: { gemini_api_key: 'product-key' },
+            prodai_projects: {
+              global_style_settings: { gemini_api_key: 'project-key' },
+            },
+          },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [
+            { id: 'ref-1', reference_set_id: 'refs-1', storage_path: 'refs/first.png', mime_type: 'image/png', display_order: 1 },
+            { id: 'ref-2', reference_set_id: 'refs-1', storage_path: 'refs/second.png', mime_type: 'image/png', display_order: 2 },
+            { id: 'ref-3', reference_set_id: 'refs-1', storage_path: 'refs/third.png', mime_type: 'image/png', display_order: 3 },
+          ],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'reference-images', type: 'download', data: createDownloadPayload('third') },
+        { bucket: 'reference-images', type: 'download', data: createDownloadPayload('first') },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+      ]
+    )
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockResolvedValue({
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-explicit-selection',
+      raw: {},
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 1,
+      failed: 0,
+      status: 'completed',
+    })
+    expect(generateGeminiImage).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'product-key',
+      referenceImages: [
+        { mimeType: 'image/png', base64: Buffer.from('third').toString('base64') },
+        { mimeType: 'image/png', base64: Buffer.from('first').toString('base64') },
+      ],
+    }))
+    expect(serviceClientState.current.storageCalls.filter(
+      ({ type }) => type === 'download'
+    )).toEqual([
+      { bucket: 'reference-images', type: 'download', path: 'refs/third.png' },
+      { bucket: 'reference-images', type: 'download', path: 'refs/first.png' },
+    ])
   })
 
   it('retries transient reference image stream failures before generating', async () => {
