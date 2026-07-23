@@ -286,6 +286,43 @@ describe('processGenerationJob', () => {
     vi.useRealTimers()
   })
 
+  it('rejects invalid job ids before constructing a service client', async () => {
+    const { createServiceClient } = await import('@/lib/supabase/server')
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob('../not-a-job')).rejects.toThrow(
+      'Invalid generation job id'
+    )
+    expect(createServiceClient).not.toHaveBeenCalled()
+  })
+
+  it('surfaces atomic claim failures without attempting a second status write', async () => {
+    const jobId = '01010101-0101-4101-8101-010101010101'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        error: { message: 'claim transaction unavailable' },
+      },
+    ])
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).rejects.toThrow(
+      'Failed to claim generation job: claim transaction unavailable'
+    )
+    expect(serviceClientState.current.updates).toEqual([
+      {
+        table: 'prodai_generation_jobs',
+        values: expect.objectContaining({ status: 'running' }),
+      },
+    ])
+    expect(serviceClientState.current.filters).toEqual(expect.arrayContaining([
+      { table: 'prodai_generation_jobs', column: 'id', value: jobId },
+      { table: 'prodai_generation_jobs', column: 'status', value: 'pending' },
+    ]))
+  })
+
   it('returns running jobs without reclaiming them', async () => {
     const jobId = '00000000-0000-4000-8000-000000000000'
     serviceClientState.current = createMockSupabase([
@@ -1947,6 +1984,44 @@ describe('processGenerationJob', () => {
       status: 'completed',
       completed_count: 1,
       error_message: null,
+    })
+  })
+
+  it('fails malformed video jobs without calling the video provider', async () => {
+    const jobId = '91919191-9191-4919-8919-919191919191'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createVideoJobRecord(jobId, {
+          scene_id: null,
+          completed_count: 2,
+          failed_count: 1,
+        }),
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    const { generateSceneVideo } = await import('@/lib/video-generation')
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 2,
+      failed: 2,
+      status: 'failed',
+    })
+    expect(generateSceneVideo).not.toHaveBeenCalled()
+    expect(serviceClientState.current.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 2,
+      error_message: 'Video job missing scene_id',
+      completed_at: expect.any(String),
     })
   })
 
