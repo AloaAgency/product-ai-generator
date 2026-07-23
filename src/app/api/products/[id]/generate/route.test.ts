@@ -84,7 +84,7 @@ function makePostClient(overrides: {
   const sourceImage = overrides.sourceImage ?? { data: null, error: null }
   const jobInsertResult = overrides.jobInsert ?? { data: { id: JOB_ID }, error: null }
 
-  const jobInsert = vi.fn(() => ({
+  const jobInsert = vi.fn((_row: Record<string, unknown>) => ({
     select: vi.fn(() => ({ single: () => Promise.resolve(jobInsertResult) })),
   }))
   const jobDeleteEq = vi.fn(() => Promise.resolve({ error: null }))
@@ -273,7 +273,7 @@ describe('POST /api/products/[id]/generate — job creation', () => {
     })
 
     expect(res.status).toBe(201)
-    const insertedJob = jobInsert.mock.calls[0][0] as Record<string, unknown>
+    const insertedJob = jobInsert.mock.calls[0][0]
     expect(insertedJob.source_image_id).toBe(SOURCE_IMAGE_ID)
     expect(insertedJob.final_prompt).toContain(
       'recreate it with the following modifications: Remove the smudge on the label'
