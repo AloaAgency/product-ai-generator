@@ -908,6 +908,210 @@ describe('processGenerationJob', () => {
     })
   })
 
+  it('does not retry a non-retriable generation failure', async () => {
+    const jobId = '41414141-4141-4141-8141-414141414141'
+    process.env.GENERATION_VARIATION_RETRIES = '5'
+    process.env.GENERATION_RETRY_BASE_MS = '1'
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId),
+      },
+      recordedVariationRows(),
+      {
+        table: 'prodai_generation_job_reference_sets',
+        type: 'select-order',
+        data: [jobRefSetsRow()],
+      },
+      {
+        table: 'prodai_products',
+        type: 'select-single',
+        data: { global_style_settings: null, prodai_projects: null },
+      },
+      {
+        table: 'prodai_reference_images',
+        type: 'select-order',
+        data: [],
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'running', started_at: CLAIM_STARTED_AT },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockRejectedValue(new Error('Prompt violates provider policy'))
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 1,
+      status: 'failed',
+    })
+    expect(generateGeminiImage).toHaveBeenCalledTimes(1)
+    expect(serviceClientState.current.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: 'Prompt violates provider policy',
+    })
+  })
+
+  it('counts an exhausted retriable variation once after all configured attempts', async () => {
+    const jobId = '42424242-4242-4242-8242-424242424242'
+    process.env.GENERATION_VARIATION_RETRIES = '2'
+    process.env.GENERATION_RETRY_BASE_MS = '1'
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId),
+      },
+      recordedVariationRows(),
+      {
+        table: 'prodai_generation_job_reference_sets',
+        type: 'select-order',
+        data: [jobRefSetsRow()],
+      },
+      {
+        table: 'prodai_products',
+        type: 'select-single',
+        data: { global_style_settings: null, prodai_projects: null },
+      },
+      {
+        table: 'prodai_reference_images',
+        type: 'select-order',
+        data: [],
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'running', started_at: CLAIM_STARTED_AT },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockRejectedValue(new Error('503 service unavailable'))
+
+    const { processGenerationJob } = await import('../generation-worker')
+
+    await expect(processGenerationJob(jobId)).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 1,
+      status: 'failed',
+    })
+    expect(generateGeminiImage).toHaveBeenCalledTimes(3)
+    expect(serviceClientState.current.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: '503 service unavailable',
+    })
+  })
+
+  it('aborts a timed-out provider request and records one failed variation', async () => {
+    const jobId = '43434343-4343-4343-8343-434343434343'
+    process.env.GENERATION_VARIATION_TIMEOUT_MS = '25'
+    process.env.GENERATION_VARIATION_RETRIES = '0'
+    vi.useFakeTimers()
+    serviceClientState.current = createMockSupabase([
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: createImageJobRecord(jobId),
+      },
+      recordedVariationRows(),
+      {
+        table: 'prodai_generation_job_reference_sets',
+        type: 'select-order',
+        data: [jobRefSetsRow()],
+      },
+      {
+        table: 'prodai_products',
+        type: 'select-single',
+        data: { global_style_settings: null, prodai_projects: null },
+      },
+      {
+        table: 'prodai_reference_images',
+        type: 'select-order',
+        data: [],
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'select-single',
+        data: { status: 'running', started_at: CLAIM_STARTED_AT },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+      {
+        table: 'prodai_generation_jobs',
+        type: 'update-maybeSingle',
+        data: { id: jobId },
+      },
+    ])
+
+    let providerSignal: AbortSignal | undefined
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage).mockImplementation(({ signal }) => {
+      providerSignal = signal
+      return new Promise((_, reject) => {
+        signal?.addEventListener(
+          'abort',
+          () => reject(new Error('provider request aborted')),
+          { once: true }
+        )
+      })
+    })
+
+    const { processGenerationJob } = await import('../generation-worker')
+    const result = processGenerationJob(jobId)
+    await vi.advanceTimersByTimeAsync(25)
+
+    await expect(result).resolves.toMatchObject({
+      jobId,
+      processed: 1,
+      completed: 0,
+      failed: 1,
+      status: 'failed',
+    })
+    expect(providerSignal?.aborted).toBe(true)
+    expect(generateGeminiImage).toHaveBeenCalledTimes(1)
+    expect(serviceClientState.current.updates.at(-1)?.values).toMatchObject({
+      status: 'failed',
+      failed_count: 1,
+      error_message: 'provider request aborted',
+    })
+  })
+
   it('clears stale image job errors after a later successful completion', async () => {
     const jobId = '45454545-4545-4545-8454-454545454545'
     serviceClientState.current = createMockSupabase(
