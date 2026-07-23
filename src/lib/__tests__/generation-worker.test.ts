@@ -748,6 +748,115 @@ describe('processGenerationJob', () => {
     })
   })
 
+  it('serializes out-of-order parallel progress writes so counters never regress', async () => {
+    const jobId = '35353535-3535-4353-8353-353535353535'
+    serviceClientState.current = createMockSupabase(
+      [
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: createImageJobRecord(jobId, { variation_count: 2 }),
+        },
+        recordedVariationRows(),
+        {
+          table: 'prodai_generation_job_reference_sets',
+          type: 'select-order',
+          data: [jobRefSetsRow()],
+        },
+        {
+          table: 'prodai_products',
+          type: 'select-single',
+          data: { global_style_settings: null, prodai_projects: null },
+        },
+        {
+          table: 'prodai_reference_images',
+          type: 'select-order',
+          data: [],
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'select-single',
+          data: { status: 'running', started_at: CLAIM_STARTED_AT },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generated_images',
+          type: 'insert',
+          data: {},
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+        {
+          table: 'prodai_generation_jobs',
+          type: 'update-maybeSingle',
+          data: { id: jobId },
+        },
+      ],
+      [
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+        { bucket: 'generated-images', type: 'upload', data: {} },
+      ]
+    )
+
+    const imageResult = {
+      mimeType: 'image/png',
+      base64Data: Buffer.from('image').toString('base64'),
+      requestId: 'req-out-of-order-progress',
+      raw: {},
+    }
+    const firstVariation = createDeferred<typeof imageResult>()
+    const secondVariation = createDeferred<typeof imageResult>()
+    const { generateGeminiImage } = await import('@/lib/gemini')
+    vi.mocked(generateGeminiImage)
+      .mockImplementationOnce(() => firstVariation.promise)
+      .mockImplementationOnce(() => secondVariation.promise)
+
+    const { processGenerationJob } = await import('../generation-worker')
+    const result = processGenerationJob(jobId, { batchSize: 2, parallelism: 2 })
+
+    await vi.waitFor(() => {
+      expect(generateGeminiImage).toHaveBeenCalledTimes(2)
+    })
+    secondVariation.resolve(imageResult)
+    await vi.waitFor(() => {
+      expect(serviceClientState.current?.updates).toHaveLength(2)
+    })
+    expect(serviceClientState.current.updates[1]?.values).toMatchObject({
+      completed_count: 1,
+      failed_count: 0,
+    })
+
+    firstVariation.resolve(imageResult)
+
+    await expect(result).resolves.toMatchObject({
+      jobId,
+      processed: 2,
+      completed: 2,
+      failed: 0,
+      status: 'completed',
+    })
+    const persistedCompletedCounts = serviceClientState.current.updates
+      .map(({ values }) => values.completed_count)
+      .filter((value): value is number => typeof value === 'number')
+    expect(persistedCompletedCounts).toEqual([1, 2, 2])
+  })
+
   it('finalizes claimed image jobs with no remaining variations without loading resources', async () => {
     const jobId = '12121212-1212-4212-8212-121212121212'
     serviceClientState.current = createMockSupabase([
