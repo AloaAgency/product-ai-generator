@@ -23,7 +23,7 @@ describe('galleryContextMenu.helpers', () => {
         viewportWidth: 400,
         viewportHeight: 300,
       })
-    ).toEqual({ x: 150, y: 32 })
+    ).toEqual({ x: 150, y: 8 })
 
     expect(
       getGalleryContextMenuPosition({
@@ -33,7 +33,7 @@ describe('galleryContextMenu.helpers', () => {
         viewportWidth: 500,
         viewportHeight: 500,
       })
-    ).toEqual({ x: 0, y: 0 })
+    ).toEqual({ x: 8, y: 8 })
   })
 
   it('wraps keyboard focus consistently for arrows and tab navigation', () => {

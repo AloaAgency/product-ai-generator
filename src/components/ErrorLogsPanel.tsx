@@ -108,7 +108,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
       <button
         type="button"
         onClick={handleToggleExpanded}
-        className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-400 hover:bg-red-950/30 transition-colors rounded-lg"
+        className="flex min-h-11 w-full items-center gap-2 rounded-lg px-4 py-2.5 text-left text-sm font-medium text-red-400 transition-colors hover:bg-red-950/30"
         aria-expanded={expanded}
         aria-controls={panelId}
       >
@@ -131,7 +131,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
               type="button"
               onClick={handleRefresh}
               disabled={loadingErrorLogs}
-              className="inline-flex min-h-9 items-center gap-1.5 rounded-md bg-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700 disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-md bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700 disabled:opacity-50"
             >
               <RefreshCw className={`h-3 w-3 ${loadingErrorLogs ? 'animate-spin' : ''}`} />
               Refresh
@@ -140,7 +140,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
               type="button"
               onClick={handleClear}
               disabled={clearing || errorLogs.length === 0}
-              className="inline-flex min-h-9 items-center gap-1.5 rounded-md bg-red-900/40 px-2.5 py-1.5 text-xs font-medium text-red-300 transition-colors hover:bg-red-900/60 disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-md bg-red-900/40 px-3 py-2 text-xs font-medium text-red-300 transition-colors hover:bg-red-900/60 disabled:opacity-50"
             >
               <Trash2 className="h-3 w-3" />
               Clear All
@@ -178,14 +178,14 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
                 >
                   <button
                     type="button"
-                    className="flex w-full items-start gap-2 text-left"
+                    className="flex min-h-11 w-full items-start gap-2 text-left"
                     onClick={() => toggleEntry(log.id)}
                     aria-expanded={expandedEntries.has(log.id)}
                     aria-controls={log.safeContext ? `${panelId}-${log.id}` : undefined}
                     disabled={!log.safeContext}
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 text-zinc-500">
+                      <div className="flex flex-wrap items-center gap-2 text-zinc-500">
                         <span>{new Date(log.created_at).toLocaleString()}</span>
                         {log.error_source && (
                           <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-400">
@@ -208,7 +208,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
                   {expandedEntries.has(log.id) && log.safeContext && (
                     <pre
                       id={`${panelId}-${log.id}`}
-                      className="mt-2 max-h-40 overflow-auto rounded bg-zinc-900/80 p-2 text-zinc-400"
+                      className="mt-2 max-h-40 max-w-full overflow-y-auto whitespace-pre-wrap break-all rounded bg-zinc-900/80 p-2 text-zinc-400"
                     >
                       {log.safeContext}
                     </pre>
@@ -220,7 +220,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
               <button
                 type="button"
                 onClick={() => setVisibleCount((prev) => getNextVisibleErrorLogCount(prev, errorLogs.length))}
-                className="w-full rounded-md border border-red-900/30 bg-red-950/20 px-3 py-2 text-xs font-medium text-red-200 transition-colors hover:bg-red-950/30"
+                className="min-h-11 w-full rounded-md border border-red-900/30 bg-red-950/20 px-3 py-2 text-xs font-medium text-red-200 transition-colors hover:bg-red-950/30"
               >
                 Load more ({getRemainingErrorLogCount(visibleCount, errorLogs.length)} remaining)
               </button>

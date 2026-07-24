@@ -38,8 +38,9 @@ export const MENU_ITEMS: ContextMenuItem[] = [
 ]
 
 export const MENU_MIN_WIDTH_PX = 200
-export const MENU_ITEM_HEIGHT_PX = 34
+export const MENU_ITEM_HEIGHT_PX = 44
 export const MENU_SEPARATOR_HEIGHT_PX = 9
+export const MENU_VIEWPORT_MARGIN_PX = 8
 
 // Actions that render a separator immediately above them. Used by the menu to
 // draw dividers and by the position estimate to reserve their vertical space.
@@ -65,12 +66,22 @@ export const getGalleryContextMenuPosition = ({
 }) => {
   const estimatedHeight =
     itemCount * MENU_ITEM_HEIGHT_PX + MENU_DIVIDER_ACTIONS.length * MENU_SEPARATOR_HEIGHT_PX + 8
-  const adjustedX = x + MENU_MIN_WIDTH_PX > viewportWidth ? x - MENU_MIN_WIDTH_PX : x
-  const adjustedY = y + estimatedHeight > viewportHeight ? y - estimatedHeight : y
+  const preferredX =
+    x + MENU_MIN_WIDTH_PX + MENU_VIEWPORT_MARGIN_PX > viewportWidth ? x - MENU_MIN_WIDTH_PX : x
+  const preferredY =
+    y + estimatedHeight + MENU_VIEWPORT_MARGIN_PX > viewportHeight ? y - estimatedHeight : y
+  const maxX = Math.max(
+    MENU_VIEWPORT_MARGIN_PX,
+    viewportWidth - MENU_MIN_WIDTH_PX - MENU_VIEWPORT_MARGIN_PX
+  )
+  const maxY = Math.max(
+    MENU_VIEWPORT_MARGIN_PX,
+    viewportHeight - estimatedHeight - MENU_VIEWPORT_MARGIN_PX
+  )
 
   return {
-    x: Math.max(0, adjustedX),
-    y: Math.max(0, adjustedY),
+    x: Math.min(maxX, Math.max(MENU_VIEWPORT_MARGIN_PX, preferredX)),
+    y: Math.min(maxY, Math.max(MENU_VIEWPORT_MARGIN_PX, preferredY)),
   }
 }
 

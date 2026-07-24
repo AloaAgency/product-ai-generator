@@ -31,9 +31,9 @@ export function GalleryContextMenu({ x, y, imageId, approvalStatus, mediaType = 
     itemRefs.current[0]?.focus()
   }, [])
 
-  // Close on click outside or Escape
+  // Close on pointer interaction outside or Escape.
   useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
+    const handlePointerDown = (e: PointerEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         onClose()
       }
@@ -41,10 +41,10 @@ export function GalleryContextMenu({ x, y, imageId, approvalStatus, mediaType = 
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
-    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('pointerdown', handlePointerDown)
     document.addEventListener('keydown', handleKey)
     return () => {
-      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('pointerdown', handlePointerDown)
       document.removeEventListener('keydown', handleKey)
     }
   }, [onClose])
@@ -89,7 +89,7 @@ export function GalleryContextMenu({ x, y, imageId, approvalStatus, mediaType = 
   return (
     <div
       ref={menuRef}
-      className="fixed z-[100] min-w-[200px] rounded-lg border border-zinc-700 bg-zinc-800 py-1 shadow-xl shadow-black/50"
+      className="fixed z-[100] max-h-[calc(100dvh-1rem)] min-w-[200px] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-zinc-700 bg-zinc-800 py-1 shadow-xl shadow-black/50"
       style={{ left: position.x, top: position.y }}
       role="menu"
       aria-label="Image actions"
@@ -104,7 +104,7 @@ export function GalleryContextMenu({ x, y, imageId, approvalStatus, mediaType = 
             }}
             type="button"
             onClick={() => handleAction(item.action)}
-            className={`flex w-full items-center gap-3 px-3 py-1.5 text-sm transition-colors hover:bg-zinc-700 ${
+            className={`flex min-h-11 w-full items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-zinc-700 ${
               item.className ?? 'text-zinc-200'
             }`}
             role="menuitem"
