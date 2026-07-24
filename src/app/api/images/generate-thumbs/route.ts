@@ -2,11 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { createThumbnail, buildThumbnailPath } from '@/lib/image-utils'
-import { isUuid } from '@/lib/request-guards'
+import { mapWithConcurrency } from '@/lib/concurrency'
+import { isUuid, parseRequestBody } from '@/lib/request-guards'
+import { logger } from '@/lib/server-logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
 export const dynamic = 'force-dynamic'
+
+// Bounded: each item holds a full-size image in memory during Sharp resize.
+const THUMB_CONCURRENCY = 3
 
 /**
  * POST /api/images/generate-thumbs
@@ -17,11 +22,10 @@ export const dynamic = 'force-dynamic'
  */
 export async function POST(request: NextRequest) {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
-    const imageIds: string[] = body.image_ids
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
+    const imageIds = body.image_ids as string[]
     if (!Array.isArray(imageIds) || imageIds.length === 0) {
       return NextResponse.json({ error: 'image_ids required' }, { status: 400 })
     }
@@ -38,19 +42,22 @@ export async function POST(request: NextRequest) {
       .in('id', imageIds.slice(0, 50))
       .is('thumb_storage_path', null)
 
-    if (error || !images || images.length === 0) {
+    if (error) {
+      logger.error('[GenerateThumbs] DB error fetching images:', error)
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    }
+    if (!images || images.length === 0) {
       return NextResponse.json({ processed: 0 })
     }
 
-    let success = 0
-    for (const img of images) {
-      if (img.media_type === 'video') continue
+    const outcomes = await mapWithConcurrency(images, THUMB_CONCURRENCY, async (img) => {
+      if (img.media_type === 'video') return false
       try {
         const { data: fileData, error: dlErr } = await supabase.storage
           .from('generated-images')
           .download(img.storage_path)
 
-        if (dlErr || !fileData) continue
+        if (dlErr || !fileData) return false
 
         const buffer = Buffer.from(await fileData.arrayBuffer())
         const thumb = await createThumbnail(buffer)
@@ -60,22 +67,23 @@ export async function POST(request: NextRequest) {
           .from('generated-images')
           .upload(thumbPath, thumb.buffer, { contentType: thumb.mimeType, upsert: true })
 
-        if (upErr) continue
+        if (upErr) return false
 
         await supabase
           .from(T.generated_images)
           .update({ thumb_storage_path: thumbPath })
           .eq('id', img.id)
 
-        success++
+        return true
       } catch (err) {
-        console.warn('[GenerateThumbs] Skipping image', img.id, ':', err)
+        logger.warn('[GenerateThumbs] Skipping image', img.id, ':', err)
+        return false
       }
-    }
+    })
 
-    return NextResponse.json({ processed: success })
+    return NextResponse.json({ processed: outcomes.filter(Boolean).length })
   } catch (err) {
-    console.error('[GenerateThumbs] Unexpected error:', err)
+    logger.error('[GenerateThumbs] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

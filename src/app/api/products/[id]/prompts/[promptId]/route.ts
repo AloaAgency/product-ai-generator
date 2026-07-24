@@ -1,30 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import Anthropic from '@anthropic-ai/sdk'
-import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
-import { SCENE_TITLE_SYSTEM_PROMPT, MAX_USER_PROMPT_LEN, safeTextFromContent } from '@/lib/prompt-builder'
-
-const anthropic = new Anthropic()
-
-// Must match the limits enforced by the POST route on the same table
-const MAX_NAME_LENGTH = 500
-const MAX_PROMPT_LENGTH = 10000
-
-async function generateSceneTitle(promptText: string): Promise<string> {
-  try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_FAST_MODEL.name,
-      max_tokens: 50,
-      system: SCENE_TITLE_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: promptText.slice(0, MAX_USER_PROMPT_LEN) }],
-    })
-    return safeTextFromContent(response.content).trim()
-  } catch (err) {
-    console.warn('[generateSceneTitle] AI call failed, title will be empty:', err instanceof Error ? err.message : String(err))
-    return ''
-  }
-}
+import { generateSceneTitle } from '@/lib/prompt-builder'
+import { parseRequestBody, MAX_NAME_LENGTH, MAX_PROMPT_TEXT_LENGTH } from '@/lib/request-guards'
+import { logger } from '@/lib/server-logger'
 
 export async function PATCH(
   request: NextRequest,
@@ -33,10 +12,9 @@ export async function PATCH(
   try {
     const { id: productId, promptId } = await params
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
 
     if (body.name !== undefined) {
       if (typeof body.name !== 'string' || body.name.trim().length === 0) {
@@ -50,8 +28,8 @@ export async function PATCH(
       if (typeof body.prompt_text !== 'string' || body.prompt_text.trim().length === 0) {
         return NextResponse.json({ error: 'prompt_text must be a non-empty string' }, { status: 400 })
       }
-      if (body.prompt_text.length > MAX_PROMPT_LENGTH) {
-        return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+      if (body.prompt_text.length > MAX_PROMPT_TEXT_LENGTH) {
+        return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_TEXT_LENGTH} characters or fewer` }, { status: 400 })
       }
     }
 
@@ -74,10 +52,10 @@ export async function PATCH(
       .select()
       .single()
 
-    if (error) { console.error('[Prompt PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Prompt PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[Prompt PATCH] Unexpected error:', err instanceof Error ? err.message : String(err))
+    logger.error('[Prompt PATCH] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -96,10 +74,10 @@ export async function DELETE(
       .eq('id', promptId)
       .eq('product_id', productId)
 
-    if (error) { console.error('[Prompt DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Prompt DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[Prompt DELETE] Unexpected error:', err instanceof Error ? err.message : String(err))
+    logger.error('[Prompt DELETE] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

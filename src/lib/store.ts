@@ -23,18 +23,46 @@ import {
   sanitizeUuidArray,
   validateReferenceUploadFiles,
 } from './request-guards'
+import { logger } from '@/lib/logger'
+import { isClientDevelopmentRuntime } from '@/lib/client-runtime'
+import { mapWithConcurrency } from '@/lib/concurrency'
 
 const DEFAULT_ERROR_MESSAGE = 'Request failed'
 const MAX_SUGGESTED_PROMPT_COUNT = 10
 const MAX_API_RETRIES = 2
 const MAX_UPLOAD_RETRIES = 1
+const MAX_RETRY_AFTER_MS = 5_000
+const API_REQUEST_TIMEOUT_MS = 15_000
+const AI_REQUEST_TIMEOUT_MS = 60_000
+const UPLOAD_REQUEST_TIMEOUT_MS = 120_000
 const GALLERY_PAGE_SIZE = 48
+const GENERATION_JOBS_PAGE_SIZE = 50
+const REFERENCE_UPLOAD_CONCURRENCY = 4
 const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const requestVersions = new Map<string, number>()
 const successfulRequests = new Set<string>()
-const inFlightRequests = new Map<string, Promise<unknown>>()
+const inFlightRequests = new Map<
+  string,
+  { controller: AbortController; promise: Promise<unknown> }
+>()
+const activeSliceRequests = new Map<string, string>()
 const sliceScopes = new Map<string, string>()
 let aiRequestCount = 0
+
+type SignedReferenceUpload = {
+  clientId: string
+  signedUrl: string
+  storage_path: string
+  file_name: string
+  mime_type: string
+  file_size: number
+  display_order: number
+}
+
+type FailedReferenceUpload = {
+  clientId: string
+  error: string
+}
 
 const sanitizePathSegment = (value: string) => encodeURIComponent(value.trim())
 
@@ -64,19 +92,23 @@ const isCurrentOrUntrackedSliceScope = (slice: string, scope: string) => {
   return currentScope === (scope.trim() || '_')
 }
 
-const resetProductScopedSliceScopes = (productId: string) => {
-  sliceScopes.set('referenceSets', productId)
-  sliceScopes.set('promptTemplates', productId)
-  sliceScopes.set('generationJobs', buildRequestKey('generationJobs', productId))
-  sliceScopes.set('currentJob', '_')
-  sliceScopes.set('gallery', '_')
-  sliceScopes.set('settingsTemplates', buildRequestKey('settingsTemplates', productId))
-}
+// A product-scoped slice's own scope is intentionally NOT reset when the active
+// product changes (see fetchProduct — resetting it races with sibling page
+// fetches and blanks the page). That leaves a window where a late fetch/create
+// for product A could apply its result while the user is already on product B.
+// Guard the apply step with this: only accept a product-scoped result if the
+// active product is still A (or no product is tracked yet, e.g. in isolation).
+const isActiveProductScope = (productId: string) =>
+  isCurrentOrUntrackedSliceScope('currentProduct', productId)
+
+const isCurrentProductScopedSlice = (slice: string, scope: string, productId: string) =>
+  isCurrentOrUntrackedSliceScope(slice, scope) && isActiveProductScope(productId)
 
 const clearProductScopedSliceScopes = () => {
   sliceScopes.set('referenceSets', '_')
   sliceScopes.set('promptTemplates', '_')
   sliceScopes.set('generationJobs', '_')
+  sliceScopes.set('generationJobsMore', '_')
   sliceScopes.set('currentJob', '_')
   sliceScopes.set('gallery', '_')
   sliceScopes.set('settingsTemplates', '_')
@@ -102,6 +134,61 @@ const clampInteger = (value: number, min: number, max: number, fallback: number)
   return Math.min(max, Math.max(min, Math.trunc(value)))
 }
 
+const parseRetryAfterMs = (value: string | null) => {
+  if (!value) return null
+
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(MAX_RETRY_AFTER_MS, seconds * 1000)
+  }
+
+  const retryAt = Date.parse(value)
+  if (!Number.isNaN(retryAt)) {
+    return Math.min(MAX_RETRY_AFTER_MS, Math.max(0, retryAt - Date.now()))
+  }
+
+  return null
+}
+
+const getRetryDelayMs = (attempt: number, response: Response | null) =>
+  parseRetryAfterMs(response?.headers.get('retry-after') ?? null) ?? 250 * attempt
+
+const fetchWithTimeout = async (
+  input: RequestInfo | URL,
+  options: RequestInit | undefined,
+  timeoutMs: number
+) => {
+  const controller = new AbortController()
+  const upstreamSignal = options?.signal
+  let didTimeout = false
+  const abortFromUpstream = () => controller.abort(upstreamSignal?.reason)
+
+  if (upstreamSignal?.aborted) {
+    abortFromUpstream()
+  } else {
+    upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true })
+  }
+
+  const timeoutId = setTimeout(() => {
+    didTimeout = true
+    controller.abort()
+  }, timeoutMs)
+
+  try {
+    return await fetch(input, { ...options, signal: controller.signal })
+  } catch (error) {
+    if (didTimeout) {
+      const timeoutError = new Error('Request timed out')
+      timeoutError.name = 'TimeoutError'
+      throw timeoutError
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+    upstreamSignal?.removeEventListener('abort', abortFromUpstream)
+  }
+}
+
 const beginTrackedRequest = (key: string) => {
   const version = (requestVersions.get(key) ?? 0) + 1
   requestVersions.set(key, version)
@@ -111,8 +198,18 @@ const beginTrackedRequest = (key: string) => {
 const invalidateTrackedRequest = (key: string) => {
   const version = (requestVersions.get(key) ?? 0) + 1
   requestVersions.set(key, version)
+  inFlightRequests.get(key)?.controller.abort()
   inFlightRequests.delete(key)
   return version
+}
+
+const beginTrackedSliceRequest = (slice: string, key: string) => {
+  const previousKey = activeSliceRequests.get(slice)
+  if (previousKey && previousKey !== key) {
+    invalidateTrackedRequest(previousKey)
+  }
+  activeSliceRequests.set(slice, key)
+  return beginTrackedRequest(key)
 }
 
 const isLatestRequest = (key: string, version: number) =>
@@ -136,6 +233,35 @@ const getActiveSliceScope = (slice: string) => {
   return scope
 }
 
+const getActiveProductRequestScope = (slice: string, productId: string) => {
+  const scope = getActiveSliceScope(slice)
+  if (!scope) return null
+
+  const productScope = buildRequestKey(slice, productId)
+  return scope === productScope || scope.startsWith(`${productScope}:`) ? scope : null
+}
+
+const cancelProductScopedRequests = (productId: string) => {
+  const cancelledSlices = new Set<string>()
+  for (const slice of [
+    'referenceSets',
+    'promptTemplates',
+    'generationJobs',
+    'generationJobsMore',
+    'currentJob',
+    'gallery',
+    'settingsTemplates',
+  ]) {
+    const requestKey = activeSliceRequests.get(slice)
+    const productPrefix = buildRequestKey(slice, productId)
+    if (requestKey && (requestKey === productPrefix || requestKey.startsWith(`${productPrefix}:`))) {
+      if (inFlightRequests.has(requestKey)) cancelledSlices.add(slice)
+      invalidateTrackedRequest(requestKey)
+    }
+  }
+  return cancelledSlices
+}
+
 const extractErrorMessage = (value: unknown): string | null => {
   if (typeof value !== 'string') return null
   const message = value.trim().replace(/\s+/g, ' ')
@@ -143,9 +269,158 @@ const extractErrorMessage = (value: unknown): string | null => {
   return message.slice(0, 200)
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object'
+
+const requireArrayResponse = <T>(value: unknown, message: string): T[] => {
+  if (!Array.isArray(value)) {
+    throw new Error(message)
+  }
+  return value as T[]
+}
+
+const requireRecordResponse = <T extends Record<string, unknown> = Record<string, unknown>>(
+  value: unknown,
+  message: string
+): T => {
+  if (!isRecord(value) || Array.isArray(value)) {
+    throw new Error(message)
+  }
+  return value as T
+}
+
+const requireEntityResponse = <T extends { id: string }>(value: unknown, message: string): T => {
+  const record = requireRecordResponse(value, message)
+  if (typeof record.id !== 'string' || !record.id.trim()) {
+    throw new Error(message)
+  }
+  return record as unknown as T
+}
+
+const getNestedRecordPayload = <T extends Record<string, unknown>>(
+  value: unknown,
+  property: string,
+  message: string
+): T => {
+  const record = requireRecordResponse(value, message)
+  const nested = record[property]
+  if (nested === undefined) return record as T
+  if (!isRecord(nested) || Array.isArray(nested)) {
+    throw new Error(message)
+  }
+  return nested as T
+}
+
+const normalizeGalleryPayload = (value: unknown) => {
+  const record = isRecord(value) && !Array.isArray(value) ? value : null
+  const images = Array.isArray(value)
+    ? value
+    : Array.isArray(record?.images)
+      ? record.images
+      : null
+
+  if (!images) {
+    throw new Error('Failed to load gallery')
+  }
+
+  const total =
+    typeof record?.total === 'number' && Number.isFinite(record.total)
+      ? Math.max(0, Math.trunc(record.total))
+      : images.length
+  const has_more =
+    typeof record?.has_more === 'boolean'
+      ? record.has_more
+      : total > images.length
+
+  return {
+    images: images as GeneratedImage[],
+    total,
+    has_more,
+  }
+}
+
+const getEntityPayload = <T extends { id: string }>(
+  value: unknown,
+  property: string,
+  message: string
+): T => requireEntityResponse<T>(getNestedRecordPayload(value, property, message), message)
+
+const normalizeSuggestedPromptsPayload = (value: unknown) => {
+  const record = requireRecordResponse(value, 'Failed to suggest prompts')
+  const prompts = requireArrayResponse<{ name: unknown; prompt_text: unknown }>(
+    record.prompts,
+    'Failed to suggest prompts'
+  )
+
+  return prompts.map((prompt) => {
+    if (typeof prompt.name !== 'string' || typeof prompt.prompt_text !== 'string') {
+      throw new Error('Failed to suggest prompts')
+    }
+    return {
+      name: prompt.name,
+      prompt_text: prompt.prompt_text,
+    }
+  })
+}
+
+const getUploadErrorMessage = (value: unknown) =>
+  isRecord(value) ? extractErrorMessage(value.error) : null
+
+const getResponseCount = (value: unknown, property: string) => {
+  if (!isRecord(value)) return null
+  const count = value[property]
+  if (typeof count !== 'number' || !Number.isFinite(count) || count < 0) return null
+  return Math.trunc(count)
+}
+
+const normalizeSignedUploadPayload = (value: unknown): Array<SignedReferenceUpload | FailedReferenceUpload> => {
+  if (!Array.isArray(value)) {
+    throw new Error('Failed to sign upload')
+  }
+
+  return value.map((item) => {
+    if (!isRecord(item)) {
+      return { clientId: 'unknown', error: 'Failed to sign upload' }
+    }
+
+    const clientId = typeof item.clientId === 'string' && item.clientId.trim()
+      ? item.clientId
+      : 'unknown'
+    const itemError = extractErrorMessage(item.error)
+    if (itemError && !('signedUrl' in item)) {
+      return { clientId, error: itemError }
+    }
+
+    const signedUrl = typeof item.signedUrl === 'string' ? item.signedUrl : ''
+    const storagePath = typeof item.storage_path === 'string' ? item.storage_path : ''
+    const fileName = typeof item.file_name === 'string' ? item.file_name : ''
+    const mimeType = typeof item.mime_type === 'string' ? item.mime_type : ''
+    const fileSize = typeof item.file_size === 'number' && Number.isFinite(item.file_size)
+      ? item.file_size
+      : 0
+    const displayOrder = typeof item.display_order === 'number' && Number.isFinite(item.display_order)
+      ? item.display_order
+      : 0
+
+    if (!signedUrl || !storagePath || !fileName || !mimeType) {
+      return { clientId, error: 'Failed to sign upload' }
+    }
+
+    return {
+      clientId,
+      signedUrl,
+      storage_path: storagePath,
+      file_name: fileName,
+      mime_type: mimeType,
+      file_size: fileSize,
+      display_order: displayOrder,
+    }
+  })
+}
+
 const isRetryableNetworkError = (error: unknown) =>
   error instanceof TypeError ||
-  (error instanceof Error && error.name === 'AbortError')
+  (error instanceof Error && error.name === 'TimeoutError')
 
 const withRetry = async (
   request: () => Promise<Response>,
@@ -171,7 +446,7 @@ const withRetry = async (
     }
 
     attempt += 1
-    await wait(250 * attempt)
+    await wait(getRetryDelayMs(attempt, response))
   }
 
   return response as Response
@@ -180,13 +455,18 @@ const withRetry = async (
 const uploadToSignedUrl = (signedUrl: string, file: File) =>
   withRetry(
     () =>
-      fetch(signedUrl, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': file.type || 'application/octet-stream',
+      fetchWithTimeout(
+        signedUrl,
+        {
+          method: 'PUT',
+          credentials: 'omit',
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+          },
+          body: file,
         },
-        body: file,
-      }),
+        UPLOAD_REQUEST_TIMEOUT_MS
+      ),
     {
       retries: MAX_UPLOAD_RETRIES,
       shouldRetryResponse: (response) => !response.ok && RETRYABLE_RESPONSE_STATUSES.has(response.status),
@@ -205,29 +485,103 @@ const safeParseResponse = async (res: Response) => {
 }
 
 const logStoreError = (scope: string, error: unknown) => {
-  console.error(`[Store:${scope}] ${sanitizePublicErrorMessage(error)}`)
+  if (error instanceof Error && error.name === 'AbortError') return
+  logger.error(`[Store:${scope}] ${sanitizePublicErrorMessage(error)}`)
 }
 
-const getInFlightRequest = <T>(key: string, request: () => Promise<T>) => {
-  const existingRequest = inFlightRequests.get(key) as Promise<T> | undefined
-  if (existingRequest) return existingRequest
+const getInFlightRequest = <T>(key: string, request: (signal: AbortSignal) => Promise<T>) => {
+  const existingRequest = inFlightRequests.get(key)
+  if (existingRequest) return existingRequest.promise as Promise<T>
 
-  const nextRequest = request().finally(() => {
-    if (inFlightRequests.get(key) === nextRequest) {
+  const controller = new AbortController()
+  const nextRequest = request(controller.signal).finally(() => {
+    if (inFlightRequests.get(key)?.promise === nextRequest) {
       inFlightRequests.delete(key)
     }
   })
 
-  inFlightRequests.set(key, nextRequest)
+  inFlightRequests.set(key, { controller, promise: nextRequest })
   return nextRequest
+}
+
+const areShallowEqualRecords = (previous: object, next: object) => {
+  if (previous === next) return true
+
+  const previousRecord = previous as Record<string, unknown>
+  const nextRecord = next as Record<string, unknown>
+  const previousKeys = Object.keys(previousRecord)
+  const nextKeys = Object.keys(nextRecord)
+  if (previousKeys.length !== nextKeys.length) return false
+
+  return previousKeys.every(
+    (key) =>
+      Object.prototype.hasOwnProperty.call(nextRecord, key) &&
+      Object.is(previousRecord[key], nextRecord[key])
+  )
+}
+
+const reconcileEntityList = <T extends { id: string }>(previous: T[], next: T[]) => {
+  if (next.length === 0) return previous.length === 0 ? previous : next
+  if (previous.length === 0) return next
+
+  const previousById = new Map(previous.map((entity) => [entity.id, entity]))
+  let didChange = previous.length !== next.length
+  const reconciled = next.map((entity, index) => {
+    const previousEntity = previousById.get(entity.id)
+    const nextEntity =
+      previousEntity && areShallowEqualRecords(previousEntity, entity)
+        ? previousEntity
+        : entity
+    if (nextEntity !== previous[index]) didChange = true
+    return nextEntity
+  })
+
+  return didChange ? reconciled : previous
+}
+
+const mergeFirstEntityPage = <T extends { id: string }>(previous: T[], next: T[]) => {
+  if (previous.length === 0 || next.length === 0) {
+    return reconcileEntityList(previous, next)
+  }
+
+  const reconciledPage = reconcileEntityList(previous, next)
+  const pageIds = new Set(next.map((entity) => entity.id))
+  const merged = [
+    ...reconciledPage,
+    ...previous.filter((entity) => !pageIds.has(entity.id)),
+  ]
+
+  return merged.length === previous.length && merged.every((entity, index) => entity === previous[index])
+    ? previous
+    : merged
+}
+
+type CurrentGenerationJob = GenerationJob & { images?: GeneratedImage[] }
+
+const reconcileCurrentJob = (
+  previous: CurrentGenerationJob | null,
+  job: GenerationJob,
+  images: GeneratedImage[] | undefined
+): CurrentGenerationJob => {
+  const previousImages = previous?.id === job.id ? previous.images : undefined
+  const reconciledImages = images === undefined
+    ? undefined
+    : reconcileEntityList(previousImages ?? [], images)
+  const next = { ...job, images: reconciledImages }
+
+  return previous?.id === job.id && areShallowEqualRecords(previous, next)
+    ? previous
+    : next
 }
 
 const mergeUpdatedImage = (images: GeneratedImage[], imageId: string, updated: Partial<GeneratedImage>) => {
   let didChange = false
   const nextImages = images.map((image) => {
     if (image.id !== imageId) return image
+    const nextImage = { ...image, ...updated }
+    if (areShallowEqualRecords(image, nextImage)) return image
     didChange = true
-    return { ...image, ...updated }
+    return nextImage
   })
 
   return didChange ? nextImages : images
@@ -243,12 +597,14 @@ const getProductScopedState = () => ({
   referenceImages: {},
   promptTemplates: [],
   generationJobs: [],
+  generationJobsHasMore: false,
   currentJob: null,
   galleryImages: [],
   galleryTotal: 0,
   galleryHasMore: false,
   loadingRefSets: false,
   loadingJobs: false,
+  loadingJobsMore: false,
   loadingGallery: false,
   loadingGalleryMore: false,
   settingsTemplates: [],
@@ -267,6 +623,46 @@ const updateGalleryStateAfterRemoval = (state: Pick<AppState, 'galleryImages' | 
   }
 }
 
+const mergeGalleryImagesPreservingLoadedUrls = (
+  previousImages: GeneratedImage[],
+  nextImages: GeneratedImage[]
+) => {
+  if (nextImages.length === 0) return previousImages.length === 0 ? previousImages : nextImages
+  if (previousImages.length === 0) return nextImages
+
+  const previousById = new Map(previousImages.map((image) => [image.id, image]))
+  let didChange = previousImages.length !== nextImages.length
+
+  const reconciled = nextImages.map((image, index) => {
+    const previous = previousById.get(image.id)
+    if (!previous) {
+      didChange = true
+      return image
+    }
+
+    const merged = {
+      ...image,
+      public_url:
+        previous.storage_path === image.storage_path && previous.public_url
+          ? previous.public_url
+          : image.public_url,
+      thumb_public_url:
+        previous.thumb_storage_path === image.thumb_storage_path && previous.thumb_public_url
+          ? previous.thumb_public_url
+          : image.thumb_public_url,
+      preview_public_url:
+        previous.preview_storage_path === image.preview_storage_path && previous.preview_public_url
+          ? previous.preview_public_url
+          : image.preview_public_url,
+    }
+    const nextImage = areShallowEqualRecords(previous, merged) ? previous : merged
+    if (nextImage !== previousImages[index]) didChange = true
+    return nextImage
+  })
+
+  return didChange ? reconciled : previousImages
+}
+
 const getGalleryQueryString = (
   filters?: {
     job_id?: string
@@ -275,7 +671,8 @@ const getGalleryQueryString = (
     scene_id?: string
     sort?: string
   },
-  offset = 0
+  offset = 0,
+  limit = GALLERY_PAGE_SIZE
 ) => {
   const params = new URLSearchParams()
   if (filters?.job_id) params.set('job_id', filters.job_id.trim())
@@ -283,7 +680,7 @@ const getGalleryQueryString = (
   if (filters?.media_type) params.set('media_type', filters.media_type.trim())
   if (filters?.scene_id) params.set('scene_id', filters.scene_id.trim())
   if (filters?.sort) params.set('sort', filters.sort.trim())
-  params.set('limit', String(GALLERY_PAGE_SIZE))
+  params.set('limit', String(clampInteger(limit, 1, 200, GALLERY_PAGE_SIZE)))
   params.set('offset', String(offset))
   return params.toString()
 }
@@ -357,9 +754,12 @@ interface AppState {
 
   // Generation
   generationJobs: GenerationJob[]
+  generationJobsHasMore: boolean
   currentJob: (GenerationJob & { images?: GeneratedImage[] }) | null
   loadingJobs: boolean
-  fetchGenerationJobs: (productId: string) => Promise<void>
+  loadingJobsMore: boolean
+  fetchGenerationJobs: (productId: string, options?: { replace?: boolean }) => Promise<void>
+  fetchGenerationJobsMore: (productId: string) => Promise<void>
   startGeneration: (productId: string, data: {
     prompt_template_id?: string
     prompt_text: string
@@ -421,13 +821,22 @@ interface AppState {
   suggestPrompts: (productId: string, count?: number) => Promise<{ name: string; prompt_text: string }[]>
 }
 
-const api = async (url: string, options?: RequestInit) => {
+const api = async (
+  url: string,
+  options?: RequestInit,
+  timeoutMs = API_REQUEST_TIMEOUT_MS
+): Promise<unknown> => {
   const method = (options?.method ?? 'GET').toUpperCase()
   let res: Response
 
   try {
     res = await withRetry(
-      () => fetch(url, options),
+      () =>
+        fetchWithTimeout(
+          url,
+          { ...options, cache: 'no-store', credentials: 'same-origin' },
+          timeoutMs
+        ),
       {
         retries: method === 'GET' ? MAX_API_RETRIES : 0,
         shouldRetryResponse: (response) => !response.ok && RETRYABLE_RESPONSE_STATUSES.has(response.status),
@@ -435,6 +844,7 @@ const api = async (url: string, options?: RequestInit) => {
       }
     )
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error
     throw new Error(
       extractErrorMessage(error instanceof Error ? error.message : null) || DEFAULT_ERROR_MESSAGE
     )
@@ -459,19 +869,35 @@ const api = async (url: string, options?: RequestInit) => {
   return data ?? null
 }
 
+const getLocalStorage = () => {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
+
 const getDevParallelDefault = () => {
   if (typeof window === 'undefined') return true
-  const stored = window.localStorage.getItem('devParallelGeneration')
-  if (stored === null) return true
-  return stored === 'true'
+  try {
+    const stored = getLocalStorage()?.getItem('devParallelGeneration')
+    if (stored === null || stored === undefined) return true
+    return stored === 'true'
+  } catch (error) {
+    logStoreError('DevParallelGenerationStorage', error)
+    return true
+  }
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
   devParallelGeneration: getDevParallelDefault(),
   setDevParallelGeneration: (enabled) => {
     set({ devParallelGeneration: enabled })
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('devParallelGeneration', String(enabled))
+    try {
+      getLocalStorage()?.setItem('devParallelGeneration', String(enabled))
+    } catch (error) {
+      logStoreError('DevParallelGenerationStorage', error)
     }
   },
   // Projects
@@ -483,7 +909,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestVersion = beginTrackedRequest(requestKey)
     set({ loadingProjects: true })
     try {
-      const data = await getInFlightRequest(requestKey, () => api('/api/projects'))
+      const data = requireArrayResponse<Project>(
+        await getInFlightRequest(requestKey, (signal) => api('/api/projects', { signal })),
+        'Failed to load projects'
+      )
       if (!isLatestRequest(requestKey, requestVersion)) return
       markRequestSuccessful(requestKey)
       set({ projects: data })
@@ -500,14 +929,30 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   fetchProject: async (id) => {
     const projectId = requireUuid(id, 'project id')
+    const previousProjectId = getActiveSliceScope('currentProject')
     if (updateSliceScope('currentProject', projectId)) {
-      sliceScopes.set('errorLogs', projectId)
-      set({ currentProject: null, errorLogs: [] })
+      if (previousProjectId) {
+        const errorLogsRequestKey = activeSliceRequests.get('errorLogs')
+        if (errorLogsRequestKey === buildRequestKey('errorLogs', previousProjectId)) {
+          invalidateTrackedRequest(errorLogsRequestKey)
+        }
+      }
+      const errorLogsScopeChanged = updateSliceScope('errorLogs', projectId)
+      set({
+        currentProject: null,
+        errorLogs: [],
+        ...(errorLogsScopeChanged ? { loadingErrorLogs: false } : {}),
+      })
     }
     const requestKey = buildRequestKey('currentProject', projectId)
-    const requestVersion = beginTrackedRequest(requestKey)
+    const requestVersion = beginTrackedSliceRequest('currentProject', requestKey)
     try {
-      const data = await getInFlightRequest(requestKey, () => api(`/api/projects/${buildApiPath(projectId)}`))
+      const data = requireEntityResponse<Project>(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(`/api/projects/${buildApiPath(projectId)}`, { signal })
+        ),
+        'Failed to load project'
+      )
       if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('currentProject', projectId)) return
       markRequestSuccessful(requestKey)
       set({ currentProject: data })
@@ -523,30 +968,36 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   createProject: async (data) => {
-    const project = await api('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: normalizeLabelInput(data.name),
-        description: data.description ? trimTextInput(data.description) : undefined,
+    const project = requireEntityResponse<Project>(
+      await api('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: normalizeLabelInput(data.name),
+          description: data.description ? trimTextInput(data.description) : undefined,
+        }),
       }),
-    })
+      'Failed to create project'
+    )
     invalidateRequestKeys(buildRequestKey('projects'))
     set((s) => ({ projects: [project, ...s.projects] }))
     return project
   },
   updateProject: async (id, data) => {
     const projectId = requireUuid(id, 'project id')
-    const project = await api(`/api/projects/${buildApiPath(projectId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: data.name ? normalizeLabelInput(data.name) : data.name,
-        description:
-          typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+    const project = requireEntityResponse<Project>(
+      await api(`/api/projects/${buildApiPath(projectId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: data.name ? normalizeLabelInput(data.name) : data.name,
+          description:
+            typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+        }),
       }),
-    })
+      'Failed to update project'
+    )
     invalidateRequestKeys(buildRequestKey('projects'), buildRequestKey('currentProject', projectId))
     set((s) => ({
       currentProject: s.currentProject?.id === projectId ? project : s.currentProject,
@@ -574,13 +1025,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ products: [] })
     }
     const requestKey = buildRequestKey('products', scopedProjectId)
-    const requestVersion = beginTrackedRequest(requestKey)
+    const requestVersion = beginTrackedSliceRequest('products', requestKey)
     set({ loadingProducts: true })
     try {
       const params = new URLSearchParams()
       if (scopedProjectId) params.set('project_id', scopedProjectId)
       const qs = params.toString()
-      const data = await getInFlightRequest(requestKey, () => api(`/api/products${qs ? `?${qs}` : ''}`))
+      const data = requireArrayResponse<Product>(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(`/api/products${qs ? `?${qs}` : ''}`, { signal })
+        ),
+        'Failed to load products'
+      )
       if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('products', scopeToken)) return
       markRequestSuccessful(requestKey)
       set({ products: data })
@@ -601,14 +1057,48 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   fetchProduct: async (id) => {
     const productId = requireUuid(id, 'product id')
+    const previousProductId = getActiveSliceScope('currentProduct')
+    let cancelledSlices = new Set<string>()
     if (updateSliceScope('currentProduct', productId)) {
-      resetProductScopedSliceScopes(productId)
-      set({ currentProduct: null, ...getProductScopedState() })
+      if (previousProductId) cancelledSlices = cancelProductScopedRequests(previousProductId)
+      // Switching products: clear the previous product's cached data so the
+      // persistent layout (e.g. GlobalGenerationQueue) doesn't show stale data.
+      // We do NOT reset the per-slice scopes here — each slice's own fetch keys
+      // on the product id and clears/refetches itself on a product change.
+      // Resetting them here would race with sibling page fetches (which run
+      // first, child-before-parent) and silently discard their results,
+      // leaving pages like the gallery blank. Loading flags are preserved so
+      // an in-flight child fetch keeps its spinner instead of flashing empty.
+      set({
+        currentProduct: null,
+        referenceSets: [],
+        referenceImages: {},
+        promptTemplates: [],
+        generationJobs: [],
+        generationJobsHasMore: false,
+        currentJob: null,
+        galleryImages: [],
+        galleryTotal: 0,
+        galleryHasMore: false,
+        settingsTemplates: [],
+        ...(cancelledSlices.has('referenceSets') ? { loadingRefSets: false } : {}),
+        ...(cancelledSlices.has('generationJobs') ? { loadingJobs: false } : {}),
+        ...(cancelledSlices.has('generationJobsMore') ? { loadingJobsMore: false } : {}),
+        ...(cancelledSlices.has('gallery')
+          ? { loadingGallery: false, loadingGalleryMore: false }
+          : {}),
+        ...(cancelledSlices.has('settingsTemplates') ? { loadingSettingsTemplates: false } : {}),
+      })
     }
     const requestKey = buildRequestKey('currentProduct', productId)
-    const requestVersion = beginTrackedRequest(requestKey)
+    const requestVersion = beginTrackedSliceRequest('currentProduct', requestKey)
     try {
-      const data = await getInFlightRequest(requestKey, () => api(`/api/products/${buildApiPath(productId)}`))
+      const data = requireEntityResponse<Product>(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(`/api/products/${buildApiPath(productId)}`, { signal })
+        ),
+        'Failed to load product'
+      )
       if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('currentProduct', productId)) return
       markRequestSuccessful(requestKey)
       set({ currentProduct: data })
@@ -625,16 +1115,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   createProduct: async (data) => {
     const projectId = requireUuid(data.project_id, 'project id')
-    const product = await api('/api/products', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: normalizeLabelInput(data.name),
-        description: data.description ? trimTextInput(data.description) : undefined,
-        project_id: projectId,
+    const product = requireEntityResponse<Product>(
+      await api('/api/products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: normalizeLabelInput(data.name),
+          description: data.description ? trimTextInput(data.description) : undefined,
+          project_id: projectId,
+        }),
       }),
-    })
+      'Failed to create product'
+    )
     invalidateRequestKeys(buildRequestKey('products', projectId))
     if (isCurrentOrUntrackedSliceScope('products', projectId)) {
       set((s) => ({ products: [product, ...s.products] }))
@@ -645,17 +1138,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     const productId = requireUuid(id, 'product id')
     const nextProjectId = optionalUuid(data.project_id, 'project id')
     const existingProduct = get().products.find((product) => product.id === productId)
-    const product = await api(`/api/products/${buildApiPath(productId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: data.name ? normalizeLabelInput(data.name) : data.name,
-        description:
-          typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
-        project_id: nextProjectId,
+    const product = requireEntityResponse<Product>(
+      await api(`/api/products/${buildApiPath(productId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: data.name ? normalizeLabelInput(data.name) : data.name,
+          description:
+            typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+          project_id: nextProjectId,
+        }),
       }),
-    })
+      'Failed to update product'
+    )
     invalidateRequestKeys(
       buildRequestKey('currentProduct', productId),
       buildRequestKey('products', existingProduct?.project_id),
@@ -692,13 +1188,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ referenceSets: [], referenceImages: {} })
     }
     const requestKey = buildRequestKey('referenceSets', scopedProductId)
-    const requestVersion = beginTrackedRequest(requestKey)
+    const requestVersion = beginTrackedSliceRequest('referenceSets', requestKey)
     set({ loadingRefSets: true })
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets`)
+      const data = requireArrayResponse<ReferenceSet>(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets`, { signal })
+        ),
+        'Failed to load reference sets'
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('referenceSets', scopedProductId)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('referenceSets', scopedProductId) ||
+        !isActiveProductScope(scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
       set({ referenceSets: data })
     } catch (error) {
@@ -718,17 +1222,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   createReferenceSet: async (productId, data) => {
     const scopedProductId = requireUuid(productId, 'product id')
-    const refSet = await api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: normalizeLabelInput(data.name),
-        description: data.description ? trimTextInput(data.description) : undefined,
+    const refSet = requireEntityResponse<ReferenceSet>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: normalizeLabelInput(data.name),
+          description: data.description ? trimTextInput(data.description) : undefined,
+        }),
       }),
-    })
+      'Failed to create reference set'
+    )
     invalidateRequestKeys(buildRequestKey('referenceSets', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({ referenceSets: [...s.referenceSets, refSet] }))
     }
     return refSet
@@ -736,18 +1243,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateReferenceSet: async (productId, setId, data) => {
     const scopedProductId = requireUuid(productId, 'product id')
     const referenceSetId = requireUuid(setId, 'reference set id')
-    const refSet = await api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: data.name ? normalizeLabelInput(data.name) : data.name,
-        description:
-          typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+    const refSet = requireEntityResponse<ReferenceSet>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: data.name ? normalizeLabelInput(data.name) : data.name,
+          description:
+            typeof data.description === 'string' ? trimTextInput(data.description) : data.description,
+        }),
       }),
-    })
+      'Failed to update reference set'
+    )
     invalidateRequestKeys(buildRequestKey('referenceSets', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({
         referenceSets: s.referenceSets.map((r) =>
           r.id === referenceSetId ? refSet : data.is_active ? { ...r, is_active: false } : r
@@ -763,7 +1273,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       buildRequestKey('referenceSets', scopedProductId),
       buildRequestKey('referenceImages', scopedProductId, referenceSetId)
     )
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => {
         const nextReferenceImages = { ...s.referenceImages }
         delete nextReferenceImages[referenceSetId]
@@ -783,12 +1293,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requestKey = buildRequestKey('referenceImages', scopedProductId, referenceSetId)
     const requestVersion = beginTrackedRequest(requestKey)
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(
-          `/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}/images`
-        )
+      const data = requireArrayResponse<ReferenceImage>(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(
+            `/api/products/${buildApiPath(scopedProductId)}/reference-sets/${buildApiPath(referenceSetId)}/images`,
+            { signal }
+          )
+        ),
+        'Failed to load reference images'
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
       set((s) => ({ referenceImages: { ...s.referenceImages, [referenceSetId]: data } }))
     } catch (error) {
@@ -816,49 +1334,52 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     )
 
-    const signedPayload = signed as Array<
-      | {
-          clientId: string
-          signedUrl: string
-          storage_path: string
-          file_name: string
-          mime_type: string
-          file_size: number
-          display_order: number
-        }
-      | { clientId: string; error: string }
-    >
+    const signedPayload = normalizeSignedUploadPayload(signed)
 
     const fileMap = new Map(uploadSpecs.map((spec, idx) => [spec.clientId, validatedFiles[idx]]))
-    const uploadResultPromises = signedPayload.map(async (item) => {
-      if (!('signedUrl' in item)) {
-        return {
-          clientId: item.clientId,
-          storage_path: '',
-          file_name: '',
-          mime_type: '',
-          file_size: 0,
-          display_order: 0,
-          error: item.error || 'Failed to sign upload',
+    const uploadResults = await mapWithConcurrency(
+      signedPayload,
+      REFERENCE_UPLOAD_CONCURRENCY,
+      async (item) => {
+        if (!('signedUrl' in item)) {
+          return {
+            clientId: item.clientId,
+            storage_path: '',
+            file_name: '',
+            mime_type: '',
+            file_size: 0,
+            display_order: 0,
+            error: item.error || 'Failed to sign upload',
+          }
         }
-      }
 
-      const file = fileMap.get(item.clientId)
-      if (!file) {
-        return {
-          clientId: item.clientId,
-          storage_path: '',
-          file_name: item.file_name,
-          mime_type: item.mime_type,
-          file_size: item.file_size,
-          display_order: item.display_order,
-          error: 'Missing file data',
+        const file = fileMap.get(item.clientId)
+        if (!file) {
+          return {
+            clientId: item.clientId,
+            storage_path: '',
+            file_name: item.file_name,
+            mime_type: item.mime_type,
+            file_size: item.file_size,
+            display_order: item.display_order,
+            error: 'Missing file data',
+          }
         }
-      }
 
-      try {
-        const uploadResp = await uploadToSignedUrl(item.signedUrl, file)
-        if (!uploadResp.ok) {
+        try {
+          const uploadResp = await uploadToSignedUrl(item.signedUrl, file)
+          if (!uploadResp.ok) {
+            return {
+              clientId: item.clientId,
+              storage_path: item.storage_path,
+              file_name: item.file_name,
+              mime_type: item.mime_type,
+              file_size: item.file_size,
+              display_order: item.display_order,
+              error: `Upload failed (${uploadResp.status})`,
+            }
+          }
+        } catch (error) {
           return {
             clientId: item.clientId,
             storage_path: item.storage_path,
@@ -866,10 +1387,11 @@ export const useAppStore = create<AppState>((set, get) => ({
             mime_type: item.mime_type,
             file_size: item.file_size,
             display_order: item.display_order,
-            error: `Upload failed (${uploadResp.status})`,
+            error:
+              extractErrorMessage(error instanceof Error ? error.message : null) || 'Upload failed',
           }
         }
-      } catch (error) {
+
         return {
           clientId: item.clientId,
           storage_path: item.storage_path,
@@ -877,22 +1399,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           mime_type: item.mime_type,
           file_size: item.file_size,
           display_order: item.display_order,
-          error:
-            extractErrorMessage(error instanceof Error ? error.message : null) || 'Upload failed',
         }
       }
-
-      return {
-        clientId: item.clientId,
-        storage_path: item.storage_path,
-        file_name: item.file_name,
-        mime_type: item.mime_type,
-        file_size: item.file_size,
-        display_order: item.display_order,
-      }
-    })
-
-    const uploadResults = await Promise.all(uploadResultPromises)
+    )
 
     const successfulUploads = uploadResults.filter((u) => !u.error)
     let payload: Array<ReferenceImage & { error?: string; file?: string }> = []
@@ -902,6 +1411,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uploads: successfulUploads }),
       })
+      if (!Array.isArray(data)) {
+        throw new Error('Upload finalization failed')
+      }
       payload = data as Array<ReferenceImage & { error?: string; file?: string }>
     }
 
@@ -910,7 +1422,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...uploadResults.filter((u) => u.error),
       ...payload.filter((img) => !img?.id && img?.error),
     ]
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    const firstError = getUploadErrorMessage(errors[0])
+    if (uploaded.length > 0 && errors.length > 0) {
+      logStoreError('ReferenceImageUpload', new Error(firstError || 'Some uploads failed'))
+    }
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({
         referenceImages: {
           ...s.referenceImages,
@@ -920,10 +1436,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     invalidateRequestKeys(referenceImagesRequestKey)
     if (uploaded.length === 0 && errors.length > 0) {
-      const firstError =
-        errors[0] && typeof errors[0] === 'object' && 'error' in errors[0]
-        ? (errors[0] as { error?: string }).error
-          : null
       throw new Error(firstError || 'Upload failed')
     }
   },
@@ -936,7 +1448,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       { method: 'DELETE' }
     )
     invalidateRequestKeys(buildRequestKey('referenceImages', scopedProductId, referenceSetId))
-    if (isCurrentOrUntrackedSliceScope('referenceSets', scopedProductId)) {
+    if (isCurrentProductScopedSlice('referenceSets', scopedProductId, scopedProductId)) {
       set((s) => ({
         referenceImages: {
           ...s.referenceImages,
@@ -954,12 +1466,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ promptTemplates: [] })
     }
     const requestKey = buildRequestKey('promptTemplates', scopedProductId)
-    const requestVersion = beginTrackedRequest(requestKey)
+    const requestVersion = beginTrackedSliceRequest('promptTemplates', requestKey)
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(scopedProductId)}/prompts`)
+      const data = requireArrayResponse<PromptTemplate>(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/prompts`, { signal })
+        ),
+        'Failed to load prompt templates'
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('promptTemplates', scopedProductId)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('promptTemplates', scopedProductId) ||
+        !isActiveProductScope(scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
       set({ promptTemplates: data })
     } catch (error) {
@@ -975,18 +1495,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   createPromptTemplate: async (productId, data) => {
     const scopedProductId = requireUuid(productId, 'product id')
-    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/prompts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: normalizeLabelInput(data.name),
-        prompt_text: sanitizePromptText(data.prompt_text, 'prompt_text'),
-        tags: data.tags ? sanitizeStringArray(data.tags) : undefined,
+    const tmpl = requireEntityResponse<PromptTemplate>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/prompts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: normalizeLabelInput(data.name),
+          prompt_text: sanitizePromptText(data.prompt_text, 'prompt_text'),
+          tags: data.tags ? sanitizeStringArray(data.tags) : undefined,
+        }),
       }),
-    })
+      'Failed to create prompt template'
+    )
     invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('promptTemplates', scopedProductId)) {
+    if (isCurrentProductScopedSlice('promptTemplates', scopedProductId, scopedProductId)) {
       set((s) => ({ promptTemplates: [...s.promptTemplates, tmpl] }))
     }
     return tmpl
@@ -994,19 +1517,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   updatePromptTemplate: async (productId, promptId, data) => {
     const scopedProductId = requireUuid(productId, 'product id')
     const promptTemplateId = requireUuid(promptId, 'prompt template id')
-    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/prompts/${buildApiPath(promptTemplateId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: data.name ? normalizeLabelInput(data.name) : data.name,
-        prompt_text:
-          typeof data.prompt_text === 'string' ? sanitizePromptText(data.prompt_text, 'prompt_text') : data.prompt_text,
-        tags: data.tags ? sanitizeStringArray(data.tags) : data.tags,
+    const tmpl = requireEntityResponse<PromptTemplate>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/prompts/${buildApiPath(promptTemplateId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: data.name ? normalizeLabelInput(data.name) : data.name,
+          prompt_text:
+            typeof data.prompt_text === 'string' ? sanitizePromptText(data.prompt_text, 'prompt_text') : data.prompt_text,
+          tags: data.tags ? sanitizeStringArray(data.tags) : data.tags,
+        }),
       }),
-    })
+      'Failed to update prompt template'
+    )
     invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('promptTemplates', scopedProductId)) {
+    if (isCurrentProductScopedSlice('promptTemplates', scopedProductId, scopedProductId)) {
       set((s) => ({ promptTemplates: s.promptTemplates.map((p) => (p.id === promptTemplateId ? tmpl : p)) }))
     }
   },
@@ -1015,31 +1541,61 @@ export const useAppStore = create<AppState>((set, get) => ({
     const promptTemplateId = requireUuid(promptId, 'prompt template id')
     await api(`/api/products/${buildApiPath(scopedProductId)}/prompts/${buildApiPath(promptTemplateId)}`, { method: 'DELETE' })
     invalidateRequestKeys(buildRequestKey('promptTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('promptTemplates', scopedProductId)) {
+    if (isCurrentProductScopedSlice('promptTemplates', scopedProductId, scopedProductId)) {
       set((s) => ({ promptTemplates: s.promptTemplates.filter((p) => p.id !== promptTemplateId) }))
     }
   },
 
   // Generation
   generationJobs: [],
+  generationJobsHasMore: false,
   currentJob: null,
   loadingJobs: false,
-  fetchGenerationJobs: async (productId) => {
+  loadingJobsMore: false,
+  fetchGenerationJobs: async (productId, options) => {
     const scopedProductId = requireUuid(productId, 'product id')
+    const shouldReplace = options?.replace === true
     const requestKey = buildRequestKey('generationJobs', scopedProductId)
     if (updateSliceScope('generationJobs', requestKey)) {
-      set({ generationJobs: [], currentJob: null, loadingJobs: false })
+      updateSliceScope('generationJobsMore', '_')
+      set({
+        generationJobs: [],
+        generationJobsHasMore: false,
+        currentJob: null,
+        loadingJobs: false,
+        loadingJobsMore: false,
+      })
     }
-    const requestVersion = beginTrackedRequest(requestKey)
+    const requestVersion = beginTrackedSliceRequest('generationJobs', requestKey)
     const shouldShowLoading = get().generationJobs.length === 0
     if (shouldShowLoading) set({ loadingJobs: true })
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(scopedProductId)}/generate`)
+      const data = requireArrayResponse<GenerationJob>(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/generate`, { signal })
+        ),
+        'Failed to load generation jobs'
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('generationJobs', requestKey)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('generationJobs', requestKey) ||
+        !isActiveProductScope(scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
-      set({ generationJobs: data })
+      set((state) => {
+        const wasEmpty = state.generationJobs.length === 0
+        const generationJobs = shouldReplace
+          ? reconcileEntityList(state.generationJobs, data)
+          : mergeFirstEntityPage(state.generationJobs, data)
+        const generationJobsHasMore = wasEmpty || shouldReplace
+          ? data.length === GENERATION_JOBS_PAGE_SIZE
+          : state.generationJobsHasMore
+        return generationJobs === state.generationJobs &&
+          generationJobsHasMore === state.generationJobsHasMore
+          ? state
+          : { generationJobs, generationJobsHasMore }
+      })
     } catch (error) {
       if (
         isLatestRequest(requestKey, requestVersion) &&
@@ -1052,6 +1608,63 @@ export const useAppStore = create<AppState>((set, get) => ({
     } finally {
       if (shouldShowLoading && isLatestRequest(requestKey, requestVersion) && isCurrentSliceScope('generationJobs', requestKey)) {
         set({ loadingJobs: false })
+      }
+    }
+  },
+  fetchGenerationJobsMore: async (productId) => {
+    const scopedProductId = requireUuid(productId, 'product id')
+    const state = get()
+    const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
+    if (
+      !state.generationJobsHasMore ||
+      state.loadingJobsMore ||
+      !isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)
+    ) {
+      return
+    }
+
+    const offset = state.generationJobs.length
+    const requestKey = buildRequestKey('generationJobsMore', scopedProductId, String(offset))
+    updateSliceScope('generationJobsMore', requestKey)
+    const requestVersion = beginTrackedSliceRequest('generationJobsMore', requestKey)
+    set({ loadingJobsMore: true })
+    try {
+      const params = new URLSearchParams({
+        limit: String(GENERATION_JOBS_PAGE_SIZE),
+        offset: String(offset),
+      })
+      const data = requireArrayResponse<GenerationJob>(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/generate?${params}`, { signal })
+        ),
+        'Failed to load more generation jobs'
+      )
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('generationJobsMore', requestKey) ||
+        !isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)
+      ) {
+        return
+      }
+
+      set((currentState) => {
+        const existingIds = new Set(currentState.generationJobs.map((job) => job.id))
+        const reconciledPage = reconcileEntityList(currentState.generationJobs, data)
+        const uniqueJobs = reconciledPage.filter((job) => !existingIds.has(job.id))
+        const generationJobs = uniqueJobs.length > 0
+          ? [...currentState.generationJobs, ...uniqueJobs]
+          : currentState.generationJobs
+        const generationJobsHasMore = data.length === GENERATION_JOBS_PAGE_SIZE
+        return generationJobs === currentState.generationJobs &&
+          generationJobsHasMore === currentState.generationJobsHasMore
+          ? currentState
+          : { generationJobs, generationJobsHasMore }
+      })
+    } catch (error) {
+      logStoreError('GenerationJobsMore', error)
+    } finally {
+      if (isLatestRequest(requestKey, requestVersion) && isCurrentSliceScope('generationJobsMore', requestKey)) {
+        set({ loadingJobsMore: false })
       }
     }
   },
@@ -1071,19 +1684,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       reference_sets: sanitizedRefSets,
       source_image_id: optionalUuid(data.source_image_id, 'source image id') ?? null,
       variation_count: clampInteger(data.variation_count ?? 15, 1, 100, 15),
-      ...(process.env.NODE_ENV === 'development' && !devParallel
+      ...(isClientDevelopmentRuntime() && !devParallel
         ? { parallelism_override: 1, batch_override: 1 }
         : {}),
     }
-    const result = await api(`/api/products/${buildApiPath(scopedProductId)}/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    const job = result.job ?? result
+    const job = getEntityPayload<GenerationJob>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      'job',
+      'Failed to start generation'
+    )
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
-    if (isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey)) {
+    if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
       set((s) => ({ generationJobs: [job, ...s.generationJobs] }))
     }
     return job
@@ -1095,14 +1711,32 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (updateSliceScope('currentJob', requestKey)) {
       set({ currentJob: null })
     }
-    const requestVersion = beginTrackedRequest(requestKey)
+    const requestVersion = beginTrackedSliceRequest('currentJob', requestKey)
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(scopedProductId)}/generate/${buildApiPath(generationJobId)}`)
+      const data = requireRecordResponse(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(
+            `/api/products/${buildApiPath(scopedProductId)}/generate/${buildApiPath(generationJobId)}`,
+            { signal }
+          )
+        ),
+        'Failed to load job status'
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('currentJob', requestKey)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('currentJob', requestKey) ||
+        !isActiveProductScope(scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
-      set({ currentJob: { ...data.job, images: data.images } })
+      const job = requireEntityResponse<GenerationJob>(data.job, 'Failed to load job status')
+      const images = data.images === undefined
+        ? undefined
+        : requireArrayResponse<GeneratedImage>(data.images, 'Failed to load job images')
+      set((state) => {
+        const currentJob = reconcileCurrentJob(state.currentJob, job, images)
+        return currentJob === state.currentJob ? state : { currentJob }
+      })
     } catch (error) {
       if (
         isLatestRequest(requestKey, requestVersion) &&
@@ -1117,15 +1751,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   retryGenerationJob: async (productId, jobId) => {
     const scopedProductId = requireUuid(productId, 'product id')
     const generationJobId = requireUuid(jobId, 'generation job id')
-    const data = await api(`/api/products/${buildApiPath(scopedProductId)}/generate/${buildApiPath(generationJobId)}/retry`, {
-      method: 'POST',
-    })
-    const job = data.job ?? data
+    const job = getEntityPayload<GenerationJob>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/generate/${buildApiPath(generationJobId)}/retry`, {
+        method: 'POST',
+      }),
+      'job',
+      'Failed to retry generation job'
+    )
     invalidateRequestKeys(
       buildRequestKey('generationJobs', scopedProductId),
       buildRequestKey('currentJob', scopedProductId, generationJobId)
     )
-    if (isCurrentOrUntrackedSliceScope('generationJobs', buildRequestKey('generationJobs', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'generationJobs',
+        buildRequestKey('generationJobs', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({
         generationJobs: [job, ...s.generationJobs.filter((j) => j.id !== job.id)],
         currentJob: s.currentJob?.id === job.id ? { ...job, images: s.currentJob?.images } : s.currentJob,
@@ -1135,20 +1778,49 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   clearGenerationQueue: async (productId) => {
     const scopedProductId = requireUuid(productId, 'product id')
-    await api(`/api/products/${buildApiPath(scopedProductId)}/generate`, { method: 'DELETE' })
+    const result = await api(`/api/products/${buildApiPath(scopedProductId)}/generate`, {
+      method: 'DELETE',
+    })
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
-    if (isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey)) {
-      await get().fetchGenerationJobs(scopedProductId)
+    if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
+      const jobs = get().generationJobs
+      const activeJobs = jobs.filter((job) => job.status === 'pending' || job.status === 'running')
+      if (getResponseCount(result, 'cancelled') === activeJobs.length) {
+        const completedAt = new Date().toISOString()
+        set({
+          generationJobs: jobs.map((job) =>
+            job.status === 'pending' || job.status === 'running'
+              ? {
+                  ...job,
+                  status: 'cancelled',
+                  error_message: 'Cancelled by user',
+                  completed_at: completedAt,
+                }
+              : job
+          ),
+        })
+      } else {
+        await get().fetchGenerationJobs(scopedProductId, { replace: true })
+      }
     }
   },
   clearGenerationFailures: async (productId) => {
     const scopedProductId = requireUuid(productId, 'product id')
-    await api(`/api/products/${buildApiPath(scopedProductId)}/generate?scope=failed`, { method: 'DELETE' })
+    const result = await api(
+      `/api/products/${buildApiPath(scopedProductId)}/generate?scope=failed`,
+      { method: 'DELETE' }
+    )
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
     invalidateRequestKeys(generationJobsRequestKey)
-    if (isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey)) {
-      await get().fetchGenerationJobs(scopedProductId)
+    if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
+      const jobs = get().generationJobs
+      const failedJobs = jobs.filter((job) => job.status === 'failed')
+      if (getResponseCount(result, 'cleared_failed') === failedJobs.length) {
+        set({ generationJobs: jobs.filter((job) => job.status !== 'failed') })
+      } else {
+        await get().fetchGenerationJobs(scopedProductId, { replace: true })
+      }
     }
   },
   deleteGenerationJob: async (productId, jobId) => {
@@ -1159,7 +1831,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       buildRequestKey('generationJobs', scopedProductId),
       buildRequestKey('currentJob', scopedProductId, generationJobId)
     )
-    if (isCurrentOrUntrackedSliceScope('generationJobs', buildRequestKey('generationJobs', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'generationJobs',
+        buildRequestKey('generationJobs', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({
         generationJobs: s.generationJobs.filter((j) => j.id !== generationJobId),
         currentJob: s.currentJob?.id === generationJobId ? null : s.currentJob,
@@ -1170,8 +1848,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const scopedProductId = requireUuid(productId, 'product id')
     await api(`/api/products/${buildApiPath(scopedProductId)}/generate?scope=log`, { method: 'DELETE' })
     const generationJobsRequestKey = buildRequestKey('generationJobs', scopedProductId)
-    invalidateRequestKeys(generationJobsRequestKey, getActiveSliceScope('currentJob'))
-    if (isCurrentOrUntrackedSliceScope('generationJobs', generationJobsRequestKey)) {
+    invalidateRequestKeys(generationJobsRequestKey, getActiveProductRequestScope('currentJob', scopedProductId))
+    if (isCurrentProductScopedSlice('generationJobs', generationJobsRequestKey, scopedProductId)) {
       set((s) => ({
         generationJobs: s.generationJobs.filter((j) => j.status === 'pending' || j.status === 'running'),
         currentJob:
@@ -1192,23 +1870,41 @@ export const useAppStore = create<AppState>((set, get) => ({
     const scopedProductId = requireUuid(productId, 'product id')
     const sanitizedFilters = sanitizeGalleryFilters(filters)
     const requestKey = getGalleryRequestKey(scopedProductId, sanitizedFilters)
-    const qs = getGalleryQueryString(sanitizedFilters)
     if (updateSliceScope('gallery', requestKey)) {
       set({ galleryImages: [], galleryTotal: 0, galleryHasMore: false, loadingGallery: false, loadingGalleryMore: false })
     }
-    const requestVersion = beginTrackedRequest(requestKey)
-    const shouldShowLoading = get().galleryImages.length === 0
+    const requestVersion = beginTrackedSliceRequest('gallery', requestKey)
+    const loadedCount = get().galleryImages.length
+    const shouldShowLoading = loadedCount === 0
+    const qs = getGalleryQueryString(sanitizedFilters, 0, Math.max(GALLERY_PAGE_SIZE, loadedCount))
     if (shouldShowLoading) set({ loadingGallery: true })
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(scopedProductId)}/gallery?${qs}`)
+      const data = normalizeGalleryPayload(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/gallery?${qs}`, { signal })
+        )
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('gallery', requestKey)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('gallery', requestKey) ||
+        !isActiveProductScope(scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
-      set({
-        galleryImages: data.images ?? data,
-        galleryTotal: data.total ?? 0,
-        galleryHasMore: data.has_more ?? false,
+      set((state) => {
+        const galleryImages = mergeGalleryImagesPreservingLoadedUrls(state.galleryImages, data.images)
+        if (
+          galleryImages === state.galleryImages &&
+          data.total === state.galleryTotal &&
+          data.has_more === state.galleryHasMore
+        ) {
+          return state
+        }
+        return {
+          galleryImages,
+          galleryTotal: data.total,
+          galleryHasMore: data.has_more,
+        }
       })
     } catch (error) {
       if (
@@ -1238,19 +1934,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ loadingGalleryMore: true })
     try {
       const qs = getGalleryQueryString(sanitizedFilters, galleryImages.length)
-      const data = await api(`/api/products/${buildApiPath(scopedProductId)}/gallery?${qs}`)
-      if (!isCurrentSliceScope('gallery', requestKey) || !isLatestRequest(requestKey, requestVersion)) {
+      const data = normalizeGalleryPayload(await api(`/api/products/${buildApiPath(scopedProductId)}/gallery?${qs}`))
+      if (
+        !isCurrentSliceScope('gallery', requestKey) ||
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isActiveProductScope(scopedProductId)
+      ) {
         return
       }
-      const newImages = data.images ?? []
+      const newImages = data.images
       set((state) => {
         const existingIds = new Set(state.galleryImages.map((img) => img.id))
         const unique = newImages.filter((img: GeneratedImage) => !existingIds.has(img.id))
-        return {
-          galleryImages: [...state.galleryImages, ...unique],
-          galleryTotal: data.total ?? state.galleryImages.length + unique.length,
-          galleryHasMore: data.has_more ?? false,
-        }
+        const galleryImages = unique.length > 0
+          ? [...state.galleryImages, ...unique]
+          : state.galleryImages
+        return galleryImages === state.galleryImages &&
+          data.total === state.galleryTotal &&
+          data.has_more === state.galleryHasMore
+          ? state
+          : {
+              galleryImages,
+              galleryTotal: data.total,
+              galleryHasMore: data.has_more,
+            }
       })
     } catch (error) {
       logStoreError('GalleryMore', error)
@@ -1262,62 +1969,83 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   updateImageApproval: async (imageId, approval_status, notes) => {
     const scopedImageId = requireUuid(imageId, 'image id')
-    const data = await api(`/api/images/${buildApiPath(scopedImageId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        approval_status: sanitizeApprovalStatus(approval_status, { allowNull: true }) ?? null,
-        notes: typeof notes === 'string' ? trimTextInput(notes) : notes,
-      }),
-    })
-    const updated = data.image ?? data
     const activeGalleryScope = getActiveSliceScope('gallery')
     const activeCurrentJobScope = getActiveSliceScope('currentJob')
-    if (activeGalleryScope) invalidateTrackedRequest(activeGalleryScope)
-    if (activeCurrentJobScope) invalidateTrackedRequest(activeCurrentJobScope)
-    set((s) => ({
-      galleryImages: mergeUpdatedImage(s.galleryImages, scopedImageId, updated),
-      currentJob: s.currentJob?.images
-        ? {
-            ...s.currentJob,
-            images: mergeUpdatedImage(s.currentJob.images, scopedImageId, updated),
-          }
-        : s.currentJob,
-    }))
+    const updated = getNestedRecordPayload<Record<string, unknown>>(
+      await api(`/api/images/${buildApiPath(scopedImageId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          approval_status: sanitizeApprovalStatus(approval_status, { allowNull: true }) ?? null,
+          notes: typeof notes === 'string' ? trimTextInput(notes) : notes,
+        }),
+      }),
+      'image',
+      'Failed to update image'
+    ) as Partial<GeneratedImage>
+    invalidateRequestKeys(activeGalleryScope, activeCurrentJobScope)
+    set((s) => {
+      const galleryImages = mergeUpdatedImage(s.galleryImages, scopedImageId, updated)
+      const currentJobImages = s.currentJob?.images
+        ? mergeUpdatedImage(s.currentJob.images, scopedImageId, updated)
+        : undefined
+      const currentJob = s.currentJob?.images && currentJobImages !== s.currentJob.images
+        ? { ...s.currentJob, images: currentJobImages }
+        : s.currentJob
+      return galleryImages === s.galleryImages && currentJob === s.currentJob
+        ? s
+        : { galleryImages, currentJob }
+    })
   },
   deleteImage: async (imageId) => {
     const scopedImageId = requireUuid(imageId, 'image id')
+    const activeGalleryScope = getActiveSliceScope('gallery')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
     await api(`/api/images/${buildApiPath(scopedImageId)}`, { method: 'DELETE' })
     const idSet = new Set([scopedImageId])
-    invalidateRequestKeys(getActiveSliceScope('gallery'), getActiveSliceScope('currentJob'))
-    set((s) => ({
-      ...updateGalleryStateAfterRemoval(s, idSet),
-      currentJob: s.currentJob?.images
-        ? {
-            ...s.currentJob,
-            images: removeImagesById(s.currentJob.images, idSet),
-          }
-        : s.currentJob,
-    }))
+    invalidateRequestKeys(activeGalleryScope, activeCurrentJobScope)
+    set((s) => {
+      const galleryState = updateGalleryStateAfterRemoval(s, idSet)
+      const currentJobImages = s.currentJob?.images
+        ? removeImagesById(s.currentJob.images, idSet)
+        : undefined
+      const currentJob = s.currentJob?.images && currentJobImages !== s.currentJob.images
+        ? { ...s.currentJob, images: currentJobImages }
+        : s.currentJob
+      return galleryState.galleryImages === s.galleryImages &&
+        galleryState.galleryTotal === s.galleryTotal &&
+        galleryState.galleryHasMore === s.galleryHasMore &&
+        currentJob === s.currentJob
+        ? s
+        : { ...galleryState, currentJob }
+    })
   },
   bulkDeleteImages: async (imageIds) => {
     const sanitizedIds = sanitizeUuidArray(imageIds, 'image id')
+    const activeGalleryScope = getActiveSliceScope('gallery')
+    const activeCurrentJobScope = getActiveSliceScope('currentJob')
     await api('/api/images/bulk-delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ imageIds: sanitizedIds }),
     })
     const idSet = new Set(sanitizedIds)
-    invalidateRequestKeys(getActiveSliceScope('gallery'), getActiveSliceScope('currentJob'))
-    set((s) => ({
-      ...updateGalleryStateAfterRemoval(s, idSet),
-      currentJob: s.currentJob?.images
-        ? {
-            ...s.currentJob,
-            images: removeImagesById(s.currentJob.images, idSet),
-          }
-        : s.currentJob,
-    }))
+    invalidateRequestKeys(activeGalleryScope, activeCurrentJobScope)
+    set((s) => {
+      const galleryState = updateGalleryStateAfterRemoval(s, idSet)
+      const currentJobImages = s.currentJob?.images
+        ? removeImagesById(s.currentJob.images, idSet)
+        : undefined
+      const currentJob = s.currentJob?.images && currentJobImages !== s.currentJob.images
+        ? { ...s.currentJob, images: currentJobImages }
+        : s.currentJob
+      return galleryState.galleryImages === s.galleryImages &&
+        galleryState.galleryTotal === s.galleryTotal &&
+        galleryState.galleryHasMore === s.galleryHasMore &&
+        currentJob === s.currentJob
+        ? s
+        : { ...galleryState, currentJob }
+    })
   },
 
   // Settings Templates
@@ -1329,13 +2057,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (updateSliceScope('settingsTemplates', requestKey)) {
       set({ settingsTemplates: [], loadingSettingsTemplates: false })
     }
-    const requestVersion = beginTrackedRequest(requestKey)
+    const requestVersion = beginTrackedSliceRequest('settingsTemplates', requestKey)
     set({ loadingSettingsTemplates: true })
     try {
-      const data = await getInFlightRequest(requestKey, () =>
-        api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates`)
+      const data = requireArrayResponse<SettingsTemplate>(
+        await getInFlightRequest(requestKey, (signal) =>
+          api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates`, { signal })
+        ),
+        'Failed to load settings templates'
       )
-      if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('settingsTemplates', requestKey)) return
+      if (
+        !isLatestRequest(requestKey, requestVersion) ||
+        !isCurrentSliceScope('settingsTemplates', requestKey) ||
+        !isActiveProductScope(scopedProductId)
+      )
+        return
       markRequestSuccessful(requestKey)
       set({ settingsTemplates: data })
     } catch (error) {
@@ -1355,16 +2091,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   createSettingsTemplate: async (productId, data) => {
     const scopedProductId = requireUuid(productId, 'product id')
-    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        name: normalizeLabelInput(data.name),
+    const tmpl = requireEntityResponse<SettingsTemplate>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          name: normalizeLabelInput(data.name),
+        }),
       }),
-    })
+      'Failed to create settings template'
+    )
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('settingsTemplates', buildRequestKey('settingsTemplates', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'settingsTemplates',
+        buildRequestKey('settingsTemplates', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({ settingsTemplates: [...s.settingsTemplates, tmpl] }))
     }
     return tmpl
@@ -1376,13 +2121,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...data,
       name: data.name ? normalizeLabelInput(data.name) : data.name,
     }
-    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates/${buildApiPath(settingsTemplateId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-    })
+    const tmpl = requireEntityResponse<SettingsTemplate>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates/${buildApiPath(settingsTemplateId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      }),
+      'Failed to update settings template'
+    )
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('settingsTemplates', buildRequestKey('settingsTemplates', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'settingsTemplates',
+        buildRequestKey('settingsTemplates', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({
         settingsTemplates: s.settingsTemplates.map((t) =>
           t.id === settingsTemplateId ? tmpl : data.is_active ? { ...t, is_active: false } : t
@@ -1398,28 +2152,51 @@ export const useAppStore = create<AppState>((set, get) => ({
       { method: 'DELETE' }
     )
     invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('settingsTemplates', buildRequestKey('settingsTemplates', scopedProductId))) {
+    if (
+      isCurrentProductScopedSlice(
+        'settingsTemplates',
+        buildRequestKey('settingsTemplates', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({ settingsTemplates: s.settingsTemplates.filter((t) => t.id !== settingsTemplateId) }))
     }
   },
   activateSettingsTemplate: async (productId, templateId) => {
     const scopedProductId = requireUuid(productId, 'product id')
     const settingsTemplateId = requireUuid(templateId, 'settings template id')
-    const tmpl = await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates/${buildApiPath(settingsTemplateId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ is_active: true }),
-    })
-    invalidateRequestKeys(buildRequestKey('settingsTemplates', scopedProductId))
-    if (isCurrentOrUntrackedSliceScope('settingsTemplates', buildRequestKey('settingsTemplates', scopedProductId))) {
+    const currentProductRequestKey = buildRequestKey('currentProduct', scopedProductId)
+    const tmpl = requireEntityResponse<SettingsTemplate>(
+      await api(`/api/products/${buildApiPath(scopedProductId)}/settings-templates/${buildApiPath(settingsTemplateId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: true }),
+      }),
+      'Failed to activate settings template'
+    )
+    const canApplyProductSettings = get().currentProduct?.id === scopedProductId
+    invalidateRequestKeys(
+      buildRequestKey('settingsTemplates', scopedProductId),
+      currentProductRequestKey
+    )
+    if (
+      isCurrentProductScopedSlice(
+        'settingsTemplates',
+        buildRequestKey('settingsTemplates', scopedProductId),
+        scopedProductId
+      )
+    ) {
       set((s) => ({
         settingsTemplates: s.settingsTemplates.map((t) =>
           t.id === settingsTemplateId ? tmpl : { ...t, is_active: false }
         ),
+        currentProduct:
+          s.currentProduct?.id === scopedProductId
+            ? { ...s.currentProduct, global_style_settings: tmpl.settings }
+            : s.currentProduct,
       }))
     }
-    // Refresh product to get synced settings
-    if (isCurrentSliceScope('currentProduct', scopedProductId)) {
+    if (!canApplyProductSettings && isCurrentSliceScope('currentProduct', scopedProductId)) {
       await get().fetchProduct(scopedProductId)
     }
   },
@@ -1433,11 +2210,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ errorLogs: [] })
     }
     const requestKey = buildRequestKey('errorLogs', scopedProjectId)
-    const requestVersion = beginTrackedRequest(requestKey)
+    const requestVersion = beginTrackedSliceRequest('errorLogs', requestKey)
     set({ loadingErrorLogs: true })
     try {
       const qs = buildProjectScopedQuery(scopedProjectId)
-      const data = await getInFlightRequest(requestKey, () => api(`/api/error-logs?${qs}`))
+      const data = requireArrayResponse<ErrorLog>(
+        await getInFlightRequest(requestKey, (signal) => api(`/api/error-logs?${qs}`, { signal })),
+        'Failed to load error logs'
+      )
       if (!isLatestRequest(requestKey, requestVersion) || !isCurrentSliceScope('errorLogs', scopedProjectId)) return
       markRequestSuccessful(requestKey)
       set({ errorLogs: data })
@@ -1471,14 +2251,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   buildPrompt: async (productId, userPrompt) => {
     beginAiRequest(set)
     try {
-      const data = await api('/api/ai/build-prompt', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          product_id: requireUuid(productId, 'product id'),
-          user_prompt: sanitizePromptText(userPrompt, 'user_prompt'),
-        }),
-      })
+      const data = requireRecordResponse(
+        await api(
+          '/api/ai/build-prompt',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              product_id: requireUuid(productId, 'product id'),
+              user_prompt: sanitizePromptText(userPrompt, 'user_prompt'),
+            }),
+          },
+          AI_REQUEST_TIMEOUT_MS
+        ),
+        'Failed to build prompt'
+      )
+      if (typeof data.refined_prompt !== 'string') {
+        throw new Error('Failed to build prompt')
+      }
       return data.refined_prompt
     } finally {
       endAiRequest(set)
@@ -1487,15 +2277,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   suggestPrompts: async (productId, count = 5) => {
     beginAiRequest(set)
     try {
-      const data = await api('/api/ai/suggest-prompts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          product_id: requireUuid(productId, 'product id'),
-          count: clampInteger(count, 1, MAX_SUGGESTED_PROMPT_COUNT, 5),
-        }),
-      })
-      return data.prompts
+      return normalizeSuggestedPromptsPayload(
+        await api(
+          '/api/ai/suggest-prompts',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              product_id: requireUuid(productId, 'product id'),
+              count: clampInteger(count, 1, MAX_SUGGESTED_PROMPT_COUNT, 5),
+            }),
+          },
+          AI_REQUEST_TIMEOUT_MS
+        )
+      )
     } finally {
       endAiRequest(set)
     }

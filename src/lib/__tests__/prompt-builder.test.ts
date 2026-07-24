@@ -1,10 +1,19 @@
-import { describe, it, expect } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+
+// Mock the Anthropic client factory so generateSceneTitle can be exercised
+// without a real API key or network call. The module under test constructs its
+// client at import time, so the mock must be registered before the import.
+const mockMessagesCreate = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/anthropic-client', () => ({
+  createAnthropicClient: () => ({ messages: { create: mockMessagesCreate } }),
+}))
 
 import {
   buildFullPrompt,
   buildPromptSuggestionSystemPrompt,
   buildRefinedPromptUserMessage,
   buildStyleBlock,
+  generateSceneTitle,
   MAX_PRODUCT_DESC_LEN,
   MAX_PRODUCT_NAME_LEN,
   MAX_STYLE_VALUE_LEN,
@@ -12,7 +21,9 @@ import {
   MAX_SUGGESTION_NAME_LEN,
   MAX_USER_PROMPT_LEN,
   parsePromptSuggestions,
+  safeTextFromContent,
   SCENE_TITLE_SYSTEM_PROMPT,
+  validateSuggestionCount,
 } from '../prompt-builder'
 
 // ---------------------------------------------------------------------------
@@ -27,6 +38,56 @@ describe('SCENE_TITLE_SYSTEM_PROMPT', () => {
 
   it('instructs Claude to produce only the title with no extra output', () => {
     expect(SCENE_TITLE_SYSTEM_PROMPT).toContain('Output ONLY the title')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// safeTextFromContent
+// ---------------------------------------------------------------------------
+
+describe('safeTextFromContent', () => {
+  it('returns the text of a single text block', () => {
+    expect(safeTextFromContent([{ type: 'text', text: 'Hello' }])).toBe('Hello')
+  })
+
+  it('returns an empty string for an empty content array', () => {
+    expect(safeTextFromContent([])).toBe('')
+  })
+
+  it('returns an empty string when the text field is missing on a text block', () => {
+    expect(safeTextFromContent([{ type: 'text' }])).toBe('')
+  })
+
+  it('skips a leading non-text block and returns the first text block', () => {
+    // The API can emit a thinking/tool_use block before the text block; index 0
+    // is not guaranteed to be the text we want.
+    expect(
+      safeTextFromContent([
+        { type: 'thinking' },
+        { type: 'text', text: 'The answer' },
+      ])
+    ).toBe('The answer')
+  })
+
+  it('returns the first text block when multiple text blocks are present', () => {
+    expect(
+      safeTextFromContent([
+        { type: 'text', text: 'first' },
+        { type: 'text', text: 'second' },
+      ])
+    ).toBe('first')
+  })
+
+  it('returns an empty string when no text block exists', () => {
+    expect(safeTextFromContent([{ type: 'tool_use' }, { type: 'thinking' }])).toBe('')
+  })
+
+  it('degrades to an empty string when content is not an array', () => {
+    // An unexpected response shape (null/undefined/object) must not throw inside
+    // .find — callers rely on the same graceful-empty behavior as for [].
+    expect(safeTextFromContent(null as never)).toBe('')
+    expect(safeTextFromContent(undefined as never)).toBe('')
+    expect(safeTextFromContent({} as never)).toBe('')
   })
 })
 
@@ -230,6 +291,40 @@ describe('buildFullPrompt', () => {
     const parts = prompt.split('\n\n')
     expect(parts.length).toBeGreaterThanOrEqual(3)
   })
+
+  it('skips whitespace-only style values, matching buildStyleBlock', () => {
+    // mergeStyles only filters whitespace-only product overrides — a blank
+    // project-level value still reaches buildFullPrompt and must not render
+    // as an empty "• Lens:" bullet.
+    const prompt = buildFullPrompt('shot', { lens: '   ', lighting: 'softbox' }, [{ role: 'subject', count: 1 }])
+    expect(prompt).not.toContain('Lens')
+    expect(prompt).toContain('• Lighting: softbox')
+  })
+
+  it('trims style values before rendering them as bullets', () => {
+    const prompt = buildFullPrompt('shot', { lens: '  85mm  ' }, [{ role: 'subject', count: 1 }])
+    expect(prompt).toContain('• Lens: 85mm\n')
+  })
+
+  it('ignores non-string style values from the DB JSON column without throwing', () => {
+    const prompt = buildFullPrompt(
+      'shot',
+      { lens: 42 as unknown as string, lighting: 'softbox' },
+      [{ role: 'subject', count: 1 }]
+    )
+    expect(prompt).not.toContain('42')
+    expect(prompt).toContain('• Lighting: softbox')
+  })
+
+  it('treats a whitespace-only reference_rule as unset and falls back to the generated rule', () => {
+    const prompt = buildFullPrompt('shot', { reference_rule: '   ' }, [{ role: 'subject', count: 2 }])
+    expect(prompt).toContain('REFERENCE RULE: Images 1–2 are the product')
+  })
+
+  it('trims a custom reference_rule before rendering it', () => {
+    const prompt = buildFullPrompt('shot', { reference_rule: '  Use image 1 only.  ' }, [{ role: 'subject', count: 1 }])
+    expect(prompt).toContain('REFERENCE RULE: Use image 1 only.\n')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -318,6 +413,23 @@ describe('parsePromptSuggestions', () => {
     const result = parsePromptSuggestions(raw)
     expect(result).toHaveLength(1)
     expect(result[0]?.prompt_text).toBe('99')
+  })
+
+  it('extracts a prose-wrapped bare array instead of returning empty', () => {
+    // The AI is told to output only JSON, but a bare array with a prose preamble
+    // and no fences must still parse rather than silently degrading to [].
+    const raw = 'Here you go: [{"name":"Preamble shot","prompt_text":"A prompt after prose"}] Enjoy!'
+    const result = parsePromptSuggestions(raw)
+    expect(result).toHaveLength(1)
+    expect(result[0]?.name).toBe('Preamble shot')
+    expect(result[0]?.prompt_text).toBe('A prompt after prose')
+  })
+
+  it('still extracts a prose-wrapped {"prompts":[...]} object', () => {
+    const raw = 'Sure! {"prompts":[{"name":"Wrapped","prompt_text":"Wrapped prompt text"}]} Done.'
+    const result = parsePromptSuggestions(raw)
+    expect(result).toHaveLength(1)
+    expect(result[0]?.name).toBe('Wrapped')
   })
 })
 
@@ -539,5 +651,98 @@ describe('buildRefinedPromptUserMessage — newline injection prevention', () =>
     const msg = buildRefinedPromptUserMessage('Bottle', 'Line one\nLine two', {}, 'Shot')
     expect(msg).not.toContain('Line one\nLine two')
     expect(msg).toContain('Line one Line two')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// validateSuggestionCount
+// ---------------------------------------------------------------------------
+
+describe('validateSuggestionCount', () => {
+  it('accepts the lower bound of 1', () => {
+    expect(validateSuggestionCount(1)).toBe(1)
+  })
+
+  it('accepts the upper bound', () => {
+    expect(validateSuggestionCount(MAX_SUGGESTION_COUNT)).toBe(MAX_SUGGESTION_COUNT)
+  })
+
+  it('floors a fractional value that is in range', () => {
+    expect(validateSuggestionCount(4.9)).toBe(4)
+  })
+
+  it('rejects 0 and negatives', () => {
+    expect(validateSuggestionCount(0)).toBeNull()
+    expect(validateSuggestionCount(-1)).toBeNull()
+  })
+
+  it('rejects values above the maximum', () => {
+    expect(validateSuggestionCount(MAX_SUGGESTION_COUNT + 1)).toBeNull()
+  })
+
+  it('rejects a value that floors into range but starts above it', () => {
+    // 20.9 must be rejected (not floored to 20) — the bound check runs pre-floor.
+    expect(validateSuggestionCount(MAX_SUGGESTION_COUNT + 0.9)).toBeNull()
+  })
+
+  it('coerces a whole-number numeric string', () => {
+    expect(validateSuggestionCount('5')).toBe(5)
+  })
+
+  it('rejects non-numeric strings (guards against NaN reaching the prompt)', () => {
+    expect(validateSuggestionCount('five')).toBeNull()
+  })
+
+  it('rejects NaN, Infinity, null and undefined', () => {
+    expect(validateSuggestionCount(NaN)).toBeNull()
+    expect(validateSuggestionCount(Infinity)).toBeNull()
+    expect(validateSuggestionCount(null)).toBeNull()
+    expect(validateSuggestionCount(undefined)).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// generateSceneTitle — blank-input short-circuit and AI failure fallback
+// ---------------------------------------------------------------------------
+
+describe('generateSceneTitle', () => {
+  beforeEach(() => {
+    mockMessagesCreate.mockReset()
+  })
+
+  it('returns the trimmed text from a successful response', async () => {
+    mockMessagesCreate.mockResolvedValue({ content: [{ type: 'text', text: '  Sunset Beach Shot \n' }] })
+    await expect(generateSceneTitle('A bottle on a beach at sunset')).resolves.toBe('Sunset Beach Shot')
+  })
+
+  it('returns an empty string for empty input without calling the API', async () => {
+    // Empty message content is a guaranteed Anthropic 400 — the guard must
+    // short-circuit instead of burning a round-trip that ends in the catch.
+    await expect(generateSceneTitle('')).resolves.toBe('')
+    expect(mockMessagesCreate).not.toHaveBeenCalled()
+  })
+
+  it('returns an empty string for whitespace-only input without calling the API', async () => {
+    await expect(generateSceneTitle('   \n  ')).resolves.toBe('')
+    expect(mockMessagesCreate).not.toHaveBeenCalled()
+  })
+
+  it('returns an empty string for non-string input without throwing', async () => {
+    // Callers read prompt_text from a request body; a non-string must not make
+    // .trim()/.slice() throw before the try block can catch it.
+    await expect(generateSceneTitle(42 as unknown as string)).resolves.toBe('')
+    expect(mockMessagesCreate).not.toHaveBeenCalled()
+  })
+
+  it('returns an empty string when the API call fails', async () => {
+    mockMessagesCreate.mockRejectedValue(new Error('overloaded'))
+    await expect(generateSceneTitle('A valid prompt')).resolves.toBe('')
+  })
+
+  it('truncates the prompt to MAX_USER_PROMPT_LEN before sending it', async () => {
+    mockMessagesCreate.mockResolvedValue({ content: [{ type: 'text', text: 'Title' }] })
+    await generateSceneTitle('P'.repeat(MAX_USER_PROMPT_LEN + 500))
+    const sent = mockMessagesCreate.mock.calls[0]?.[0]?.messages?.[0]?.content
+    expect(sent).toHaveLength(MAX_USER_PROMPT_LEN)
   })
 })

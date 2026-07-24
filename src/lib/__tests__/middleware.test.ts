@@ -123,6 +123,43 @@ describe('middleware — unauthenticated requests', () => {
     expect(html).toContain('/products/123/gallery')
   })
 
+  it('preserves the query string in the hidden redirect field', async () => {
+    const req = new NextRequest('http://localhost/products/123?view=grid')
+    const res = await middleware(req)
+    const html = await res.text()
+    const match = html.match(/name="redirect" value="([^"]*)"/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toBe('/products/123?view=grid')
+  })
+
+  it('HTML-escapes & between multiple preserved query params', async () => {
+    const req = new NextRequest('http://localhost/products/123?view=grid&page=2')
+    const res = await middleware(req)
+    const html = await res.text()
+    const match = html.match(/name="redirect" value="([^"]*)"/)
+    expect(match).not.toBeNull()
+    // Raw attribute value uses the HTML entity; it decodes back to a literal &
+    expect(match![1]).toBe('/products/123?view=grid&amp;page=2')
+  })
+
+  it('strips the flow-internal error param from the redirect field but keeps other params', async () => {
+    const req = new NextRequest('http://localhost/dashboard?error=1&view=list')
+    const res = await middleware(req)
+    const html = await res.text()
+    const match = html.match(/name="redirect" value="([^"]*)"/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toBe('/dashboard?view=list')
+  })
+
+  it('omits the ? entirely when error was the only query param', async () => {
+    const req = new NextRequest('http://localhost/dashboard?error=1')
+    const res = await middleware(req)
+    const html = await res.text()
+    const match = html.match(/name="redirect" value="([^"]*)"/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toBe('/dashboard')
+  })
+
   it('shows error message on login page when ?error query param is present', async () => {
     const req = new NextRequest('http://localhost/dashboard?error=1')
     const res = await middleware(req)
@@ -135,6 +172,62 @@ describe('middleware — unauthenticated requests', () => {
     const res = await middleware(req)
     const html = await res.text()
     expect(html).not.toContain('Incorrect password')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Cache-control on auth-gate responses — CDN/proxy poisoning prevention
+//
+// The 401 JSON and the login HTML gate must carry `cache-control: no-store`
+// (middleware.ts). Without it a CDN or shared proxy could cache the
+// unauthorized/login response keyed only on the URL and then serve that stale
+// gate to a user who has since authenticated — or, worse, cache and replay an
+// authenticated-looking page to an anonymous visitor. These tests lock the
+// documented no-store invariant so it cannot be silently dropped.
+// ---------------------------------------------------------------------------
+
+describe('middleware — cache-control on auth-gate responses', () => {
+  let middleware: MiddlewareFn
+
+  beforeEach(async () => {
+    vi.resetModules()
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+    middleware = await importMiddleware()
+  })
+
+  afterEach(() => {
+    delete process.env.SITE_PASSWORD
+  })
+
+  it('sets cache-control: no-store on the 401 JSON for unauthenticated API requests', async () => {
+    const req = new NextRequest('http://localhost/api/products')
+    const res = await middleware(req)
+    expect(res.status).toBe(401)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('sets cache-control: no-store on the login page served to unauthenticated page requests', async () => {
+    const req = new NextRequest('http://localhost/dashboard')
+    const res = await middleware(req)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('sets cache-control: no-store on the login page even when an ?error param is present', async () => {
+    const req = new NextRequest('http://localhost/dashboard?error=1')
+    const res = await middleware(req)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('sets cache-control: no-store on the 401 when SITE_PASSWORD is not configured (fail-closed path)', async () => {
+    vi.resetModules()
+    delete process.env.SITE_PASSWORD
+    const failClosed = await importMiddleware()
+    const req = new NextRequest('http://localhost/api/products')
+    const res = await failClosed(req)
+    expect(res.status).toBe(401)
+    expect(res.headers.get('cache-control')).toBe('no-store')
   })
 })
 
@@ -218,7 +311,7 @@ describe('middleware — authenticated requests', () => {
 
   it('passes authenticated requests through without redirecting', async () => {
     const req = new NextRequest('http://localhost/dashboard', {
-      headers: { Cookie: `site-auth=${validToken}` },
+      headers: { Cookie: `__Host-site-auth=${validToken}` },
     })
     const res = await middleware(req)
     expect(res.headers.get('x-middleware-next')).toBe('1')
@@ -226,7 +319,7 @@ describe('middleware — authenticated requests', () => {
 
   it('passes authenticated API requests through (no 401)', async () => {
     const req = new NextRequest('http://localhost/api/products', {
-      headers: { Cookie: `site-auth=${validToken}` },
+      headers: { Cookie: `__Host-site-auth=${validToken}` },
     })
     const res = await middleware(req)
     expect(res.headers.get('x-middleware-next')).toBe('1')
@@ -235,7 +328,7 @@ describe('middleware — authenticated requests', () => {
 
   it('rejects a cookie with a wrong token value even if the name is correct', async () => {
     const req = new NextRequest('http://localhost/dashboard', {
-      headers: { Cookie: 'site-auth=not-a-valid-hmac-token' },
+      headers: { Cookie: '__Host-site-auth=not-a-valid-hmac-token' },
     })
     const res = await middleware(req)
     // Wrong token → show login page
@@ -246,11 +339,149 @@ describe('middleware — authenticated requests', () => {
   it('rejects a cookie that uses the right algorithm on a different password', async () => {
     const forgeryToken = await deriveAuthToken('wrong-password')
     const req = new NextRequest('http://localhost/dashboard', {
-      headers: { Cookie: `site-auth=${forgeryToken}` },
+      headers: { Cookie: `__Host-site-auth=${forgeryToken}` },
     })
     const res = await middleware(req)
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toContain('text/html')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Transient token-derivation failure — fail closed now, recover later
+//
+// middleware.ts caches the deriveAuthToken() Promise in module state. If a
+// rejected Promise were cached forever, one transient Web Crypto fault would
+// lock every user out until the isolate restarts. These tests pin the
+// contract: while derivation is failing, requests fail closed; once it works
+// again, the cache retries instead of replaying the stale rejection.
+// ---------------------------------------------------------------------------
+
+describe('middleware — transient token-derivation failure recovers', () => {
+  afterEach(() => {
+    vi.doUnmock('@/lib/auth-constants')
+    vi.resetModules()
+    delete process.env.SITE_PASSWORD
+  })
+
+  it('fails closed while derivation fails, then accepts a valid cookie once it recovers', async () => {
+    vi.resetModules()
+    process.env.SITE_PASSWORD = TEST_PASSWORD
+    const actual = await vi.importActual<typeof import('@/lib/auth-constants')>('@/lib/auth-constants')
+    let failing = true
+    vi.doMock('@/lib/auth-constants', () => ({
+      ...actual,
+      deriveAuthToken: async (password: string) => {
+        if (failing) throw new Error('transient web crypto failure')
+        return actual.deriveAuthToken(password)
+      },
+    }))
+    const mw = await importMiddleware()
+    const validToken = await actual.deriveAuthToken(TEST_PASSWORD)
+    const buildReq = () =>
+      new NextRequest('http://localhost/api/products', {
+        headers: { Cookie: `__Host-site-auth=${validToken}` },
+      })
+
+    // While derivation is broken, a request with a valid cookie fails closed.
+    const during = await mw(buildReq())
+    expect(during.status).toBe(401)
+
+    // Once derivation works again, the same cookie must authenticate — the
+    // earlier rejection must not have been cached permanently.
+    failing = false
+    const after = await mw(buildReq())
+    expect(after.headers.get('x-middleware-next')).toBe('1')
+    expect(after.status).not.toBe(401)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Config matcher — which paths run the middleware at all
+//
+// The matcher is compiled by Next.js (path-to-regexp), so middleware() unit
+// tests above cannot catch a matcher regression: a path the matcher excludes
+// never reaches the middleware in production no matter what the function does.
+// The middleware is the ONLY auth layer for API routes (handlers use the
+// service-role client with no auth checks), so a matcher hole is a full auth
+// bypass. These tests compile the matcher patterns the same way Next does for
+// the two shapes used in middleware.ts and pin the coverage contract.
+// ---------------------------------------------------------------------------
+
+describe('middleware — config matcher coverage', () => {
+  let matchers: string[]
+
+  beforeEach(async () => {
+    vi.resetModules()
+    const mod = await import('@/middleware')
+    matchers = mod.config.matcher
+  })
+
+  /**
+   * Mirror how path-to-regexp compiles the two matcher shapes used in
+   * middleware.ts. Deliberately NOT a general implementation — it throws on
+   * anything else so a new matcher shape forces this helper to be updated.
+   */
+  function matcherToRegExp(pattern: string): RegExp {
+    if (pattern === '/api/:path*') {
+      // `:path*` = zero or more path segments after the literal prefix.
+      return /^\/api(?:\/[^/]+)*$/
+    }
+    const customRegexpParam = pattern.match(/^\/\((.*)\)$/)
+    if (customRegexpParam) {
+      // `/(<regex>)` = a single parameter whose custom regexp spans the whole
+      // remaining path.
+      return new RegExp(`^/(${customRegexpParam[1]})$`)
+    }
+    throw new Error(`Unsupported matcher shape in test helper: ${pattern}`)
+  }
+
+  function middlewareRuns(pathname: string): boolean {
+    return matchers.some((pattern) => matcherToRegExp(pattern).test(pathname))
+  }
+
+  it('runs on plain API routes', () => {
+    expect(middlewareRuns('/api/products')).toBe(true)
+    expect(middlewareRuns('/api/error-logs')).toBe(true)
+  })
+
+  it('runs on API paths ending in a static-asset extension — dynamic segments like /api/products/[id] match them, so excluding them would bypass auth entirely', () => {
+    expect(middlewareRuns('/api/products/x.css')).toBe(true)
+    expect(middlewareRuns('/api/images/123.js')).toBe(true)
+    expect(middlewareRuns('/api/projects/abc.png')).toBe(true)
+    expect(middlewareRuns('/api/products/x.css/gallery')).toBe(true)
+  })
+
+  it('runs on the public-by-design API paths (middleware itself exempts them, not the matcher)', () => {
+    expect(middlewareRuns('/api/login')).toBe(true)
+    expect(middlewareRuns('/api/worker/generate')).toBe(true)
+  })
+
+  it('runs on page routes', () => {
+    expect(middlewareRuns('/')).toBe(true)
+    expect(middlewareRuns('/dashboard')).toBe(true)
+    expect(middlewareRuns('/products/123/gallery')).toBe(true)
+  })
+
+  it('runs on public files without an excluded extension (e.g. the .md sample prompts)', () => {
+    expect(middlewareRuns('/sample-prompts.md')).toBe(true)
+  })
+
+  it('skips Next.js internals and known static assets', () => {
+    expect(middlewareRuns('/_next/static/chunks/main.js')).toBe(false)
+    expect(middlewareRuns('/_next/image')).toBe(false)
+    expect(middlewareRuns('/favicon.ico')).toBe(false)
+    expect(middlewareRuns('/robots.txt')).toBe(false)
+    expect(middlewareRuns('/globe.svg')).toBe(false)
+  })
+
+  it('still gates paths that merely contain (but do not start with) an internal prefix', () => {
+    expect(middlewareRuns('/foo/_next/static/x.js')).toBe(false) // ends in .js — asset exclusion
+    expect(middlewareRuns('/foo/_next/static/page')).toBe(true)
+  })
+
+  it('documents the residual page-shell exposure: extension-suffixed PAGE paths skip the gate (shell only — all data sits behind gated /api routes)', () => {
+    expect(middlewareRuns('/products/x.css')).toBe(false)
   })
 })
 

@@ -1,30 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-import Anthropic from '@anthropic-ai/sdk'
-import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
-import { SCENE_TITLE_SYSTEM_PROMPT, MAX_USER_PROMPT_LEN, safeTextFromContent } from '@/lib/prompt-builder'
-
-const anthropic = new Anthropic()
-
-const MAX_NAME_LENGTH = 500
-const MAX_PROMPT_LENGTH = 10000
-
-async function generateSceneTitle(promptText: string): Promise<string> {
-  try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_FAST_MODEL.name,
-      max_tokens: 50,
-      system: SCENE_TITLE_SYSTEM_PROMPT,
-      // Truncate to MAX_USER_PROMPT_LEN — consistent with /api/ai/scene-title
-      messages: [{ role: 'user', content: promptText.slice(0, MAX_USER_PROMPT_LEN) }],
-    })
-    return safeTextFromContent(response.content).trim()
-  } catch (err) {
-    console.warn('[generateSceneTitle] AI call failed, title will be empty:', err instanceof Error ? err.message : String(err))
-    return ''
-  }
-}
+import { generateSceneTitle } from '@/lib/prompt-builder'
+import { parseRequestBody, MAX_LIST_ROWS, MAX_NAME_LENGTH, MAX_PROMPT_TEXT_LENGTH } from '@/lib/request-guards'
+import { logger } from '@/lib/server-logger'
 
 export async function GET(
   request: NextRequest,
@@ -39,11 +18,12 @@ export async function GET(
       .select('*')
       .eq('product_id', id)
       .order('created_at', { ascending: false })
+      .limit(MAX_LIST_ROWS)
 
-    if (error) { console.error('[Prompts GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Prompts GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[Prompts GET] Unexpected error:', err instanceof Error ? err.message : String(err))
+    logger.error('[Prompts GET] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -55,21 +35,34 @@ export async function POST(
   try {
     const { id: product_id } = await params
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
     const { name, prompt_text, tags, prompt_type } = body
 
     if (!name || !prompt_text) {
       return NextResponse.json({ error: 'name and prompt_text are required' }, { status: 400 })
     }
-    if (typeof name === 'string' && name.length > MAX_NAME_LENGTH) {
+    // Type-check before the length checks — the PATCH route on this table
+    // enforces string-only name/prompt_text, and skipping the check here would
+    // let a non-string (number/array/object) bypass the length limits entirely
+    // and reach the insert below.
+    if (typeof name !== 'string' || typeof prompt_text !== 'string') {
+      return NextResponse.json({ error: 'name and prompt_text must be strings' }, { status: 400 })
+    }
+    if (name.length > MAX_NAME_LENGTH) {
       return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
     }
-    if (typeof prompt_text === 'string' && prompt_text.length > MAX_PROMPT_LENGTH) {
-      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_LENGTH} characters or fewer` }, { status: 400 })
+    if (prompt_text.length > MAX_PROMPT_TEXT_LENGTH) {
+      return NextResponse.json({ error: `prompt_text must be ${MAX_PROMPT_TEXT_LENGTH} characters or fewer` }, { status: 400 })
     }
+
+    // Generate the scene title before inserting so it rides along on the insert.
+    // The old insert → generate → update flow spent an extra UPDATE+SELECT
+    // round-trip after the (multi-second) AI call, and could leave the row
+    // titleless if that follow-up update failed. generateSceneTitle returns ''
+    // on AI failure, so the row still saves without a title in that case.
+    const sceneTitle = await generateSceneTitle(prompt_text)
 
     const { data, error } = await supabase
       .from(T.prompt_templates)
@@ -79,27 +72,16 @@ export async function POST(
         prompt_text,
         tags: tags ?? [],
         ...(prompt_type ? { prompt_type } : {}),
+        ...(sceneTitle ? { scene_title: sceneTitle } : {}),
       })
       .select()
       .single()
 
-    if (error) { console.error('[Prompts POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
-
-    // Generate scene title asynchronously then update
-    const sceneTitle = await generateSceneTitle(prompt_text)
-    if (sceneTitle) {
-      const { data: updated } = await supabase
-        .from(T.prompt_templates)
-        .update({ scene_title: sceneTitle })
-        .eq('id', data.id)
-        .select()
-        .single()
-      if (updated) return NextResponse.json(updated, { status: 201 })
-    }
+    if (error) { logger.error('[Prompts POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
 
     return NextResponse.json(data, { status: 201 })
   } catch (err) {
-    console.error('[Prompts POST] Unexpected error:', err instanceof Error ? err.message : String(err))
+    logger.error('[Prompts POST] Unexpected error:', err instanceof Error ? err.message : String(err))
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

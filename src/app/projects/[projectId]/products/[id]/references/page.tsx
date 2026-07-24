@@ -23,18 +23,16 @@ export default function ReferencesPage({
 }) {
   const { id } = use(params)
 
-  const {
-    referenceSets,
-    loadingRefSets,
-    referenceImages,
-    fetchReferenceSets,
-    createReferenceSet,
-    updateReferenceSet,
-    deleteReferenceSet,
-    fetchReferenceImages,
-    uploadReferenceImages,
-    deleteReferenceImage,
-  } = useAppStore()
+  const referenceSets = useAppStore((s) => s.referenceSets)
+  const loadingRefSets = useAppStore((s) => s.loadingRefSets)
+  const referenceImages = useAppStore((s) => s.referenceImages)
+  const fetchReferenceSets = useAppStore((s) => s.fetchReferenceSets)
+  const createReferenceSet = useAppStore((s) => s.createReferenceSet)
+  const updateReferenceSet = useAppStore((s) => s.updateReferenceSet)
+  const deleteReferenceSet = useAppStore((s) => s.deleteReferenceSet)
+  const fetchReferenceImages = useAppStore((s) => s.fetchReferenceImages)
+  const uploadReferenceImages = useAppStore((s) => s.uploadReferenceImages)
+  const deleteReferenceImage = useAppStore((s) => s.deleteReferenceImage)
 
   const [selectedSetId, setSelectedSetId] = useState<string | null>(null)
   const [showCreateForm, setShowCreateForm] = useState(false)

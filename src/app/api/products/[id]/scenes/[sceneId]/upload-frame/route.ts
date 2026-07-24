@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { parseRequestBody, sanitizeStorageFileExtension, MAX_FILE_NAME_LENGTH } from '@/lib/request-guards'
+import { logger } from '@/lib/server-logger'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -21,10 +23,9 @@ export async function POST(request: NextRequest, { params }: Params) {
   try {
     const { id: productId, sceneId } = await params
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
 
     const slot = body.slot as 'start' | 'end'
     const fileName = body.file_name as string
@@ -34,8 +35,14 @@ export async function POST(request: NextRequest, { params }: Params) {
     if (!slot || !['start', 'end'].includes(slot)) {
       return NextResponse.json({ error: 'slot must be "start" or "end"' }, { status: 400 })
     }
-    if (!fileName || !mimeType) {
+    if (!fileName || typeof fileName !== 'string' || !mimeType || typeof mimeType !== 'string') {
       return NextResponse.json({ error: 'file_name and mime_type are required' }, { status: 400 })
+    }
+    if (fileName.length > MAX_FILE_NAME_LENGTH) {
+      return NextResponse.json({ error: `file_name must be ${MAX_FILE_NAME_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (fileSize !== undefined && (typeof fileSize !== 'number' || !Number.isFinite(fileSize) || fileSize < 0)) {
+      return NextResponse.json({ error: 'file_size must be a non-negative number' }, { status: 400 })
     }
     if (!ALLOWED_IMAGE_TYPES.has(mimeType)) {
       return NextResponse.json({ error: `File type "${mimeType}" is not allowed. Allowed types: JPEG, PNG, WebP, GIF, AVIF` }, { status: 400 })
@@ -58,9 +65,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       return NextResponse.json({ error: 'Scene not found' }, { status: 404 })
     }
 
-    const extension = fileName.includes('.')
-      ? `.${fileName.split('.').pop()?.toLowerCase()}`
-      : ''
+    const extension = sanitizeStorageFileExtension(fileName)
     const storageFileName = `${slot}-${Date.now()}-${randomUUID()}${extension}`
     const storagePath = `scenes/${sceneId}/${storageFileName}`
 
@@ -69,7 +74,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       .createSignedUploadUrl(storagePath, { upsert: true })
 
     if (signError || !signedData?.signedUrl) {
-      console.error('[UploadFrame] sign error', signError)
+      logger.error('[UploadFrame] sign error', signError)
       return NextResponse.json({ error: 'Failed to create upload URL' }, { status: 500 })
     }
 
@@ -90,7 +95,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       .single()
 
     if (insertError || !image) {
-      console.error('[UploadFrame] insert error', insertError)
+      logger.error('[UploadFrame] insert error', insertError)
       return NextResponse.json({ error: 'Failed to create image record' }, { status: 500 })
     }
 
@@ -112,7 +117,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       image,
     }, { status: 201 })
   } catch (err) {
-    console.error('[UploadFrame] Error:', err)
+    logger.error('[UploadFrame] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

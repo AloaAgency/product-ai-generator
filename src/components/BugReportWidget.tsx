@@ -4,7 +4,6 @@ import { useEffect, useId, useRef, useState } from 'react'
 import {
   AlertCircle,
   Bug,
-  CheckCircle2,
   Lightbulb,
   Loader2,
   MessageSquarePlus,
@@ -13,6 +12,7 @@ import {
   X,
 } from 'lucide-react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { TransientToast } from '@/components/TransientToast'
 import {
   buildSelectedBugReportImages,
   clampBugReportText,
@@ -21,8 +21,6 @@ import {
   MAX_BUG_REPORT_CAPTION_LENGTH,
   MAX_BUG_REPORT_DESCRIPTION_LENGTH,
   MAX_BUG_REPORT_TITLE_LENGTH,
-  normalizeBugReportMultiline,
-  normalizeBugReportSingleLine,
   parseBugReportResponse,
   releaseBugReportImagePreviews,
   stripBugReportControlChars,
@@ -37,23 +35,21 @@ export function BugReportWidget() {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [successToast, setSuccessToast] = useState<string | null>(null)
   const [images, setImages] = useState<SelectedBugReportImage[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
   const imagesRef = useRef<SelectedBugReportImage[]>([])
+  const submitInFlightRef = useRef(false)
+  const dialogId = useId()
   const dialogTitleId = useId()
   const dialogDescriptionId = useId()
 
-  // Auto-dismiss toast
-  useEffect(() => {
-    if (!toast) return
-    const t = setTimeout(() => setToast(null), 4000)
-    return () => clearTimeout(t)
-  }, [toast])
-
   const handleClose = () => {
-    if (isSubmitting) return
+    if (isSubmitting || submitInFlightRef.current) return
+    setFormError(null)
     setIsOpen(false)
   }
 
@@ -62,6 +58,10 @@ export function BugReportWidget() {
     onClose: handleClose,
     onSubmit: isSubmitting ? null : () => formRef.current?.requestSubmit(),
   })
+
+  useEffect(() => {
+    if (isOpen) dialogRef.current?.focus()
+  }, [isOpen])
 
   useEffect(() => {
     imagesRef.current = images
@@ -79,17 +79,29 @@ export function BugReportWidget() {
       currentCount: images.length,
       files: Array.from(files),
     })
-    const newImages = buildSelectedBugReportImages(acceptedFiles)
+    try {
+      const newImages = buildSelectedBugReportImages(acceptedFiles)
 
-    if (errors.length > 0) setToast({ message: errors.join('. '), type: 'error' })
-    if (newImages.length > 0) setImages((prev) => [...prev, ...newImages])
-    if (fileInputRef.current) fileInputRef.current.value = ''
+      setFormError(errors.length > 0 ? errors.join('. ') : null)
+      if (newImages.length > 0) setImages((prev) => [...prev, ...newImages])
+    } catch (error) {
+      setFormError(
+        getSafeErrorMessage(
+          error instanceof Error ? error.message : null,
+          'Could not prepare selected screenshots. Please try again.'
+        )
+      )
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
   }
 
   const removeImage = (index: number) => {
     setImages((prev) => {
       const updated = [...prev]
-      releaseBugReportImagePreviews([updated[index]])
+      const removed = updated[index]
+      if (!removed) return prev
+      releaseBugReportImagePreviews([removed])
       updated.splice(index, 1)
       return updated
     })
@@ -98,6 +110,7 @@ export function BugReportWidget() {
   const updateImageCaption = (index: number, caption: string) => {
     setImages((prev) => {
       const updated = [...prev]
+      if (!updated[index]) return prev
       updated[index] = {
         ...updated[index],
         caption: clampBugReportText(stripBugReportControlChars(caption), MAX_BUG_REPORT_CAPTION_LENGTH),
@@ -108,19 +121,22 @@ export function BugReportWidget() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (submitInFlightRef.current) return
     if (!title.trim() || !description.trim()) {
-      setToast({ message: 'Please provide a title and description', type: 'error' })
+      setFormError('Please provide a title and description.')
       return
     }
 
+    submitInFlightRef.current = true
     setIsSubmitting(true)
+    setFormError(null)
     try {
-      const normalizedTitle = normalizeBugReportSingleLine(title, MAX_BUG_REPORT_TITLE_LENGTH)
-      const normalizedDescription = normalizeBugReportMultiline(description, MAX_BUG_REPORT_DESCRIPTION_LENGTH)
+      // createBugReportFormData normalizes the title/description itself, so the
+      // raw field values are passed straight through here.
       const formData = createBugReportFormData({
         type,
-        title: normalizedTitle,
-        description: normalizedDescription,
+        title,
+        description,
         images,
       })
 
@@ -133,7 +149,7 @@ export function BugReportWidget() {
       const data = parseBugReportResponse(raw)
 
       if (response.ok && (data?.success ?? true)) {
-        setToast({ message: data?.message || `${type === 'bug' ? 'Bug' : 'Feature'} report submitted`, type: 'success' })
+        setSuccessToast(data?.message || `${type === 'bug' ? 'Bug' : 'Feature'} report submitted`)
         setTitle('')
         setDescription('')
         setType('bug')
@@ -144,14 +160,14 @@ export function BugReportWidget() {
         throw new Error(getSafeErrorMessage(data?.message, `Failed to submit ${type} report. Please try again.`))
       }
     } catch (error) {
-      setToast({
-        message: getSafeErrorMessage(
+      setFormError(
+        getSafeErrorMessage(
           error instanceof Error ? error.message : null,
           'Failed to submit. Please try again.'
-        ),
-        type: 'error',
-      })
+        )
+      )
     } finally {
+      submitInFlightRef.current = false
       setIsSubmitting(false)
     }
   }
@@ -161,48 +177,42 @@ export function BugReportWidget() {
       {/* Floating button */}
       <button
         type="button"
-        onClick={() => setIsOpen(true)}
+        onClick={() => {
+          setFormError(null)
+          setIsOpen(true)
+        }}
         className="fixed bottom-6 right-6 z-40 inline-flex min-h-12 min-w-12 items-center justify-center rounded-full bg-blue-600 p-3 text-white shadow-lg transition-all hover:scale-105 hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
         title="Report Bug / Request Feature"
         aria-label="Report a bug or request a feature"
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+        aria-controls={dialogId}
       >
         <MessageSquarePlus className="h-5 w-5" />
       </button>
 
       {/* Toast notification */}
-      {toast && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={`fixed bottom-20 right-6 z-[110] flex max-w-sm items-start gap-3 rounded-xl border px-4 py-3 text-sm shadow-2xl ${
-            toast.type === 'success'
-              ? 'border-emerald-900/40 bg-emerald-950/95 text-emerald-100'
-              : 'border-red-900/40 bg-red-950/95 text-red-100'
-          }`}
-        >
-          {toast.type === 'success' ? (
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-          ) : (
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-          )}
-          {toast.message}
-        </div>
+      {successToast && (
+        <TransientToast tone="success" message={successToast} onDismiss={() => setSuccessToast(null)} />
       )}
 
       {/* Modal */}
       {isOpen && (
         <div
+          id={dialogId}
           className="fixed inset-0 z-[100] flex items-center justify-center"
           role="dialog"
           aria-modal="true"
           aria-labelledby={dialogTitleId}
           aria-describedby={dialogDescriptionId}
         >
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={handleClose} />
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={handleClose} />
 
           <div
+            ref={dialogRef}
             className="relative z-10 mx-4 flex max-h-[90vh] w-full max-w-lg flex-col overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
+            tabIndex={-1}
           >
             <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
               <div className="flex items-center gap-3">
@@ -228,6 +238,16 @@ export function BugReportWidget() {
             </div>
 
             <form ref={formRef} onSubmit={handleSubmit} className="space-y-5 p-5">
+              {formError && (
+                <div
+                  className="flex items-start gap-2 rounded-lg border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300"
+                  role="alert"
+                >
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+                  <span className="min-w-0 break-words">{formError}</span>
+                </div>
+              )}
+
               {/* Type Selection */}
               <div>
                 <label className="mb-2 block text-sm font-medium text-zinc-400">Type</label>

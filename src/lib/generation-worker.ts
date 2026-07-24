@@ -1,6 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { generateGeminiImage } from '@/lib/gemini'
-import { generateSceneVideo } from '@/lib/video-generation'
+import { generateSceneVideo, VideoJobCancelledError } from '@/lib/video-generation'
 import {
   buildImageStoragePath,
   buildPreviewPath,
@@ -19,6 +19,7 @@ import {
   parseWorkerPositiveInteger,
   sanitizeWorkerErrorMessage,
 } from '@/lib/generation-worker-guards'
+import { createLogger } from '@/lib/server-logger'
 
 type WorkerSupabase = ReturnType<typeof createServiceClient>
 
@@ -52,7 +53,10 @@ type GenerationJobRecord = {
   job_type?: 'image' | 'video' | null
   scene_id?: string | null
   source_image_id?: string | null
+  started_at: string | null
 }
+
+type ClaimedGenerationJobRecord = GenerationJobRecord & { started_at: string }
 
 type JobReferenceSetRow = {
   reference_set_id: string
@@ -81,16 +85,28 @@ type JobCounts = {
   failed: number
 }
 
+type ProjectSettingsRecord = {
+  global_style_settings: GlobalStyleSettings | null
+}
+
 type ProductRecord = {
   global_style_settings: GlobalStyleSettings | null
-  prodai_projects: Array<{
-    global_style_settings: GlobalStyleSettings | null
-  }> | null
+  // PostgREST returns an object for this many-to-one embed, but older mocks
+  // (and defensive callers) may still hand us an array.
+  prodai_projects: ProjectSettingsRecord | ProjectSettingsRecord[] | null
 }
 
 type SourceImageRecord = {
   storage_path: string
   mime_type: string
+}
+
+type RecordedVariationRow = {
+  variation_number: number | null
+}
+type SupabaseErrorLike = {
+  code?: string
+  message?: string
 }
 
 type LoadedImageJobResources = {
@@ -120,6 +136,20 @@ type VariationProcessingResult = {
   failedCount: number
   lastError: string | null
   cancelled: boolean
+  claimLost: boolean
+}
+
+type GeneratedImageAsset = {
+  path: string
+  buffer: Buffer
+  mimeType: string
+  uploadFailureContext: string
+}
+
+type PreparedVariationAssets = {
+  image: GeneratedImageAsset
+  thumbnail: GeneratedImageAsset
+  preview: GeneratedImageAsset
 }
 
 const DEFAULT_TIME_BUDGET_MS = 760000
@@ -128,6 +158,7 @@ const DEFAULT_VARIATION_TIMEOUT_MS = 300000
 const DEFAULT_VARIATION_RETRIES = 2
 const DEFAULT_RETRY_BASE_MS = 1500
 const DEFAULT_STATUS_REFRESH_INTERVAL_MS = 3000
+const log = createLogger('GenerationWorker')
 
 const GENERATION_JOB_SELECT = [
   'id',
@@ -145,6 +176,7 @@ const GENERATION_JOB_SELECT = [
   'job_type',
   'scene_id',
   'source_image_id',
+  'started_at',
 ].join(', ')
 
 const REFERENCE_IMAGE_SELECT = [
@@ -210,6 +242,7 @@ async function updateGenerationJob(
   updates: Record<string, unknown>,
   options: {
     expectedStatuses?: GenerationJobStatus[]
+    expectedStartedAt?: string
     allowNoop?: boolean
     context: string
   }
@@ -225,6 +258,10 @@ async function updateGenerationJob(
       : query.in('status', options.expectedStatuses)
   }
 
+  if (options.expectedStartedAt) {
+    query = query.eq('started_at', options.expectedStartedAt)
+  }
+
   const { data, error } = await query
     .select('id')
     .maybeSingle()
@@ -236,11 +273,22 @@ async function updateGenerationJob(
   if (!data && !options.allowNoop) {
     throw new Error(`${options.context}: job state changed before update could be applied`)
   }
+
+  return data !== null
+}
+
+async function resolveJobUpdateConflict(
+  supabase: WorkerSupabase,
+  jobId: string,
+  processed: number
+): Promise<WorkerResult> {
+  const latest = await getLatestJobResult(supabase, jobId)
+  return { ...latest, processed }
 }
 
 async function markClaimedJobFailed(
   supabase: WorkerSupabase,
-  job: GenerationJobRecord,
+  job: ClaimedGenerationJobRecord,
   message: string
 ) {
   const { completed, failed } = await getCurrentJobCounts(supabase, job)
@@ -257,6 +305,7 @@ async function markClaimedJobFailed(
     },
     {
       expectedStatuses: ['running'],
+      expectedStartedAt: job.started_at,
       allowNoop: true,
       context: 'Failed to mark generation job as failed',
     }
@@ -266,10 +315,13 @@ async function markClaimedJobFailed(
 async function claimPendingJobById(
   supabase: WorkerSupabase,
   jobId: string
-): Promise<GenerationJobRecord | null> {
+): Promise<ClaimedGenerationJobRecord | null> {
+  // started_at doubles as a lease token. Every later write must match it so a
+  // stale invocation cannot update a job that has been requeued and reclaimed.
+  const startedAt = new Date().toISOString()
   const { data, error } = await supabase
     .from(T.generation_jobs)
-    .update({ status: 'running', started_at: new Date().toISOString() })
+    .update({ status: 'running', started_at: startedAt })
     .eq('id', jobId)
     .eq('status', 'pending')
     .select(GENERATION_JOB_SELECT)
@@ -279,7 +331,13 @@ async function claimPendingJobById(
     throw new Error(`Failed to claim generation job: ${error.message}`)
   }
 
-  return (data as unknown as GenerationJobRecord | null) ?? null
+  if (!data) return null
+
+  const claimedJob = data as unknown as GenerationJobRecord
+  return {
+    ...claimedJob,
+    started_at: claimedJob.started_at || startedAt,
+  }
 }
 
 async function getLatestJobResult(supabase: WorkerSupabase, jobId: string): Promise<WorkerResult> {
@@ -301,8 +359,41 @@ async function getLatestJobResult(supabase: WorkerSupabase, jobId: string): Prom
   return createWorkerResult(jobId, data?.status || 'running', counts)
 }
 
+async function persistVideoJobOutcome(
+  supabase: WorkerSupabase,
+  job: ClaimedGenerationJobRecord,
+  outcome: {
+    status: 'completed' | 'failed'
+    counts: JobCounts
+    updates: Record<string, unknown>
+    context: string
+  }
+): Promise<WorkerResult> {
+  const updated = await updateGenerationJob(
+    supabase,
+    job.id,
+    {
+      ...outcome.updates,
+      status: outcome.status,
+      completed_at: new Date().toISOString(),
+    },
+    {
+      expectedStatuses: ['running'],
+      expectedStartedAt: job.started_at,
+      allowNoop: true,
+      context: outcome.context,
+    }
+  )
+
+  if (!updated) {
+    return resolveJobUpdateConflict(supabase, job.id, 1)
+  }
+
+  return createWorkerResult(job.id, outcome.status, outcome.counts, 1)
+}
+
 async function processVideoJob(
-  job: GenerationJobRecord,
+  job: ClaimedGenerationJobRecord,
   supabase: WorkerSupabase
 ): Promise<WorkerResult> {
   const counts = getJobCounts(job)
@@ -311,73 +402,61 @@ async function processVideoJob(
     return createWorkerResult(job.id, job.status, counts)
   }
 
-  if (job.status === 'pending') {
-    await updateGenerationJob(
-      supabase,
-      job.id,
-      { status: 'running', started_at: new Date().toISOString() },
-      {
-        expectedStatuses: ['pending', 'running'],
-        context: 'Failed to start video generation job',
-      }
-    )
-  }
-
   if (!job.scene_id) {
     const failedCounts = { ...counts, failed: counts.failed + 1 }
-    await updateGenerationJob(
+    return persistVideoJobOutcome(
       supabase,
-      job.id,
+      job,
       {
         status: 'failed',
-        failed_count: failedCounts.failed,
-        error_message: 'Video job missing scene_id',
-        completed_at: new Date().toISOString(),
-      },
-      {
-        expectedStatuses: ['pending', 'running'],
+        counts: failedCounts,
+        updates: {
+          failed_count: failedCounts.failed,
+          error_message: 'Video job missing scene_id',
+        },
         context: 'Failed to persist missing scene_id failure',
       }
     )
-    return createWorkerResult(job.id, 'failed', failedCounts, 1)
   }
 
   try {
     await generateSceneVideo(job.product_id, job.scene_id, job.generation_model || undefined, job.id)
-    const completedCounts = { ...counts, completed: counts.completed + 1 }
-    await updateGenerationJob(
-      supabase,
-      job.id,
-      {
-        completed_count: completedCounts.completed,
-        status: 'completed',
-        error_message: null,
-        completed_at: new Date().toISOString(),
-      },
-      {
-        expectedStatuses: ['pending', 'running'],
-        context: 'Failed to persist completed video generation job',
-      }
-    )
-    return createWorkerResult(job.id, 'completed', completedCounts, 1)
   } catch (err) {
+    if (err instanceof VideoJobCancelledError) {
+      // The cancel endpoint already set status='cancelled'; recording this as
+      // a failure would overwrite the user's cancellation.
+      return createWorkerResult(job.id, 'cancelled', counts)
+    }
     const failedCounts = { ...counts, failed: counts.failed + 1 }
-    await updateGenerationJob(
+    return persistVideoJobOutcome(
       supabase,
-      job.id,
+      job,
       {
-        failed_count: failedCounts.failed,
         status: 'failed',
-        error_message: sanitizeWorkerErrorMessage(err, 'Video generation failed'),
-        completed_at: new Date().toISOString(),
-      },
-      {
-        expectedStatuses: ['pending', 'running'],
+        counts: failedCounts,
+        updates: {
+          failed_count: failedCounts.failed,
+          error_message: sanitizeWorkerErrorMessage(err, 'Video generation failed'),
+        },
         context: 'Failed to persist video generation failure',
       }
     )
-    return createWorkerResult(job.id, 'failed', failedCounts, 1)
   }
+
+  const completedCounts = { ...counts, completed: counts.completed + 1 }
+  return persistVideoJobOutcome(
+    supabase,
+    job,
+    {
+      status: 'completed',
+      counts: completedCounts,
+      updates: {
+        completed_count: completedCounts.completed,
+        error_message: null,
+      },
+      context: 'Failed to persist completed video generation job',
+    }
+  )
 }
 
 async function fetchProductRecord(supabase: WorkerSupabase, productId: string): Promise<ProductRecord> {
@@ -396,12 +475,21 @@ async function fetchProductRecord(supabase: WorkerSupabase, productId: string): 
 
 async function fetchJobReferenceSetRows(
   supabase: WorkerSupabase,
-  jobId: string
+  jobId: string,
+  productId: string
 ): Promise<JobReferenceSetRow[]> {
   const { data, error } = await supabase
     .from(T.generation_job_reference_sets)
-    .select('reference_set_id, role, display_order, image_count, selected_image_ids')
+    .select(`
+      reference_set_id,
+      role,
+      display_order,
+      image_count,
+      selected_image_ids,
+      ${T.reference_sets}!inner(product_id)
+    `)
     .eq('job_id', jobId)
+    .eq(`${T.reference_sets}.product_id`, productId)
     .order('display_order', { ascending: true })
 
   if (error) {
@@ -430,7 +518,8 @@ async function fetchReferenceImagesForSets(
 
 async function fetchSourceImage(
   supabase: WorkerSupabase,
-  sourceImageId: string | null | undefined
+  sourceImageId: string | null | undefined,
+  productId: string
 ): Promise<SourceImageRecord | null> {
   if (!sourceImageId) return null
 
@@ -438,13 +527,19 @@ async function fetchSourceImage(
     .from(T.generated_images)
     .select('storage_path, mime_type')
     .eq('id', sourceImageId)
+    .eq('product_id', productId)
+    .eq('media_type', 'image')
     .maybeSingle()
 
   if (error) {
     throw new Error(`Failed to load source image: ${error.message}`)
   }
 
-  return (data as SourceImageRecord | null) ?? null
+  if (!data) {
+    throw new Error('Source image not found for generation job')
+  }
+
+  return data as SourceImageRecord
 }
 
 async function resolveGeminiApiKeyForJob(
@@ -453,7 +548,10 @@ async function resolveGeminiApiKeyForJob(
   const productKey = resolveGoogleApiKey(product.global_style_settings)
   if (productKey) return productKey
 
-  return resolveGoogleApiKey(product.prodai_projects?.[0]?.global_style_settings ?? null)
+  const project = Array.isArray(product.prodai_projects)
+    ? product.prodai_projects[0]
+    : product.prodai_projects
+  return resolveGoogleApiKey(project?.global_style_settings ?? null)
 }
 
 function limitReferenceImages(
@@ -506,31 +604,47 @@ async function downloadStorageBase64(
   storagePath: string,
   mimeType: string,
   context: string
-): Promise<Base64ReferenceImage | null> {
+): Promise<Base64ReferenceImage> {
   const MAX_RETRIES = 3
   let lastError: Error | null = null
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const { data, error } = await supabase.storage
-      .from(bucket)
-      .download(storagePath)
+    try {
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .download(storagePath)
 
-    if (error) {
-      lastError = new Error(`${context}: ${error.message}`)
-      const isRetryable = /bad gateway|gateway timeout|service unavailable|timeout|502|503|504/i.test(error.message)
-      if (isRetryable && attempt < MAX_RETRIES - 1) {
+      if (error) {
+        lastError = new Error(`${context}: ${error.message}`)
+        if (isRetriableError(error) && attempt < MAX_RETRIES - 1) {
+          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)))
+          continue
+        }
+        throw lastError
+      }
+
+      if (!data) {
+        lastError = new Error(`${context}: download returned no data`)
+        throw lastError
+      }
+
+      const arrayBuffer = await data.arrayBuffer()
+      return {
+        mimeType,
+        base64: Buffer.from(arrayBuffer).toString('base64'),
+      }
+    } catch (err) {
+      if (err instanceof Error && err === lastError) {
+        lastError = err
+      } else {
+        const message = err instanceof Error ? err.message : String(err)
+        lastError = new Error(`${context}: ${message}`)
+      }
+      if (isRetriableError(lastError) && attempt < MAX_RETRIES - 1) {
         await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)))
         continue
       }
       throw lastError
-    }
-
-    if (!data) return null
-
-    const arrayBuffer = await data.arrayBuffer()
-    return {
-      mimeType,
-      base64: Buffer.from(arrayBuffer).toString('base64'),
     }
   }
 
@@ -565,7 +679,7 @@ async function buildReferenceImagePayloads(
 
   return [
     ...(sourcePayload ? [sourcePayload] : []),
-    ...referencePayloads.filter((image): image is Base64ReferenceImage => image !== null),
+    ...referencePayloads,
   ]
 }
 
@@ -577,11 +691,21 @@ async function cleanupGeneratedImageAssets(
   if (uniquePaths.length === 0) return
 
   try {
-    await supabase.storage
+    const { error } = await supabase.storage
       .from('generated-images')
       .remove(uniquePaths)
-  } catch {
+    if (error) {
+      log.warn('Failed to clean up generated image assets', {
+        assetCount: uniquePaths.length,
+        error: sanitizeWorkerErrorMessage(error.message, 'Storage cleanup failed'),
+      })
+    }
+  } catch (err) {
     // Cleanup failures should not hide the original generation error.
+    log.warn('Failed to clean up generated image assets', {
+      assetCount: uniquePaths.length,
+      error: sanitizeWorkerErrorMessage(err, 'Storage cleanup failed'),
+    })
   }
 }
 
@@ -589,7 +713,7 @@ async function loadImageJobResources(
   supabase: WorkerSupabase,
   job: GenerationJobRecord
 ): Promise<LoadedImageJobResources> {
-  const jobRefSets = await fetchJobReferenceSetRows(supabase, job.id)
+  const jobRefSets = await fetchJobReferenceSetRows(supabase, job.id, job.product_id)
   if (jobRefSets.length === 0 && !job.source_image_id) {
     throw new Error('Image generation job has no reference sets attached')
   }
@@ -599,7 +723,7 @@ async function loadImageJobResources(
   const [product, refImages, sourceImage] = await Promise.all([
     fetchProductRecord(supabase, job.product_id),
     fetchReferenceImagesForSets(supabase, uniqueSetIds),
-    fetchSourceImage(supabase, job.source_image_id),
+    fetchSourceImage(supabase, job.source_image_id, job.product_id),
   ])
 
   const imagesBySet = new Map<string, WorkerReferenceImage[]>()
@@ -647,6 +771,38 @@ function createVariationPlan(job: GenerationJobRecord, batchSize: number): Varia
   }
 }
 
+async function fetchRecordedImageVariationNumbers(
+  supabase: WorkerSupabase,
+  job: Pick<GenerationJobRecord, 'id' | 'product_id'>,
+  variationNumbers: number[]
+): Promise<Set<number>> {
+  if (variationNumbers.length === 0) return new Set()
+
+  const requested = new Set(variationNumbers)
+  const { data, error } = await supabase
+    .from(T.generated_images)
+    .select('variation_number')
+    .eq('job_id', job.id)
+    .eq('product_id', job.product_id)
+    .eq('media_type', 'image')
+    .in('variation_number', variationNumbers)
+    .order('variation_number', { ascending: true })
+
+  if (error) {
+    throw new Error(`Failed to load recorded generated variations: ${error.message}`)
+  }
+
+  const recorded = new Set<number>()
+  for (const row of (data || []) as RecordedVariationRow[]) {
+    const variationNumber = Number(row.variation_number)
+    if (Number.isSafeInteger(variationNumber) && requested.has(variationNumber)) {
+      recorded.add(variationNumber)
+    }
+  }
+
+  return recorded
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -661,24 +817,41 @@ function isRetriableError(err: unknown) {
     message.includes('rate limit') ||
     message.includes('429') ||
     message.includes('timeout') ||
+    message.includes('timed out') ||
     message.includes('aborted') ||
     message.includes('abort') ||
     message.includes('server error') ||
+    message.includes('bad gateway') ||
+    message.includes('gateway timeout') ||
+    message.includes('service unavailable') ||
+    message.includes('network') ||
+    message.includes('econnreset') ||
+    message.includes('504') ||
     message.includes('503') ||
     message.includes('502')
   )
 }
 
+function isDuplicateGeneratedImageInsertError(error: SupabaseErrorLike | null | undefined) {
+  const code = error?.code ?? ''
+  const message = error?.message?.toLowerCase() ?? ''
+  return (
+    code === '23505' ||
+    message.includes('duplicate key') ||
+    message.includes('unique constraint')
+  )
+}
+
 async function persistProgress(
   supabase: WorkerSupabase,
-  jobId: string,
+  job: Pick<ClaimedGenerationJobRecord, 'id' | 'started_at'>,
   progress: ProgressSnapshot,
   plan: VariationPlan
 ) {
   const nextFailedCount = plan.startingFailed + progress.failCount
-  await updateGenerationJob(
+  return updateGenerationJob(
     supabase,
-    jobId,
+    job.id,
     {
       completed_count: plan.startingCompleted + progress.successCount,
       failed_count: nextFailedCount,
@@ -688,7 +861,8 @@ async function persistProgress(
       ...(progress.lastError ? { error_message: progress.lastError } : {}),
     },
     {
-      expectedStatuses: ['pending', 'running'],
+      expectedStatuses: ['running'],
+      expectedStartedAt: job.started_at,
       allowNoop: true,
       context: 'Failed to persist generation job progress',
     }
@@ -697,20 +871,143 @@ async function persistProgress(
 
 function createProgressPersister(
   supabase: WorkerSupabase,
-  jobId: string,
+  job: Pick<ClaimedGenerationJobRecord, 'id' | 'started_at'>,
   plan: VariationPlan
 ) {
-  let pendingWrite = Promise.resolve()
+  let pendingWrite = Promise.resolve(true)
 
   return {
     persist(progress: ProgressSnapshot) {
-      pendingWrite = pendingWrite.then(() => persistProgress(supabase, jobId, progress, plan))
+      pendingWrite = pendingWrite.then((claimActive) => (
+        claimActive ? persistProgress(supabase, job, progress, plan) : false
+      ))
       return pendingWrite
     },
     flush() {
       return pendingWrite
     },
   }
+}
+
+async function prepareVariationAssets(
+  job: GenerationJobRecord,
+  variationNumber: number,
+  promptSlug: string,
+  geminiApiKey: string | undefined,
+  referenceImages: Base64ReferenceImage[],
+  signal: AbortSignal
+): Promise<PreparedVariationAssets> {
+  const result = await generateGeminiImage({
+    prompt: job.final_prompt,
+    resolution: job.resolution as '2K' | '4K',
+    aspectRatio: job.aspect_ratio as '16:9' | '1:1' | '9:16',
+    referenceImages,
+    apiKey: geminiApiKey,
+    signal,
+  })
+
+  const imageBuffer = Buffer.from(result.base64Data, 'base64')
+  const extension = resolveExtension(result.mimeType)
+  const [thumbnail, preview] = await createThumbnailAndPreview(imageBuffer)
+  const storagePath = buildImageStoragePath(job.product_id, job.id, variationNumber, promptSlug, extension)
+
+  return {
+    image: {
+      path: storagePath,
+      buffer: imageBuffer,
+      mimeType: result.mimeType,
+      uploadFailureContext: 'Failed to upload generated image',
+    },
+    thumbnail: {
+      path: buildThumbnailPath(storagePath, thumbnail.extension),
+      buffer: thumbnail.buffer,
+      mimeType: thumbnail.mimeType,
+      uploadFailureContext: 'Failed to upload image thumbnail',
+    },
+    preview: {
+      path: buildPreviewPath(storagePath, preview.extension),
+      buffer: preview.buffer,
+      mimeType: preview.mimeType,
+      uploadFailureContext: 'Failed to upload image preview',
+    },
+  }
+}
+
+function listGeneratedImageAssets(assets: PreparedVariationAssets): GeneratedImageAsset[] {
+  return [assets.image, assets.thumbnail, assets.preview]
+}
+
+async function uploadGeneratedImageAssets(
+  supabase: WorkerSupabase,
+  assets: PreparedVariationAssets
+) {
+  const generatedAssets = listGeneratedImageAssets(assets)
+  const uploadResults = await Promise.allSettled(
+    generatedAssets.map((asset) => supabase.storage
+      .from('generated-images')
+      .upload(asset.path, asset.buffer, { contentType: asset.mimeType }))
+  )
+
+  const successfulUploads = generatedAssets.flatMap((asset, index) => {
+    const upload = uploadResults[index]
+    return upload?.status === 'fulfilled' && !upload.value.error ? [asset.path] : []
+  })
+  const failedUploadIndex = uploadResults.findIndex((upload) => (
+    upload.status === 'rejected' || Boolean(upload.value.error)
+  ))
+
+  if (failedUploadIndex === -1) return
+
+  await cleanupGeneratedImageAssets(supabase, successfulUploads)
+  const failedUpload = uploadResults[failedUploadIndex]
+  const failureMessage = failedUpload.status === 'rejected'
+    ? sanitizeWorkerErrorMessage(failedUpload.reason, 'upload request failed')
+    : failedUpload.value.error?.message || 'unknown upload failure'
+  throw new Error(`${generatedAssets[failedUploadIndex].uploadFailureContext}: ${failureMessage}`)
+}
+
+async function recordGeneratedImage(
+  supabase: WorkerSupabase,
+  job: GenerationJobRecord,
+  variationNumber: number,
+  assets: PreparedVariationAssets
+) {
+  const { error: insertError } = await supabase.from(T.generated_images).insert({
+    product_id: job.product_id,
+    job_id: job.id,
+    variation_number: variationNumber,
+    storage_path: assets.image.path,
+    thumb_storage_path: assets.thumbnail.path,
+    preview_storage_path: assets.preview.path,
+    mime_type: assets.image.mimeType,
+    file_size: assets.image.buffer.length,
+    approval_status: 'pending',
+  })
+
+  if (!insertError) return
+
+  if (isDuplicateGeneratedImageInsertError(insertError)) {
+    try {
+      const recorded = await fetchRecordedImageVariationNumbers(supabase, job, [variationNumber])
+      if (recorded.has(variationNumber)) {
+        return
+      }
+    } catch (err) {
+      // Fall through to the original insert error and cleanup path. A
+      // duplicate is only safe to treat as success after verification.
+      log.warn('Failed to verify duplicate generated image record', {
+        jobId: job.id,
+        variationNumber,
+        error: sanitizeWorkerErrorMessage(err, 'Duplicate verification failed'),
+      })
+    }
+  }
+
+  await cleanupGeneratedImageAssets(
+    supabase,
+    listGeneratedImageAssets(assets).map((asset) => asset.path)
+  )
+  throw new Error(`Failed to record generated image: ${insertError.message}`)
 }
 
 async function runVariation(
@@ -726,68 +1023,16 @@ async function runVariation(
   const timeout = setTimeout(() => controller.abort(), variationTimeoutMs)
 
   try {
-    const result = await generateGeminiImage({
-      prompt: job.final_prompt,
-      resolution: job.resolution as '2K' | '4K',
-      aspectRatio: job.aspect_ratio as '16:9' | '1:1' | '9:16',
+    const assets = await prepareVariationAssets(
+      job,
+      variationNumber,
+      promptSlug,
+      geminiApiKey,
       referenceImages,
-      apiKey: geminiApiKey,
-      signal: controller.signal,
-    })
-
-    const imageBuffer = Buffer.from(result.base64Data, 'base64')
-    const extension = resolveExtension(result.mimeType)
-    const [thumbnail, preview] = await createThumbnailAndPreview(imageBuffer)
-
-    const storagePath = buildImageStoragePath(job.product_id, job.id, variationNumber, promptSlug, extension)
-    const thumbPath = buildThumbnailPath(storagePath, thumbnail.extension)
-    const previewPath = buildPreviewPath(storagePath, preview.extension)
-
-    const uploadResults = await Promise.all([
-      supabase.storage
-        .from('generated-images')
-        .upload(storagePath, imageBuffer, { contentType: result.mimeType }),
-      supabase.storage
-        .from('generated-images')
-        .upload(thumbPath, thumbnail.buffer, { contentType: thumbnail.mimeType }),
-      supabase.storage
-        .from('generated-images')
-        .upload(previewPath, preview.buffer, { contentType: preview.mimeType }),
-    ])
-
-    const generatedPaths = [storagePath, thumbPath, previewPath]
-    const successfulUploads = generatedPaths.filter((_, index) => !uploadResults[index]?.error)
-    const [imageUploadResult, thumbUploadResult, previewUploadResult] = uploadResults
-    const previewUploadError = previewUploadResult?.error
-
-    if (imageUploadResult?.error || thumbUploadResult?.error || previewUploadError) {
-      await cleanupGeneratedImageAssets(supabase, successfulUploads)
-
-      if (imageUploadResult?.error) {
-        throw new Error(`Failed to upload generated image: ${imageUploadResult.error.message}`)
-      }
-      if (thumbUploadResult?.error) {
-        throw new Error(`Failed to upload image thumbnail: ${thumbUploadResult.error.message}`)
-      }
-      throw new Error(`Failed to upload image preview: ${previewUploadError?.message || 'unknown upload failure'}`)
-    }
-
-    const { error: insertError } = await supabase.from(T.generated_images).insert({
-      product_id: job.product_id,
-      job_id: job.id,
-      variation_number: variationNumber,
-      storage_path: storagePath,
-      thumb_storage_path: thumbPath,
-      preview_storage_path: previewPath,
-      mime_type: result.mimeType,
-      file_size: imageBuffer.length,
-      approval_status: 'pending',
-    })
-
-    if (insertError) {
-      await cleanupGeneratedImageAssets(supabase, generatedPaths)
-      throw new Error(`Failed to record generated image: ${insertError.message}`)
-    }
+      controller.signal
+    )
+    await uploadGeneratedImageAssets(supabase, assets)
+    await recordGeneratedImage(supabase, job, variationNumber, assets)
   } finally {
     clearTimeout(timeout)
   }
@@ -827,45 +1072,116 @@ async function runVariationWithRetry(
   throw lastError instanceof Error ? lastError : new Error('Variation failed')
 }
 
+async function runVariationWorkerPool(
+  variationNumbers: number[],
+  parallelism: number,
+  shouldStop: () => Promise<boolean>,
+  processVariation: (variationNumber: number) => Promise<void>
+) {
+  let nextIndex = 0
+  let fatalError: unknown = null
+
+  const worker = async () => {
+    while (nextIndex < variationNumbers.length && fatalError === null) {
+      if (await shouldStop()) break
+      if (fatalError !== null) break
+
+      const variationNumber = variationNumbers[nextIndex]
+      nextIndex += 1
+
+      try {
+        await processVariation(variationNumber)
+      } catch (err) {
+        fatalError ??= err
+      }
+    }
+  }
+
+  const workerCount = Math.min(parallelism, variationNumbers.length)
+  await Promise.allSettled(
+    Array.from({ length: workerCount }, () => worker())
+  )
+
+  if (fatalError !== null) {
+    throw fatalError
+  }
+}
+
 function createShouldStopChecker(
   supabase: WorkerSupabase,
-  jobId: string,
+  job: Pick<ClaimedGenerationJobRecord, 'id' | 'started_at'>,
   timeBudgetMs: number,
   statusRefreshIntervalMs: number
 ) {
   const startedAt = Date.now()
   let cancelled = false
+  let claimLost = false
   let lastStatusCheckAt = 0
 
   const shouldStop = async () => {
     if (Date.now() - startedAt > timeBudgetMs) return true
-    if (Date.now() - lastStatusCheckAt < statusRefreshIntervalMs) return cancelled
+    if (Date.now() - lastStatusCheckAt < statusRefreshIntervalMs) return claimLost
 
     lastStatusCheckAt = Date.now()
     const { data, error } = await supabase
       .from(T.generation_jobs)
-      .select('status')
-      .eq('id', jobId)
+      .select('status, started_at')
+      .eq('id', job.id)
       .single()
 
     if (error) {
-      throw new Error(`Failed to refresh generation job status: ${error.message}`)
+      // A transient status read must not abort a job that is otherwise making
+      // progress. Keep the last known claim state and re-check on the
+      // next interval; the overall time budget still bounds total runtime.
+      return claimLost
     }
 
     cancelled = data?.status === 'cancelled'
-    return cancelled
+    claimLost = data?.status !== 'running' || data?.started_at !== job.started_at
+    return claimLost
   }
 
   return {
     shouldStop,
     wasCancelled: () => cancelled,
+    wasClaimLost: () => claimLost,
   }
+}
+
+async function processVariationAndPersistProgress(
+  supabase: WorkerSupabase,
+  job: ClaimedGenerationJobRecord,
+  variationNumber: number,
+  plan: VariationPlan,
+  recordedVariationNumbers: Set<number>,
+  resources: LoadedImageJobResources,
+  config: WorkerConfig,
+  progress: ProgressState,
+  progressPersister: ReturnType<typeof createProgressPersister>
+): Promise<boolean> {
+  try {
+    if (!recordedVariationNumbers.has(variationNumber)) {
+      await runVariationWithRetry(supabase, job, variationNumber, plan.promptSlug, resources, config)
+    }
+    progress.successCount += 1
+  } catch (err) {
+    progress.failCount += 1
+    progress.lastError = sanitizeWorkerErrorMessage(err, 'Variation failed')
+  }
+
+  progress.processed += 1
+  return progressPersister.persist({
+    successCount: progress.successCount,
+    failCount: progress.failCount,
+    lastError: progress.lastError,
+  })
 }
 
 async function processVariations(
   supabase: WorkerSupabase,
-  job: GenerationJobRecord,
+  job: ClaimedGenerationJobRecord,
   plan: VariationPlan,
+  recordedVariationNumbers: Set<number>,
   resources: LoadedImageJobResources,
   config: WorkerConfig
 ): Promise<VariationProcessingResult> {
@@ -876,46 +1192,37 @@ async function processVariations(
     lastError: null,
   }
 
-  let nextIndex = 0
   const stopChecker = createShouldStopChecker(
     supabase,
-    job.id,
+    job,
     config.timeBudgetMs,
     config.statusRefreshIntervalMs
   )
-  const progressPersister = createProgressPersister(supabase, job.id, plan)
+  const progressPersister = createProgressPersister(supabase, job, plan)
+  let claimLost = false
 
-  const worker = async () => {
-    while (nextIndex < plan.variationNumbers.length) {
-      if (await stopChecker.shouldStop()) {
-        break
-      }
-
-      const variationNumber = plan.variationNumbers[nextIndex]
-      nextIndex += 1
-
-      try {
-        await runVariationWithRetry(supabase, job, variationNumber, plan.promptSlug, resources, config)
-        progress.successCount += 1
-      } catch (err) {
-        progress.failCount += 1
-        progress.lastError = sanitizeWorkerErrorMessage(err, 'Variation failed')
-      } finally {
-        progress.processed += 1
-        await progressPersister.persist({
-          successCount: progress.successCount,
-          failCount: progress.failCount,
-          lastError: progress.lastError,
-        })
+  await runVariationWorkerPool(
+    plan.variationNumbers,
+    config.parallelism,
+    async () => claimLost || stopChecker.shouldStop(),
+    async (variationNumber) => {
+      const persisted = await processVariationAndPersistProgress(
+        supabase,
+        job,
+        variationNumber,
+        plan,
+        recordedVariationNumbers,
+        resources,
+        config,
+        progress,
+        progressPersister
+      )
+      if (!persisted) {
+        // Cancellation or a newer claim made the conditional update a no-op.
+        // Stop assigning queued variations; in-flight work is still drained.
+        claimLost = true
       }
     }
-  }
-
-  await Promise.all(
-    Array.from(
-      { length: Math.min(config.parallelism, plan.variationNumbers.length) },
-      () => worker()
-    )
   )
 
   await progressPersister.flush()
@@ -926,12 +1233,13 @@ async function processVariations(
     failedCount: plan.startingFailed + progress.failCount,
     lastError: progress.lastError,
     cancelled: stopChecker.wasCancelled(),
+    claimLost: claimLost || stopChecker.wasClaimLost(),
   }
 }
 
 async function persistFinalImageJobState(
   supabase: WorkerSupabase,
-  job: GenerationJobRecord,
+  job: ClaimedGenerationJobRecord,
   result: VariationProcessingResult
 ) {
   if (result.cancelled) {
@@ -941,6 +1249,10 @@ async function persistFinalImageJobState(
       { completed: result.completedCount, failed: result.failedCount },
       result.processed
     )
+  }
+
+  if (result.claimLost) {
+    return resolveJobUpdateConflict(supabase, job.id, result.processed)
   }
 
   const finalCompleted = result.completedCount + result.failedCount >= job.variation_count
@@ -967,22 +1279,70 @@ async function persistFinalImageJobState(
     }
   }
 
-  await updateGenerationJob(
+  const updated = await updateGenerationJob(
     supabase,
     job.id,
     updates,
     {
-      expectedStatuses: ['pending', 'running'],
-      allowNoop: false,
+      expectedStatuses: ['running'],
+      expectedStartedAt: job.started_at,
+      allowNoop: true,
       context: 'Failed to persist final generation job state',
     }
   )
+
+  if (!updated) {
+    return resolveJobUpdateConflict(
+      supabase,
+      job.id,
+      result.processed
+    )
+  }
 
   return createWorkerResult(
     job.id,
     finalStatus,
     { completed: result.completedCount, failed: result.failedCount },
     result.processed
+  )
+}
+
+async function processImageJobVariations(
+  supabase: WorkerSupabase,
+  job: ClaimedGenerationJobRecord,
+  config: WorkerConfig
+): Promise<VariationProcessingResult> {
+  const plan = createVariationPlan(job, config.batchSize)
+  if (plan.variationNumbers.length === 0) {
+    return {
+      processed: 0,
+      completedCount: plan.startingCompleted,
+      failedCount: plan.startingFailed,
+      lastError: job.error_message,
+      cancelled: false,
+      claimLost: false,
+    }
+  }
+
+  const recordedVariationNumbers = await fetchRecordedImageVariationNumbers(
+    supabase,
+    job,
+    plan.variationNumbers
+  )
+  const hasUnrecordedVariations = plan.variationNumbers.some(
+    (variationNumber) => !recordedVariationNumbers.has(variationNumber)
+  )
+  const resources = hasUnrecordedVariations
+    ? await loadImageJobResources(supabase, job)
+    : { referenceImages: [] }
+
+  return processVariations(
+    supabase,
+    job,
+    plan,
+    recordedVariationNumbers,
+    resources,
+    config
   )
 }
 
@@ -1000,26 +1360,27 @@ export async function processGenerationJob(jobId: string, options: WorkerOptions
 
   try {
     if (normalizeJobType(claimedJob) === 'video') {
-      return processVideoJob(claimedJob, supabase)
+      // Await inside the try so any unexpected throw (e.g. a status-conflict
+      // during the completion update) routes through the failure handler
+      // below instead of escaping uncaught.
+      return await processVideoJob(claimedJob, supabase)
     }
 
-    const plan = createVariationPlan(claimedJob, config.batchSize)
-    if (plan.variationNumbers.length === 0) {
-      return persistFinalImageJobState(supabase, claimedJob, {
-        processed: 0,
-        completedCount: plan.startingCompleted,
-        failedCount: plan.startingFailed,
-        lastError: claimedJob.error_message,
-        cancelled: false,
-      })
-    }
-
-    const resources = await loadImageJobResources(supabase, claimedJob)
-    const variationResult = await processVariations(supabase, claimedJob, plan, resources, config)
+    const variationResult = await processImageJobVariations(supabase, claimedJob, config)
     return persistFinalImageJobState(supabase, claimedJob, variationResult)
   } catch (err) {
     const safeMessage = sanitizeWorkerErrorMessage(err, 'Generation job failed')
-    await markClaimedJobFailed(supabase, claimedJob, safeMessage)
+    try {
+      await markClaimedJobFailed(supabase, claimedJob, safeMessage)
+    } catch (persistError) {
+      // Persisting the failed state is best-effort. If it fails (e.g. a
+      // transient DB error or a concurrent status change), never let that
+      // mask the original generation error the caller needs for logging.
+      log.error('Failed to persist claimed job failure state', {
+        jobId: claimedJob.id,
+        error: sanitizeWorkerErrorMessage(persistError, 'Failure state persistence failed'),
+      })
+    }
     throw err
   }
 }

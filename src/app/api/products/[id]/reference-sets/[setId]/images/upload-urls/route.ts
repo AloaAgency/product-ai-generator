@@ -6,7 +6,10 @@ import {
   MAX_REFERENCE_IMAGES,
   ALLOWED_REFERENCE_IMAGE_TYPES,
   MAX_REFERENCE_IMAGE_SIZE_BYTES,
+  parseRequestBody,
+  sanitizeStorageFileExtension,
 } from '@/lib/request-guards'
+import { logger } from '@/lib/server-logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -26,10 +29,9 @@ export async function POST(
   try {
     const { id: productId, setId } = await params
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
     const files = (body?.files || []) as UploadRequestItem[]
 
     if (!Array.isArray(files) || files.length === 0) {
@@ -65,13 +67,17 @@ export async function POST(
       }
     }
 
-    const { data: existing } = await supabase
+    // Only the highest display_order row is needed for the next ordinal; the total
+    // is read from the exact count header. Fetching every row just to call .length
+    // pulled the whole set (up to MAX_REFERENCE_IMAGES) on every upload request.
+    const { data: existing, count } = await supabase
       .from(T.reference_images)
-      .select('display_order')
+      .select('display_order', { count: 'exact' })
       .eq('reference_set_id', setId)
       .order('display_order', { ascending: false })
+      .limit(1)
 
-    const existingCount = existing?.length ?? 0
+    const existingCount = count ?? 0
     if (existingCount + files.length > MAX_REFERENCE_IMAGES) {
       return NextResponse.json(
         {
@@ -84,9 +90,7 @@ export async function POST(
     const nextOrderBase = (existing?.[0]?.display_order ?? -1) + 1
 
     const results = await Promise.all(files.map(async (file, index) => {
-      const extension = file.name.includes('.')
-        ? `.${file.name.split('.').pop()?.toLowerCase()}`
-        : ''
+      const extension = sanitizeStorageFileExtension(file.name)
       const storageFileName = `${Date.now()}-${randomUUID()}${extension}`
       const storagePath = `products/${productId}/refs/${setId}/${storageFileName}`
 
@@ -111,7 +115,7 @@ export async function POST(
 
     return NextResponse.json(results, { status: 201 })
   } catch (err) {
-    console.error('[ReferenceImages UploadUrls] Unexpected error:', err)
+    logger.error('[ReferenceImages UploadUrls] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

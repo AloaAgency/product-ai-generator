@@ -1,7 +1,12 @@
-import type { createServiceClient } from '@/lib/supabase/server'
+import type { NextRequest } from 'next/server'
+import { NextResponse } from 'next/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { processGenerationJob } from '@/lib/generation-worker'
+import { logError } from '@/lib/error-logger'
+import { logger } from '@/lib/server-logger'
 
-type ServiceClient = ReturnType<typeof createServiceClient>
+export type ServiceClient = ReturnType<typeof createServiceClient>
 
 type SceneVideoJobInput = {
   motion_prompt: string | null
@@ -65,7 +70,25 @@ export function kickWorkerForJob(
     ? timeoutMs
     : DEFAULT_WORKER_KICK_TIMEOUT_MS
 
-  const url = new URL('/api/worker/generate', requestUrl)
+  // This fetch delivers CRON_SECRET as a bearer token, so the target origin
+  // must not be attacker-influenced. requestUrl's host ultimately comes from
+  // the incoming Host / X-Forwarded-Host headers; on platforms that don't
+  // strictly bind those to the deployment (Vercel does, a bare reverse proxy
+  // may not), a forged header would make this kick deliver the secret to a
+  // foreign origin. Setting WORKER_BASE_URL (e.g. https://app.example.com)
+  // pins the target; the request URL remains the fallback so local dev and
+  // Host-validating platforms keep working with no extra configuration.
+  let url: URL
+  try {
+    url = new URL('/api/worker/generate', env.WORKER_BASE_URL || requestUrl)
+  } catch (err) {
+    // Fire-and-forget contract: never throw into the calling route.
+    logger.warn(`${label} Worker kick skipped — invalid worker base URL`, {
+      jobId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return
+  }
   url.searchParams.set('jobId', jobId)
   if (extraParams) {
     for (const [key, value] of Object.entries(extraParams)) {
@@ -82,9 +105,9 @@ export function kickWorkerForJob(
         headers: { Authorization: `Bearer ${cronSecret}` },
         signal: controller.signal,
       })
-      console.log(`${label} Worker kick`, { jobId, status: res.status })
+      logger.debug(`${label} Worker kick`, { jobId, status: res.status })
     } catch (err) {
-      console.warn(`${label} Worker kick failed`, {
+      logger.warn(`${label} Worker kick failed`, {
         jobId,
         error: err instanceof Error ? err.message : String(err),
       })
@@ -144,4 +167,59 @@ export async function createSceneVideoJob(
 
   if (jobError || !job) return { job: null, error: 'Failed to create video job' }
   return { job: job as Record<string, unknown>, error: null }
+}
+
+/**
+ * Shared POST handler for both scene generate-video routes:
+ *   /api/products/[id]/scenes/[sceneId]/generate-video
+ *   /api/products/[id]/storyboards/[boardId]/scenes/[sceneId]/generate-video
+ *
+ * The only difference between those routes is the errorSource string logged on failure.
+ */
+export async function handleSceneGenerateVideoPost(
+  request: NextRequest,
+  productId: string,
+  sceneId: string,
+  errorSource: string
+): Promise<NextResponse> {
+  try {
+    let body: { model?: string } = {}
+    try {
+      body = await request.json()
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 })
+    }
+
+    const supabase = createServiceClient()
+    const { job, error } = await createSceneVideoJob(supabase, productId, sceneId, body.model)
+
+    if (error === 'Scene not found') return NextResponse.json({ error }, { status: 404 })
+    if (error) return NextResponse.json({ error }, { status: 400 })
+
+    if (shouldRunVideoGenerationInline()) {
+      void processGenerationJob(job!.id as string).catch(async (err) => {
+        const message = err instanceof Error ? err.message : 'Video generation failed'
+        logger.error('[GenerateVideo] Inline job failed:', err)
+        await logError({
+          productId,
+          errorMessage: message,
+          errorSource: `${errorSource}:inline`,
+          errorContext: { sceneId, jobId: job!.id as string },
+        })
+      })
+    } else {
+      kickWorkerForJob(job!.id as string, request.url, '[GenerateVideo]')
+    }
+
+    return NextResponse.json({ job }, { status: 201 })
+  } catch (err) {
+    logger.error('[GenerateVideo] Error:', err)
+    await logError({
+      productId,
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource,
+      errorContext: { sceneId },
+    })
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
 }

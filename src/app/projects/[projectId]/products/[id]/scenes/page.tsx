@@ -3,6 +3,7 @@
 import { use, useEffect, useState, useCallback, useRef } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { FallbackImage } from '@/components/FallbackImage'
 import type { StoryboardScene } from '@/lib/types'
 import type { GeneratedImage } from '@/lib/types'
 import {
@@ -44,15 +45,8 @@ import {
   normalizeDurationValue,
   parsePositiveNumber,
 } from '@/lib/video-constants'
-
-const api = async (url: string, options?: RequestInit) => {
-  const res = await fetch(url, options)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || res.statusText)
-  }
-  return res.json()
-}
+import { logger } from '@/lib/logger'
+import { api, uploadToSignedUrl, cleanupImageRecord } from '@/lib/api-client'
 
 const fieldClassName = 'w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none'
 const selectClassName = 'w-full min-h-11 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-3 text-sm text-zinc-200 outline-none'
@@ -66,7 +60,7 @@ export default function ScenesPage({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { id } = use(params)
-  const { fetchGenerationJobs } = useAppStore()
+  const fetchGenerationJobs = useAppStore((s) => s.fetchGenerationJobs)
 
   const [scenes, setScenes] = useState<StoryboardScene[]>([])
   const [loading, setLoading] = useState(true)
@@ -119,17 +113,20 @@ export default function ScenesPage({
   const [galleryImages, setGalleryImages] = useState<GeneratedImage[]>([])
   const [loadingGallery, setLoadingGallery] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [pickerError, setPickerError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   async function openFramePicker(sceneId: string | null, slot: 'start' | 'end', mode: 'create' | 'edit') {
     setFramePicker({ sceneId: sceneId || undefined, slot, mode })
     setPickerTab('gallery')
+    setPickerError(null)
     setLoadingGallery(true)
     try {
       const data = await api(`/api/products/${id}/gallery?media_type=image&approval_status=approved&limit=200`)
       setGalleryImages(data.images ?? data)
-    } catch {
+    } catch (err) {
       setGalleryImages([])
+      setPickerError(err instanceof Error ? err.message : 'Failed to load gallery images')
     } finally {
       setLoadingGallery(false)
     }
@@ -163,6 +160,7 @@ export default function ScenesPage({
     const file = e.target.files?.[0]
     if (!file || !framePicker) return
     setUploading(true)
+    setPickerError(null)
     try {
       if (framePicker.mode === 'create') {
         const results = await api(`/api/products/${id}/gallery/upload`, {
@@ -180,11 +178,12 @@ export default function ScenesPage({
         if (!firstResult || firstResult.error || !firstResult.signed_url || !firstResult.image?.id) {
           throw new Error(firstResult?.error || 'Failed to prepare upload')
         }
-        await fetch(firstResult.signed_url, {
-          method: 'PUT',
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
-          body: file,
-        })
+        try {
+          await uploadToSignedUrl(firstResult.signed_url, file, file.type)
+        } catch (err) {
+          await cleanupImageRecord(firstResult.image.id)
+          throw err
+        }
         if (framePicker.slot === 'start') {
           setNewStartFrameId(firstResult.image.id)
         } else {
@@ -204,16 +203,14 @@ export default function ScenesPage({
           file_size: file.size,
         }),
       })
-      await fetch(signed_url, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        body: file,
-      })
+      await uploadToSignedUrl(signed_url, file, file.type)
       const field = framePicker.slot === 'start' ? 'start_frame_image_id' : 'end_frame_image_id'
       setScenes((prev) => prev.map((s) =>
         s.id === framePicker.sceneId ? { ...s, [field]: image.id } : s
       ))
       setFramePicker(null)
+    } catch (err) {
+      setPickerError(err instanceof Error ? err.message : 'Frame upload failed')
     } finally {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -236,31 +233,49 @@ export default function ScenesPage({
   // Signed URLs
   const [signedUrlsById, setSignedUrlsById] = useState<Record<string, SignedImageUrls>>({})
   const signedUrlsRef = useRef(signedUrlsById)
+  const signedUrlRequestsRef = useRef<Record<string, Promise<SignedImageUrls | null>>>({})
   useEffect(() => { signedUrlsRef.current = signedUrlsById }, [signedUrlsById])
 
   const ensureSignedUrls = useCallback(async (imageId: string) => {
     const cached = signedUrlsRef.current[imageId]
     if (cached?.expires_at && cached.expires_at - Date.now() > 60_000) return cached
-    const res = await fetch(`/api/images/${imageId}/signed`)
-    if (!res.ok) return null
-    const data = (await res.json()) as SignedImageUrls
-    const next = { ...signedUrlsRef.current, [imageId]: data }
-    signedUrlsRef.current = next
-    setSignedUrlsById(next)
-    return data
+
+    const inFlight = signedUrlRequestsRef.current[imageId]
+    if (inFlight) return inFlight
+
+    const request = fetch(`/api/images/${imageId}/signed`)
+      .then(async (res) => {
+        if (!res.ok) return null
+        const data = (await res.json()) as SignedImageUrls
+        const next = { ...signedUrlsRef.current, [imageId]: data }
+        signedUrlsRef.current = next
+        setSignedUrlsById(next)
+        return data
+      })
+      .finally(() => {
+        delete signedUrlRequestsRef.current[imageId]
+      })
+
+    signedUrlRequestsRef.current[imageId] = request
+    return request
   }, [])
 
-  function sceneThumbUrl(imageId: string | null): string | null {
-    if (!imageId) return null
+  function sceneThumbUrls(imageId: string | null) {
+    if (!imageId) return []
     void ensureSignedUrls(imageId)
-    return signedUrlsById[imageId]?.thumb_signed_url || signedUrlsById[imageId]?.signed_url || null
+    const urls = signedUrlsById[imageId]
+    return [urls?.thumb_signed_url, urls?.preview_signed_url, urls?.signed_url]
   }
 
   function renderThumb(imageId: string | null, alt: string) {
-    const url = sceneThumbUrl(imageId)
-    if (!url) return <ImageIcon className="h-6 w-6 text-zinc-600" />
-    // eslint-disable-next-line @next/next/no-img-element
-    return <img src={url} alt={alt} className="h-full w-full object-cover" />
+    return (
+      <FallbackImage
+        sources={sceneThumbUrls(imageId)}
+        alt={alt}
+        className="h-full w-full object-cover"
+        fallback={<ImageIcon className="h-6 w-6 text-zinc-600" />}
+      />
+    )
   }
 
   // Load all scenes for this product
@@ -285,6 +300,8 @@ export default function ScenesPage({
         loadSceneVideos(scene.id)
       }
     })
+    // Runs when the scenes list changes; the per-scene guard above avoids redundant loads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenes])
 
   async function loadSceneVideos(sceneId: string) {
@@ -463,7 +480,7 @@ export default function ScenesPage({
         ...prev,
         [sceneId]: { type: 'error', message },
       }))
-      console.error('[GenerateVideo] Failed to queue video', err)
+      logger.error('[GenerateVideo] Failed to queue video', err)
     } finally {
       setGeneratingVideo(null)
     }
@@ -494,7 +511,7 @@ export default function ScenesPage({
       document.body.removeChild(link)
       URL.revokeObjectURL(blobUrl)
     } catch (err) {
-      console.error('[DownloadVideo] Failed', err)
+      logger.error('[DownloadVideo] Failed', err)
     }
   }, [])
 
@@ -1248,6 +1265,12 @@ export default function ScenesPage({
               </button>
             </div>
 
+            {pickerError && (
+              <div className="mb-4 rounded-lg border border-red-800 bg-red-950/60 px-3 py-2 text-sm text-red-300">
+                {pickerError}
+              </div>
+            )}
+
             {/* Tabs */}
             <div className="mb-4 grid grid-cols-2 gap-2 border-b border-zinc-700 pb-2">
               <button
@@ -1287,18 +1310,16 @@ export default function ScenesPage({
                         onClick={() => selectGalleryImage(img.id)}
                         className="min-h-24 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800 transition-colors hover:border-blue-500"
                       >
-                        {(img.thumb_public_url || img.public_url) ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={(img.thumb_public_url || img.public_url)!}
-                            alt=""
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <div className="h-full w-full flex items-center justify-center">
-                            <ImageIcon className="h-6 w-6 text-zinc-600" />
-                          </div>
-                        )}
+                        <FallbackImage
+                          sources={[img.thumb_public_url, img.preview_public_url, img.public_url]}
+                          alt=""
+                          className="h-full w-full object-cover"
+                          fallback={(
+                            <div className="h-full w-full flex items-center justify-center">
+                              <ImageIcon className="h-6 w-6 text-zinc-600" />
+                            </div>
+                          )}
+                        />
                       </button>
                     ))}
                   </div>

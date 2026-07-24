@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { processGenerationJob } from '@/lib/generation-worker'
 import { logError } from '@/lib/error-logger'
+import { createLogger } from '@/lib/server-logger'
 import { T } from '@/lib/db-tables'
-import { secretsEqual } from '@/lib/server-secrets'
+import { matchesRotatableSecret } from '@/lib/server-secrets'
 import {
   isValidGenerationJobId,
   MAX_GENERATION_BATCH_SIZE,
@@ -18,18 +19,24 @@ export const runtime = 'nodejs'
 export const maxDuration = 800
 export const dynamic = 'force-dynamic'
 
+const log = createLogger('Worker')
+
 function isAuthorized(request: NextRequest) {
   const secret = process.env.CRON_SECRET
   if (!secret) {
-    console.error('[Worker] CRON_SECRET is not set — all requests denied')
+    log.error('CRON_SECRET is not set — all requests denied')
     return false
   }
+  // Zero-downtime rotation: CRON_SECRET_PREVIOUS is also accepted while set,
+  // so external callers (Vercel cron) can be updated after the new secret
+  // deploys. See the rotation procedure in server-secrets.ts.
+  const previous = process.env.CRON_SECRET_PREVIOUS
   const headerSecret = request.headers.get('x-cron-secret') ?? ''
   const auth = request.headers.get('authorization') ?? ''
   const bearerSecret = auth.startsWith('Bearer ') ? auth.slice(7) : ''
 
-  return (headerSecret.length > 0 && secretsEqual(headerSecret, secret)) ||
-    (bearerSecret.length > 0 && secretsEqual(bearerSecret, secret))
+  return matchesRotatableSecret(headerSecret, secret, previous) ||
+    matchesRotatableSecret(bearerSecret, secret, previous)
 }
 
 export async function GET(request: NextRequest) {
@@ -37,7 +44,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const supabase = createServiceClient()
   const url = new URL(request.url)
   const jobId = url.searchParams.get('jobId')
   const batchSize = parseWorkerPositiveInteger(
@@ -85,7 +91,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid jobId' }, { status: 400 })
     }
 
-    console.log('[Worker] Trigger', {
+    // Created inside the try so a misconfigured deployment (missing Supabase
+    // env vars → createServiceClient throws) gets the structured 500 + error
+    // logging below instead of an unhandled exception with an opaque response.
+    const supabase = createServiceClient()
+
+    log.info('Trigger', {
       jobId: jobId || null,
       batchSize,
       parallelism,
@@ -110,11 +121,11 @@ export async function GET(request: NextRequest) {
       .select('id')
 
     if (staleError) {
-      console.warn('[Worker] Failed to requeue stale jobs', {
+      log.warn('Failed to requeue stale jobs', {
         error: sanitizeWorkerErrorMessage(staleError, 'Failed to requeue stale jobs'),
       })
     } else if (staleJobs && staleJobs.length > 0) {
-      console.log('[Worker] Requeued stale jobs', { count: staleJobs.length })
+      log.info('Requeued stale jobs', { count: staleJobs.length })
     }
 
     const { data: jobs, error } = await supabase
@@ -125,7 +136,7 @@ export async function GET(request: NextRequest) {
       .limit(Math.max(1, jobBatchSize))
 
     if (error) {
-      console.error('[Worker] job fetch error', error)
+      log.error('job fetch error', { error: sanitizeWorkerErrorMessage(error, 'Failed to fetch jobs') })
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
@@ -149,8 +160,26 @@ export async function GET(request: NextRequest) {
         while (index < queued.length) {
           const current = queued[index]
           index += 1
-          const result = await processGenerationJob(current.id, { batchSize, parallelism, timeBudgetMs })
-          results.push(result)
+          try {
+            const result = await processGenerationJob(current.id, { batchSize, parallelism, timeBudgetMs })
+            results.push(result)
+          } catch (err) {
+            // One job throwing (e.g. a transient DB error while claiming it)
+            // must not abort this lane: without the catch the whole worker
+            // rejects, Promise.all discards results of jobs that already
+            // completed, and the sibling lane keeps running after the 500 is
+            // sent — on serverless that means being frozen mid-write. The job
+            // itself is either still 'pending' (claim failed → retried next
+            // tick) or already marked 'failed' by processGenerationJob.
+            const safeMessage = sanitizeWorkerErrorMessage(err, 'Generation job failed')
+            log.warn('Job error', { jobId: current.id, error: safeMessage })
+            await logError({
+              errorMessage: safeMessage,
+              errorSource: 'api/worker/generate',
+              errorContext: { jobId: current.id },
+            })
+            results.push({ jobId: current.id, processed: 0, completed: 0, failed: 0, status: 'error' })
+          }
         }
       }
       const workers = Array.from({ length: Math.min(limit, queued.length) }, () => worker())
@@ -167,11 +196,11 @@ export async function GET(request: NextRequest) {
     ])
 
     const results = [...imageResults, ...videoResults]
-    console.log('[Worker] Completed', { processed: results.length })
+    log.info('Completed', { processed: results.length })
     return NextResponse.json({ processed: results.length, results })
   } catch (err) {
     const safeMessage = sanitizeWorkerErrorMessage(err)
-    console.warn('[Worker] Error', { error: safeMessage })
+    log.warn('Error', { error: safeMessage })
     await logError({
       errorMessage: safeMessage,
       errorSource: 'api/worker/generate',

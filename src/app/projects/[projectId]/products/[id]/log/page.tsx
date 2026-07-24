@@ -19,6 +19,7 @@ import {
   Search,
   X,
 } from 'lucide-react'
+import { logger } from '@/lib/logger'
 
 const STATUS_CONFIG: Record<
   GenerationJob['status'],
@@ -42,13 +43,14 @@ export default function LogPage({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { id: productId } = use(params)
-  const {
-    generationJobs,
-    loadingJobs,
-    fetchGenerationJobs,
-    deleteGenerationJob,
-    clearGenerationLog,
-  } = useAppStore()
+  const generationJobs = useAppStore((s) => s.generationJobs)
+  const loadingJobs = useAppStore((s) => s.loadingJobs)
+  const loadingJobsMore = useAppStore((s) => s.loadingJobsMore)
+  const generationJobsHasMore = useAppStore((s) => s.generationJobsHasMore)
+  const fetchGenerationJobs = useAppStore((s) => s.fetchGenerationJobs)
+  const fetchGenerationJobsMore = useAppStore((s) => s.fetchGenerationJobsMore)
+  const deleteGenerationJob = useAppStore((s) => s.deleteGenerationJob)
+  const clearGenerationLog = useAppStore((s) => s.clearGenerationLog)
 
   const [statusFilter, setStatusFilter] = useState<GenerationJob['status'] | 'all'>('all')
   const [typeFilter, setTypeFilter] = useState<GenerationJob['job_type'] | 'all'>('all')
@@ -83,7 +85,18 @@ export default function LogPage({
   }, [generationJobs, statusFilter, typeFilter, searchQuery])
 
   const visible = filtered.slice(0, visibleCount)
-  const hasMore = visibleCount < filtered.length
+  const hasBufferedJobs = visibleCount < filtered.length
+  const hasMore = hasBufferedJobs || generationJobsHasMore
+
+  const handleLoadMore = async () => {
+    if (hasBufferedJobs) {
+      setVisibleCount((count) => count + PAGE_SIZE)
+      return
+    }
+
+    await fetchGenerationJobsMore(productId)
+    setVisibleCount((count) => count + PAGE_SIZE)
+  }
 
   const handleDelete = async (jobId: string) => {
     setDeletingId(jobId)
@@ -91,7 +104,7 @@ export default function LogPage({
       await deleteGenerationJob(productId, jobId)
       if (expandedId === jobId) setExpandedId(null)
     } catch (err) {
-      console.error('Failed to delete job', err)
+      logger.error('Failed to delete job', err)
     } finally {
       setDeletingId(null)
     }
@@ -103,7 +116,7 @@ export default function LogPage({
       await clearGenerationLog(productId)
       setConfirmClear(false)
     } catch (err) {
-      console.error('Failed to clear log', err)
+      logger.error('Failed to clear log', err)
     } finally {
       setClearing(false)
     }
@@ -349,10 +362,15 @@ export default function LogPage({
           {/* Load more */}
           {hasMore && (
             <button
-              onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
-              className="mt-4 w-full rounded-lg border border-zinc-800 py-2 text-sm font-medium text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
+              onClick={() => void handleLoadMore()}
+              disabled={loadingJobsMore}
+              className="mt-4 w-full rounded-lg border border-zinc-800 py-2 text-sm font-medium text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-wait disabled:opacity-60"
             >
-              Show more ({filtered.length - visibleCount} remaining)
+              {loadingJobsMore
+                ? 'Loading older jobs...'
+                : hasBufferedJobs
+                  ? `Show more (${filtered.length - visibleCount} remaining)`
+                  : 'Load older jobs'}
             </button>
           )}
         </div>

@@ -12,18 +12,24 @@ import {
   getGenerationJobProgress,
   POLL_MS,
   shouldPollGenerationQueue,
+  shouldShowGenerationQueuePanel,
   shouldShowIndeterminateJobProgress,
 } from './globalGenerationQueue.helpers'
-import { getSafeQueueErrorMessage } from './errorDisplay.helpers'
+import { getSafeErrorMessage, getSafeQueueErrorMessage } from './errorDisplay.helpers'
+import { isClientDevelopmentRuntime } from '@/lib/client-runtime'
 
 function useGenerationQueuePolling({
   productId,
   fetchGenerationJobs,
   hasActiveJobs,
+  onPollError,
+  onPollSuccess,
 }: {
   productId: string
   fetchGenerationJobs: (productId: string) => Promise<void>
   hasActiveJobs: boolean
+  onPollError: (error: unknown) => void
+  onPollSuccess: () => void
 }) {
   const isPollingRef = useRef(false)
   const lastPollAtRef = useRef(0)
@@ -31,11 +37,11 @@ function useGenerationQueuePolling({
   useEffect(() => {
     let cancelled = false
 
-    const runPoll = async ({ force = false }: { force?: boolean } = {}) => {
+    const runPoll = async () => {
       if (cancelled) return
 
       const now = Date.now()
-      if (!force && !shouldPollGenerationQueue({
+      if (!shouldPollGenerationQueue({
         hasActiveJobs,
         isDocumentVisible: document.visibilityState === 'visible',
         isPolling: isPollingRef.current,
@@ -50,6 +56,9 @@ function useGenerationQueuePolling({
       try {
         await fetchGenerationJobs(productId)
         lastPollAtRef.current = now
+        if (!cancelled) onPollSuccess()
+      } catch (error) {
+        if (!cancelled) onPollError(error)
       } finally {
         isPollingRef.current = false
       }
@@ -61,8 +70,7 @@ function useGenerationQueuePolling({
       }
     }
 
-    void runPoll({ force: true })
-
+    lastPollAtRef.current = Date.now()
     const interval = window.setInterval(() => {
       void runPoll()
     }, POLL_MS)
@@ -83,7 +91,7 @@ function useGenerationQueuePolling({
       window.removeEventListener('online', handleOnline)
       window.clearInterval(interval)
     }
-  }, [fetchGenerationJobs, hasActiveJobs, productId])
+  }, [fetchGenerationJobs, hasActiveJobs, onPollError, onPollSuccess, productId])
 }
 
 export default function GlobalGenerationQueue({
@@ -102,6 +110,17 @@ export default function GlobalGenerationQueue({
   const [expanded, setExpanded] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearingFailures, setClearingFailures] = useState(false)
+  const [pollError, setPollError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [isDevelopment, setIsDevelopment] = useState(false)
+
+  useEffect(() => {
+    setIsDevelopment(isClientDevelopmentRuntime())
+  }, [])
+
+  useEffect(() => {
+    void fetchGenerationJobs(productId)
+  }, [fetchGenerationJobs, productId])
 
   const {
     activeJobs,
@@ -114,18 +133,42 @@ export default function GlobalGenerationQueue({
     hasActiveJobs,
   } = useMemo(() => deriveGenerationQueueState(generationJobs), [generationJobs])
   const showIndeterminateOverallBar = hasActiveJobs && totals.totalCompleted === 0
-
-  useGenerationQueuePolling({
-    productId,
-    fetchGenerationJobs,
+  const isInitialQueueLoad = loadingJobs && generationJobs.length === 0
+  const showQueuePanel = shouldShowGenerationQueuePanel({
+    loadingJobs,
+    generationJobCount: generationJobs.length,
     hasActiveJobs,
+    failedCount,
   })
 
   useEffect(() => {
     if (!hasActiveJobs) {
       setExpanded(false)
+      setPollError(null)
+      setActionError(null)
     }
   }, [hasActiveJobs])
+
+  const handlePollError = useCallback((error: unknown) => {
+    setPollError(
+      getSafeErrorMessage(
+        error instanceof Error ? error.message : null,
+        'Generation queue could not refresh. Retrying automatically.'
+      )
+    )
+  }, [])
+
+  const handlePollSuccess = useCallback(() => {
+    setPollError(null)
+  }, [])
+
+  useGenerationQueuePolling({
+    productId,
+    fetchGenerationJobs,
+    hasActiveJobs,
+    onPollError: handlePollError,
+    onPollSuccess: handlePollSuccess,
+  })
 
   const handleToggleExpanded = useCallback(() => {
     setExpanded((prev) => !prev)
@@ -143,7 +186,15 @@ export default function GlobalGenerationQueue({
     if (!confirmed) return
     try {
       setClearing(true)
+      setActionError(null)
       await clearGenerationQueue(productId)
+    } catch (error) {
+      setActionError(
+        getSafeErrorMessage(
+          error instanceof Error ? error.message : null,
+          'Failed to clear generation queue. Please try again.'
+        )
+      )
     } finally {
       setClearing(false)
     }
@@ -156,13 +207,21 @@ export default function GlobalGenerationQueue({
     if (!confirmed) return
     try {
       setClearingFailures(true)
+      setActionError(null)
       await clearGenerationFailures(productId)
+    } catch (error) {
+      setActionError(
+        getSafeErrorMessage(
+          error instanceof Error ? error.message : null,
+          'Failed to clear failed jobs. Please try again.'
+        )
+      )
     } finally {
       setClearingFailures(false)
     }
   }, [clearGenerationFailures, clearingFailures, productId])
 
-  if (!hasActiveJobs) {
+  if (!showQueuePanel) {
     return null
   }
 
@@ -179,13 +238,15 @@ export default function GlobalGenerationQueue({
     failedCount,
     totals,
   })
+  const queueNotice = actionError ?? pollError
 
   return (
     <section
       className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/70 backdrop-blur"
       aria-label="Generation queue"
+      aria-busy={isInitialQueueLoad || clearing || clearingFailures}
     >
-      <div className="flex w-full flex-col gap-3 px-3 py-3 sm:px-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex w-full flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:px-4">
         <button
           type="button"
           onClick={handleToggleExpanded}
@@ -204,9 +265,17 @@ export default function GlobalGenerationQueue({
             <p className="text-sm font-medium text-zinc-100">Generation queue</p>
             <p className="break-words text-xs text-zinc-500" aria-live="polite">{queueSummary}</p>
           </div>
+          <span className="ml-auto flex shrink-0 items-center gap-2 pl-2 text-xs text-zinc-400">
+            <span className="whitespace-nowrap">{outputLabel}</span>
+            {expanded ? (
+              <ChevronUp className="h-4 w-4" />
+            ) : (
+              <ChevronDown className="h-4 w-4" />
+            )}
+          </span>
         </button>
-        <div className="flex w-full flex-wrap items-center gap-2 text-xs text-zinc-400 sm:w-auto sm:justify-end sm:gap-3">
-          {process.env.NODE_ENV === 'development' && (
+        <div className="flex w-full flex-wrap items-center gap-2 text-xs text-zinc-400 empty:hidden sm:w-auto sm:justify-end">
+          {isDevelopment && (
             <button
               type="button"
               className="min-h-11 whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100"
@@ -235,34 +304,59 @@ export default function GlobalGenerationQueue({
               {clearingFailures ? 'Clearing failures…' : 'Clear failures'}
             </button>
           )}
-          <span className="min-h-11 min-w-0 content-center break-words text-left sm:text-right" aria-live="polite">{outputLabel}</span>
-          {expanded ? (
-            <ChevronUp className="h-4 w-4" />
-          ) : (
-            <ChevronDown className="h-4 w-4" />
-          )}
         </div>
       </div>
 
-      <div id={detailsId} className="px-3 pb-4 sm:px-4">
-        <div className="flex flex-col gap-1 text-xs text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
-          <span>{overallProgress}% overall</span>
-          <span>Updates every {POLL_MS / 1000}s</span>
+      {queueNotice && (
+        <div
+          className="mx-3 mb-3 flex items-start gap-2 rounded-lg border border-red-900/40 bg-red-950/30 px-3 py-2 text-sm text-red-200 sm:mx-4"
+          role="alert"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+          <span className="break-words">{queueNotice}</span>
         </div>
-        <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-zinc-800">
-          {showIndeterminateOverallBar ? (
-            <div className="h-full w-1/3 rounded-full bg-blue-500 animate-pulse-bar" />
-          ) : (
-            <div
-              className="h-full rounded-full bg-blue-500 transition-all duration-500"
-              style={{ width: `${overallProgress}%` }}
-            />
-          )}
-        </div>
+      )}
 
-        {expanded && (
-          <div className="mt-4 space-y-3">
-            {hasActiveJobs ? (
+      {(hasActiveJobs || expanded) && (
+        <div className="px-3 pb-4 sm:px-4">
+          {hasActiveJobs && (
+            <>
+              <div className="flex flex-col gap-1 text-xs text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
+                <span>{overallProgress}% overall</span>
+                <span>Updates every {POLL_MS / 1000}s</span>
+              </div>
+              <div
+                className="mt-2 h-2 w-full overflow-hidden rounded-full bg-zinc-800"
+                role="progressbar"
+                aria-label="Overall generation progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={showIndeterminateOverallBar ? undefined : overallProgress}
+                aria-valuetext={showIndeterminateOverallBar ? 'Generation in progress' : `${overallProgress}% complete`}
+              >
+                {showIndeterminateOverallBar ? (
+                  <div className="h-full w-1/3 rounded-full bg-blue-500 animate-pulse-bar" />
+                ) : (
+                  <div
+                    className="h-full rounded-full bg-blue-500 transition-all duration-500"
+                    style={{ width: `${overallProgress}%` }}
+                  />
+                )}
+              </div>
+            </>
+          )}
+
+          {expanded && (
+            <div id={detailsId} className={`${hasActiveJobs ? 'mt-4 ' : ''}space-y-3`}>
+            {isInitialQueueLoad ? (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-6 text-center">
+                <Loader2 className="mx-auto h-5 w-5 animate-spin text-zinc-500" />
+                <p className="mt-3 text-sm font-medium text-zinc-300">Checking queue</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Active and failed generation jobs will appear here.
+                </p>
+              </div>
+            ) : hasActiveJobs ? (
               activeJobs.map((job) => {
                 const jobProgress = getGenerationJobProgress(job)
                 const showIndeterminateJobBar = shouldShowIndeterminateJobProgress(job)
@@ -293,7 +387,15 @@ export default function GlobalGenerationQueue({
                         {getSafeQueueErrorMessage(job.error_message)}
                       </p>
                     )}
-                    <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                    <div
+                      className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800"
+                      role="progressbar"
+                      aria-label={`${job.status === 'pending' ? 'Pending' : 'Running'} ${unitLabel} generation`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={showIndeterminateJobBar ? undefined : jobProgress}
+                      aria-valuetext={showIndeterminateJobBar ? `${job.status} generation` : `${jobProgress}% complete`}
+                    >
                       {showIndeterminateJobBar ? (
                         <div className="h-full w-1/3 rounded-full bg-blue-500/80 animate-pulse-bar" />
                       ) : (
@@ -345,9 +447,10 @@ export default function GlobalGenerationQueue({
                 </div>
               </div>
             )}
-          </div>
-        )}
-      </div>
+            </div>
+          )}
+        </div>
+      )}
     </section>
   )
 }

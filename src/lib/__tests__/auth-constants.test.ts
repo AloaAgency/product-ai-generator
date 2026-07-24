@@ -1,14 +1,86 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { NextRequest } from 'next/server'
-import { AUTH_COOKIE_NAME, deriveAuthToken, isAdminAuthorized } from '@/lib/auth-constants'
+import { AUTH_COOKIE_NAME, deriveAuthToken, isAdminAuthorized, timingResistantEqual } from '@/lib/auth-constants'
+
+// ---------------------------------------------------------------------------
+// timingResistantEqual — XOR-based constant-time comparison (Edge Runtime)
+// ---------------------------------------------------------------------------
+
+describe('timingResistantEqual', () => {
+  it('returns true for identical strings', () => {
+    expect(timingResistantEqual('abc', 'abc')).toBe(true)
+  })
+
+  it('returns false for strings that differ by one character', () => {
+    expect(timingResistantEqual('abX', 'abc')).toBe(false)
+  })
+
+  it('returns false when provided is longer than expected', () => {
+    expect(timingResistantEqual('abcd', 'abc')).toBe(false)
+  })
+
+  it('returns false when provided is shorter than expected', () => {
+    expect(timingResistantEqual('ab', 'abc')).toBe(false)
+  })
+
+  it('returns false for empty provided vs non-empty expected', () => {
+    // Empty provided must not pass — previously relied on NaN→0 coercion in bitwise XOR;
+    // explicit bounds check (i < pLen ? charCodeAt(i) : 0) makes this unambiguous.
+    expect(timingResistantEqual('', 'secret')).toBe(false)
+  })
+
+  it('returns false for empty provided vs expected containing only null bytes', () => {
+    // Regression: null-byte expected could trivially XOR to 0 with a dummy value;
+    // the length-mismatch flag (diff = 1) must prevent a false positive.
+    expect(timingResistantEqual('', '\x00\x00\x00')).toBe(false)
+  })
+
+  it('returns false for non-empty provided vs empty expected', () => {
+    expect(timingResistantEqual('secret', '')).toBe(false)
+  })
+
+  it('returns true for two empty strings', () => {
+    expect(timingResistantEqual('', '')).toBe(true)
+  })
+
+  it('is case-sensitive — strings differing only in case are rejected', () => {
+    expect(timingResistantEqual('Secret', 'secret')).toBe(false)
+  })
+
+  it('returns true for a long matching string (64-char HMAC-hex)', () => {
+    const s64 = 'f'.repeat(64)
+    expect(timingResistantEqual(s64, s64)).toBe(true)
+  })
+
+  it('returns false when provided is a prefix repetition of expected (guards against wrap-around false positive)', () => {
+    // If provided = "abc" and expected = "abcabc", a naive wrap-around XOR
+    // could produce all-zero differences and wrongly return true.
+    // The length-mismatch flag must prevent this.
+    expect(timingResistantEqual('abc', 'abcabc')).toBe(false)
+  })
+
+  it('returns false for a 64-char string where only the last character differs', () => {
+    const a = 'f'.repeat(63) + 'a'
+    const b = 'f'.repeat(63) + 'b'
+    expect(timingResistantEqual(a, b)).toBe(false)
+  })
+})
 
 // ---------------------------------------------------------------------------
 // AUTH_COOKIE_NAME — constant guard
 // ---------------------------------------------------------------------------
 
 describe('AUTH_COOKIE_NAME', () => {
-  it('equals "site-auth" — changing this constant invalidates all live auth cookies', () => {
-    expect(AUTH_COOKIE_NAME).toBe('site-auth')
+  it('equals "__Host-site-auth" — changing this constant invalidates all live auth cookies', () => {
+    expect(AUTH_COOKIE_NAME).toBe('__Host-site-auth')
+  })
+
+  it('keeps the __Host- prefix so browsers enforce Secure + Path=/ + no Domain', () => {
+    // The prefix is load-bearing: browsers reject a __Host- cookie set without
+    // Secure/Path=/ or with a Domain attribute, which turns any future weakening
+    // of the login route's cookie options into a hard failure instead of a
+    // silently less-secure session cookie.
+    expect(AUTH_COOKIE_NAME.startsWith('__Host-')).toBe(true)
   })
 })
 
@@ -121,6 +193,63 @@ describe('isAdminAuthorized', () => {
     // ADMIN_SECRET='' is falsy — the function must still fail closed.
     process.env.ADMIN_SECRET = ''
     const req = mockRequest({ 'x-admin-secret': '' })
+    expect(isAdminAuthorized(req)).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// isAdminAuthorized — ADMIN_SECRET_PREVIOUS rotation overlap (Edge variant)
+// ---------------------------------------------------------------------------
+
+describe('isAdminAuthorized — rotation overlap', () => {
+  const originalAdminSecret = process.env.ADMIN_SECRET
+  const originalPrevious = process.env.ADMIN_SECRET_PREVIOUS
+
+  afterEach(() => {
+    if (originalAdminSecret === undefined) {
+      delete process.env.ADMIN_SECRET
+    } else {
+      process.env.ADMIN_SECRET = originalAdminSecret
+    }
+    if (originalPrevious === undefined) {
+      delete process.env.ADMIN_SECRET_PREVIOUS
+    } else {
+      process.env.ADMIN_SECRET_PREVIOUS = originalPrevious
+    }
+  })
+
+  it('accepts the previous secret while ADMIN_SECRET_PREVIOUS is set', () => {
+    process.env.ADMIN_SECRET = 'new-secret'
+    process.env.ADMIN_SECRET_PREVIOUS = 'old-secret'
+    const req = mockRequest({ 'x-admin-secret': 'old-secret' })
+    expect(isAdminAuthorized(req)).toBe(true)
+  })
+
+  it('accepts the new secret while ADMIN_SECRET_PREVIOUS is set', () => {
+    process.env.ADMIN_SECRET = 'new-secret'
+    process.env.ADMIN_SECRET_PREVIOUS = 'old-secret'
+    const req = mockRequest({ 'x-admin-secret': 'new-secret' })
+    expect(isAdminAuthorized(req)).toBe(true)
+  })
+
+  it('rejects the previous secret once ADMIN_SECRET_PREVIOUS is removed', () => {
+    process.env.ADMIN_SECRET = 'new-secret'
+    delete process.env.ADMIN_SECRET_PREVIOUS
+    const req = mockRequest({ 'x-admin-secret': 'old-secret' })
+    expect(isAdminAuthorized(req)).toBe(false)
+  })
+
+  it('fails closed when only ADMIN_SECRET_PREVIOUS is configured', () => {
+    delete process.env.ADMIN_SECRET
+    process.env.ADMIN_SECRET_PREVIOUS = 'old-secret'
+    const req = mockRequest({ 'x-admin-secret': 'old-secret' })
+    expect(isAdminAuthorized(req)).toBe(false)
+  })
+
+  it('rejects a wrong value while both secrets are set', () => {
+    process.env.ADMIN_SECRET = 'new-secret'
+    process.env.ADMIN_SECRET_PREVIOUS = 'old-secret'
+    const req = mockRequest({ 'x-admin-secret': 'neither' })
     expect(isAdminAuthorized(req)).toBe(false)
   })
 })

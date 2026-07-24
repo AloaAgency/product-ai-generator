@@ -33,7 +33,6 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 
 // Parse --limit flag
-const limitArg = process.argv.find((a) => a.startsWith('--limit'))
 const limitIdx = process.argv.indexOf('--limit')
 const LIMIT = limitIdx !== -1 ? parseInt(process.argv[limitIdx + 1], 10) || 50 : 50
 

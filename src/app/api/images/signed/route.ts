@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { SIGNED_URL_TTL_SECONDS, createSignedUrlMap } from '@/lib/gallery-media'
+import { logger } from '@/lib/server-logger'
 
-const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const MAX_BATCH_SIZE = 24
 
 type SignedImageUrls = {
@@ -45,25 +46,10 @@ export async function POST(request: NextRequest) {
       videoItems.flatMap((img) => [img.storage_path, img.thumb_storage_path].filter(Boolean) as string[])
     ))
 
-    const [signedImageResult, signedVideoResult] = await Promise.all([
-      imagePaths.length > 0
-        ? supabase.storage.from('generated-images').createSignedUrls(imagePaths, SIGNED_URL_TTL_SECONDS)
-        : Promise.resolve({ data: null }),
-      videoPaths.length > 0
-        ? supabase.storage.from('generated-videos').createSignedUrls(videoPaths, SIGNED_URL_TTL_SECONDS)
-        : Promise.resolve({ data: null }),
+    const [{ map: signedImages }, { map: signedVideos }] = await Promise.all([
+      createSignedUrlMap(supabase, 'generated-images', imagePaths),
+      createSignedUrlMap(supabase, 'generated-videos', videoPaths),
     ])
-
-    const signedImages = new Map<string, string>(
-      (signedImageResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
-    )
-    const signedVideos = new Map<string, string>(
-      (signedVideoResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
-    )
 
     const expiresAt = Date.now() + SIGNED_URL_TTL_SECONDS * 1000
     const signedUrls: Record<string, SignedImageUrls> = {}
@@ -91,7 +77,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ signed_urls: signedUrls })
   } catch (err) {
-    console.error('[ImagesSignedBatch] Error:', err)
+    logger.error('[ImagesSignedBatch] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

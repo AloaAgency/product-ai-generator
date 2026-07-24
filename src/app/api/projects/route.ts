@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { parseRequestBody, MAX_LIST_ROWS, MAX_NAME_LENGTH, MAX_DESCRIPTION_LENGTH } from '@/lib/request-guards'
+import { logger } from '@/lib/server-logger'
 
 const PLACEHOLDER_USER_ID = '00000000-0000-0000-0000-000000000000'
-
-const MAX_NAME_LENGTH = 500
-const MAX_DESCRIPTION_LENGTH = 5000
 
 export async function GET() {
   try {
@@ -14,11 +13,12 @@ export async function GET() {
       .from(T.projects)
       .select('*')
       .order('created_at', { ascending: false })
+      .limit(MAX_LIST_ROWS)
 
-    if (error) { console.error('[Projects GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Projects GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[Projects GET] Unexpected error:', err)
+    logger.error('[Projects GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -26,10 +26,9 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
     const { name, description, global_style_settings } = body
 
     if (!name) {
@@ -53,10 +52,10 @@ export async function POST(request: NextRequest) {
       .select()
       .single()
 
-    if (error) { console.error('[Projects POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Projects POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
   } catch (err) {
-    console.error('[Projects POST] Unexpected error:', err)
+    logger.error('[Projects POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

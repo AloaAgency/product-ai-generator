@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { requireUuid } from '@/lib/request-guards'
-
-const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
+import { SIGNED_URL_TTL_SECONDS } from '@/lib/gallery-media'
+import { logger } from '@/lib/server-logger'
 
 export async function GET(
   _request: NextRequest,
@@ -44,8 +44,15 @@ export async function GET(
       return signedError ? null : (signed?.signedUrl ?? null)
     }
 
+    // Videos only need the play + download URLs, but those two storage calls are
+    // independent — sign them together instead of awaiting one after the other.
     const [signedUrl, thumbSignedUrl, previewSignedUrl, downloadUrl] = image.media_type === 'video'
-      ? [await signPath(image.storage_path), null, null, await signDownloadPath(image.storage_path)]
+      ? await Promise.all([
+          signPath(image.storage_path),
+          Promise.resolve<string | null>(null),
+          Promise.resolve<string | null>(null),
+          signDownloadPath(image.storage_path),
+        ])
       : await Promise.all([
           signPath(image.storage_path),
           signPath(image.thumb_storage_path),
@@ -62,7 +69,7 @@ export async function GET(
       expires_at: Date.now() + SIGNED_URL_TTL_SECONDS * 1000,
     })
   } catch (err) {
-    console.error('[ImageSigned] Error:', err)
+    logger.error('[ImageSigned] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

@@ -139,8 +139,8 @@ async function run() {
         if (succeeded % 10 === 0) {
           console.log(`  ... ${succeeded} thumbnails created`)
         }
-      } catch (err) {
-        console.error(`  [${shortId}] Error: ${err.message}`)
+      } catch {
+        console.error(`  [${shortId}] Unexpected thumbnail processing error`)
         failed++
       }
     }
@@ -149,7 +149,7 @@ async function run() {
   console.log(`\nDone! Processed: ${processed}, Succeeded: ${succeeded}, Failed: ${failed}`)
 }
 
-run().catch((err) => {
-  console.error('Fatal error:', err)
+run().catch(() => {
+  console.error('Fatal thumbnail backfill error')
   process.exit(1)
 })

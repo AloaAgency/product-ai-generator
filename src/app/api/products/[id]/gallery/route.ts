@@ -8,44 +8,16 @@ import {
   sanitizeApprovalStatus,
   sanitizePublicErrorMessage,
 } from '@/lib/request-guards'
+import {
+  GALLERY_IMAGE_SELECT,
+  type GalleryImageRecord,
+  collectGalleryMediaPaths,
+  createSignedUrlMap,
+  resolveGallerySignedUrls,
+} from '@/lib/gallery-media'
+import { logger } from '@/lib/server-logger'
 
-const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
 const DEFAULT_PAGE_SIZE = 48
-const GALLERY_IMAGE_SELECT = [
-  'id',
-  'product_id',
-  'job_id',
-  'scene_id',
-  'scene_name',
-  'variation_number',
-  'storage_path',
-  'thumb_storage_path',
-  'preview_storage_path',
-  'mime_type',
-  'file_size',
-  'approval_status',
-  'notes',
-  'media_type',
-  'created_at',
-].join(', ')
-
-type GalleryImageRecord = {
-  id: string
-  product_id: string | null
-  job_id: string | null
-  scene_id: string | null
-  scene_name: string | null
-  variation_number: number | null
-  storage_path: string | null
-  thumb_storage_path: string | null
-  preview_storage_path: string | null
-  mime_type: string | null
-  file_size: number | null
-  approval_status: string | null
-  notes: string | null
-  media_type: string | null
-  created_at: string | null
-}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyImageFilters(q: any, {
@@ -103,11 +75,6 @@ export async function GET(
       supabase.from(T.generated_images).select('id', { count: 'exact', head: true }),
       { productId, sceneId, approvalStatus, mediaType }
     )
-    const { count: totalCount, error: countError } = await countQuery
-
-    if (countError) {
-      return NextResponse.json({ error: 'Failed to count images' }, { status: 500 })
-    }
 
     let imagesQuery = applyImageFilters(
       supabase.from(T.generated_images).select(GALLERY_IMAGE_SELECT),
@@ -126,10 +93,20 @@ export async function GET(
 
     imagesQuery = imagesQuery.range(offset, offset + limit - 1)
 
-    const { data: images, error: imagesError } = await imagesQuery as {
-      data: GalleryImageRecord[] | null
-      error: { message: string } | null
+    // Count and page-fetch are independent — run them in one round-trip instead of serially.
+    const [{ count: totalCount, error: countError }, imagesResult] = await Promise.all([
+      countQuery,
+      imagesQuery as Promise<{
+        data: GalleryImageRecord[] | null
+        error: { message: string } | null
+      }>,
+    ])
+
+    if (countError) {
+      return NextResponse.json({ error: 'Failed to count images' }, { status: 500 })
     }
+
+    const { data: images, error: imagesError } = imagesResult
 
     if (imagesError) {
       return NextResponse.json({ error: 'Failed to fetch images' }, { status: 500 })
@@ -186,68 +163,23 @@ export async function GET(
       jobRefSetsMap.set(row.job_id, arr)
     }
 
-    const imageItems = (images || []).filter((img) => img.media_type !== 'video')
-    const thumbPaths = imageItems
-      .map((img) => img.thumb_storage_path)
-      .filter(Boolean) as string[]
-    const previewPaths = imageItems
-      .map((img) => img.preview_storage_path)
-      .filter(Boolean) as string[]
-    const fallbackPaths = imageItems
-      .filter((img) => !img.thumb_storage_path && !img.preview_storage_path && img.storage_path)
-      .map((img) => img.storage_path)
-      .filter(Boolean) as string[]
-    const allImageBucketPaths = Array.from(new Set([...thumbPaths, ...previewPaths, ...fallbackPaths]))
-
-    const videoItems = (images || []).filter((img) => img.media_type === 'video')
-    const videoPaths = videoItems
-      .map((video) => video.storage_path)
-      .filter(Boolean) as string[]
-    const videoThumbPaths = videoItems
-      .map((video) => video.thumb_storage_path)
-      .filter(Boolean) as string[]
-    const allVideoBucketPaths = Array.from(new Set([...videoPaths, ...videoThumbPaths]))
+    const { imagePaths, videoPaths } = collectGalleryMediaPaths(images || [])
 
     const [signedImageResult, signedVideoResult] = await Promise.all([
-      allImageBucketPaths.length > 0
-        ? supabase.storage.from('generated-images').createSignedUrls(allImageBucketPaths, SIGNED_URL_TTL_SECONDS)
-        : Promise.resolve({ data: null, error: null }),
-      allVideoBucketPaths.length > 0
-        ? supabase.storage.from('generated-videos').createSignedUrls(allVideoBucketPaths, SIGNED_URL_TTL_SECONDS)
-        : Promise.resolve({ data: null, error: null }),
+      createSignedUrlMap(supabase, 'generated-images', imagePaths),
+      createSignedUrlMap(supabase, 'generated-videos', videoPaths),
     ])
 
     if (signedImageResult.error) {
-      console.error('[Gallery] Failed to sign image URLs:', signedImageResult.error.message)
+      logger.error('[Gallery] Failed to sign image URLs:', signedImageResult.error)
     }
     if (signedVideoResult.error) {
-      console.error('[Gallery] Failed to sign video URLs:', signedVideoResult.error.message)
+      logger.error('[Gallery] Failed to sign video URLs:', signedVideoResult.error)
     }
-
-    const signedImageBucket = new Map<string, string>(
-      (signedImageResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
-    )
-    const signedVideos = new Map<string, string>(
-      (signedVideoResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
-    )
 
     const signedImages = (images || []).map((img) => ({
       ...img,
-      public_url: img.media_type === 'video'
-        ? (img.storage_path ? (signedVideos.get(img.storage_path) ?? null) : null)
-        : (!img.thumb_storage_path && !img.preview_storage_path && img.storage_path
-            ? (signedImageBucket.get(img.storage_path) ?? null)
-            : null),
-      preview_public_url: img.media_type === 'video'
-        ? null
-        : (img.preview_storage_path ? (signedImageBucket.get(img.preview_storage_path) ?? null) : null),
-      thumb_public_url: img.media_type === 'video'
-        ? (img.thumb_storage_path ? (signedVideos.get(img.thumb_storage_path) ?? null) : null)
-        : (img.thumb_storage_path ? (signedImageBucket.get(img.thumb_storage_path) ?? null) : null),
+      ...resolveGallerySignedUrls(img, signedImageResult.map, signedVideoResult.map),
       prompt_template_id: img.job_id ? (jobTemplateMap.get(img.job_id) ?? null) : null,
       prompt: img.job_id ? (jobPromptMap.get(img.job_id) ?? null) : null,
       reference_sets: img.job_id ? (jobRefSetsMap.get(img.job_id) ?? []) : [],
@@ -261,7 +193,7 @@ export async function GET(
       has_more: offset + signedImages.length < (totalCount ?? signedImages.length),
     })
   } catch (err) {
-    console.error(`[Gallery] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[Gallery] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

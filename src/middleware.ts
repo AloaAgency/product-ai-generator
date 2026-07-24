@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { AUTH_COOKIE_NAME, deriveAuthToken, timingResistantEqual } from '@/lib/auth-constants'
 import { applySecurityHeaders } from '@/lib/security-headers'
+import { logger } from '@/lib/server-logger'
 
 // Static parts of the login page HTML, split so the form (which varies per request)
 // can be inserted between them without re-declaring the surrounding boilerplate.
@@ -77,7 +78,18 @@ let _tokenPromise: Promise<string> | null = null
 
 function getExpectedToken(password: string): Promise<string> {
   if (_tokenPromise === null) {
-    _tokenPromise = deriveAuthToken(password)
+    const pending = deriveAuthToken(password)
+    // A rejected derivation must not be cached for the isolate's lifetime —
+    // that would turn a transient Web Crypto fault into a permanent lockout
+    // (every request fails closed until the isolate restarts). Clear the slot
+    // so the next request retries; the current caller still sees the rejection
+    // and fails closed for this request only. Attaching the handler here also
+    // keeps the module-load warm-up call below from surfacing as an unhandled
+    // promise rejection.
+    pending.catch(() => {
+      if (_tokenPromise === pending) _tokenPromise = null
+    })
+    _tokenPromise = pending
   }
   return _tokenPromise
 }
@@ -141,13 +153,20 @@ export async function middleware(request: NextRequest) {
       )
     }
 
-    // Show login page, preserving the intended destination. Return 200 so the
-    // browser renders the gate as a normal document instead of a failed request.
+    // Show login page, preserving the intended destination (path AND query —
+    // the login route validates and forwards both). Return 200 so the browser
+    // renders the gate as a normal document instead of a failed request.
     // cache-control: no-store prevents CDNs or proxies from caching the login
     // gate and serving it to users who subsequently authenticate.
-    const showError = request.nextUrl.searchParams.has('error')
+    const params = new URLSearchParams(request.nextUrl.search)
+    const showError = params.has('error')
+    // `error` is internal to the login flow (appended by a failed POST) — strip
+    // it so a successful login doesn't carry it into the destination URL.
+    params.delete('error')
+    const query = params.toString()
+    const destination = pathname + (query ? `?${query}` : '')
     return withSecurityHeaders(
-      new NextResponse(loginPage(showError, pathname), {
+      new NextResponse(loginPage(showError, destination), {
         status: 200,
         headers: {
           'content-type': 'text/html; charset=utf-8',
@@ -160,7 +179,7 @@ export async function middleware(request: NextRequest) {
     // runtime fault unrelated to auth), return a structured error response
     // instead of letting the middleware throw an unhandled exception, which
     // would surface as an opaque 500 with no useful headers.
-    console.error('[Middleware] Unexpected error', err)
+    logger.error('[Middleware] Unexpected error', err instanceof Error ? err.message : String(err))
     if (pathname.startsWith('/api/')) {
       return withSecurityHeaders(
         NextResponse.json(
@@ -179,8 +198,22 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Exclude static assets, images, and known public files from middleware
-  // to avoid cookie-check overhead on requests that never need auth.
-  // txt covers robots.txt; xml covers sitemaps; webmanifest covers PWA manifests.
-  matcher: ['/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?|ttf|otf|css|js|map|txt|xml|webmanifest)$).*)'],
+  matcher: [
+    // API routes are matched unconditionally — the asset-extension exclusion
+    // below must never apply to them. Dynamic API segments accept arbitrary
+    // values (e.g. /api/products/[id] matches /api/products/x.css), so an
+    // extension-suffixed path would otherwise skip the middleware entirely and
+    // reach a service-role route handler with no auth check at all. Route
+    // handlers here rely on the middleware as their only auth layer.
+    '/api/:path*',
+    // Pages: exclude Next internals, static assets, and known public files
+    // to avoid cookie-check overhead on requests that never need auth.
+    // txt covers robots.txt; xml covers sitemaps; webmanifest covers PWA
+    // manifests. `api/` is excluded because the pattern above covers it.
+    // Residual exposure: a dynamic page path ending in an excluded extension
+    // (e.g. /products/x.css) skips the gate and serves the app shell — but the
+    // shell contains no data (all data fetches hit gated /api routes) and the
+    // same markup ships in the public /_next/static bundles anyway.
+    '/((?!api/|_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?|ttf|otf|css|js|map|txt|xml|webmanifest)$).*)',
+  ],
 }

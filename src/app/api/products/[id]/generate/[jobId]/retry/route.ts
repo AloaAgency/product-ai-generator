@@ -4,6 +4,7 @@ import { processGenerationJob } from '@/lib/generation-worker'
 import { logError } from '@/lib/error-logger'
 import { T } from '@/lib/db-tables'
 import { kickWorkerForJob, shouldRunVideoGenerationInline } from '@/lib/video-job-request'
+import { logger } from '@/lib/server-logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -55,7 +56,7 @@ export async function POST(
     if (shouldRunVideoGenerationInline()) {
       void processGenerationJob(jobId).catch(async (err) => {
         const message = err instanceof Error ? err.message : 'Inline generation job failed'
-        console.error('[RetryGeneration] Inline job failed:', err)
+        logger.error('[RetryGeneration] Inline job failed:', err)
         await logError({
           productId,
           errorMessage: message,
@@ -69,7 +70,7 @@ export async function POST(
 
     return NextResponse.json({ job: updated }, { status: 200 })
   } catch (err) {
-    console.error('[RetryGeneration] Error:', err)
+    logger.error('[RetryGeneration] Error:', err)
     await logError({
       productId,
       errorMessage: err instanceof Error ? err.message : 'Internal server error',

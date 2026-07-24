@@ -6,7 +6,10 @@ const sanitizeUrlCandidate = (value?: string | null) => {
   if (!value) return null
   const trimmed = value.trim()
   if (!trimmed) return null
-  if (trimmed.startsWith('/')) return trimmed
+  // Browsers normalize backslashes in special-scheme URLs, so `/\\attacker`
+  // can become a protocol-relative request just like `//attacker`. Only allow
+  // unambiguous root-relative paths here.
+  if (trimmed.startsWith('/')) return trimmed.includes('\\') || trimmed.startsWith('//') ? null : trimmed
 
   try {
     const parsed = new URL(trimmed)
@@ -90,6 +93,28 @@ export const getLightboxDisplayName = ({
   currentIndex: number
 }) => fileName || `Variation ${variationNumber ?? currentIndex + 1}`
 
+// Format an asset's generation timestamp for the lightbox header. Returns a compact
+// label (e.g. "Jul 1, 2026") plus a full date+time for the hover tooltip, so users can
+// correlate assets with generation dates when troubleshooting billing. Returns null for
+// missing/unparseable timestamps.
+export const formatGeneratedAt = (
+  createdAt?: string | null
+): { short: string; full: string } | null => {
+  if (!createdAt) return null
+  const date = new Date(createdAt)
+  if (Number.isNaN(date.getTime())) return null
+  return {
+    short: date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
+    full: date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }),
+  }
+}
+
 export const getLightboxWarmupIndexes = (currentIndex: number) => [
   currentIndex,
   currentIndex - 1,
@@ -145,6 +170,7 @@ export type LightboxKeyboardAction =
   | 'reject'
   | 'download'
   | 'requestChanges'
+  | 'copyPrompt'
   | 'delete'
   | 'blurNotes'
   | 'none'
@@ -198,6 +224,9 @@ export const getKeyboardAction = ({
     case 'c':
     case 'C':
       return { action: 'requestChanges', preventDefault: false }
+    case 'p':
+    case 'P':
+      return { action: 'copyPrompt', preventDefault: false }
     default:
       return { action: 'none', preventDefault: false }
   }

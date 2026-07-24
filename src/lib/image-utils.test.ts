@@ -23,6 +23,7 @@ import {
   createPreview,
   createThumbnailAndPreview,
   extractVideoThumbnail,
+  assertImageDimensions,
 } from './image-utils'
 
 // ---------------------------------------------------------------------------
@@ -423,6 +424,15 @@ describe('compressReferenceImage', () => {
     await expect(compressReferenceImage(garbage)).rejects.toThrow()
   })
 
+  it('includes context and a diagnostic detail when metadata cannot be read', async () => {
+    const garbage = Buffer.from('this is definitely not an image format at all')
+    // The contextualised wrapper must survive, and Sharp's own diagnosis is
+    // appended after an em-dash so corrupt-vs-unsupported is distinguishable.
+    await expect(compressReferenceImage(garbage)).rejects.toThrow(
+      /^compressReferenceImage: could not read image metadata .* — .+/
+    )
+  })
+
   it('throws when image dimensions exceed the per-side limit (pixel bomb guard)', async () => {
     // Sharp's create helper lets us synthesize an image with huge declared
     // dimensions without actually allocating the full bitmap in the test.
@@ -434,6 +444,113 @@ describe('compressReferenceImage', () => {
       .toBuffer()
     await expect(compressReferenceImage(huge)).rejects.toThrow(
       /dimensions.*exceed maximum/i
+    )
+  })
+
+  // ------------------------------------------------------------------
+  // Animated inputs — data-loss guard
+  // ------------------------------------------------------------------
+
+  it('passes through an animated image even when it exceeds the dimension threshold', async () => {
+    // Two 5000px-wide frames joined into an animated WebP. Width exceeds the
+    // 4096px resize trigger, but re-encoding would flatten the animation to a
+    // single static frame (Sharp decodes only page 0 by default) — and the
+    // caller deletes the original afterwards, making that loss permanent.
+    // The frames must differ in content: identical frames are deduplicated
+    // into a single page by the WebP encoder.
+    const frame1 = await sharp({
+      create: { width: 5000, height: 40, channels: 3, background: { r: 255, g: 0, b: 0 } },
+    }).png().toBuffer()
+    const frame2 = await sharp({
+      create: { width: 5000, height: 40, channels: 3, background: { r: 0, g: 0, b: 255 } },
+    }).png().toBuffer()
+    const animated = await sharp([frame1, frame2], { join: { animated: true } })
+      .webp()
+      .toBuffer()
+
+    // Sanity: confirm the synthetic input really is multi-page and oversized.
+    const inMeta = await sharp(animated).metadata()
+    expect(inMeta.pages).toBe(2)
+    expect(inMeta.width).toBeGreaterThan(4096)
+
+    const result = await compressReferenceImage(animated)
+    expect(result.wasCompressed).toBe(false)
+    expect(result.buffer).toBe(animated) // same reference — original preserved
+    expect(result.mimeType).toBe('image/webp')
+
+    // All frames survive.
+    const outMeta = await sharp(result.buffer).metadata()
+    expect(outMeta.pages).toBe(2)
+  })
+
+  it('still enforces the pixel-bomb dimension guard for animated images', async () => {
+    // The animated passthrough must not become a bypass for the memory guard:
+    // per-page dimensions are validated before the pages check. GIF output is
+    // used because WebP cannot encode >16383px per side; frames must differ so
+    // the encoder does not deduplicate them into a single page.
+    const frame1 = await sharp({
+      create: { width: 33_000, height: 10, channels: 3, background: { r: 255, g: 0, b: 0 } },
+    }).png().toBuffer()
+    const frame2 = await sharp({
+      create: { width: 33_000, height: 10, channels: 3, background: { r: 0, g: 0, b: 255 } },
+    }).png().toBuffer()
+    const animated = await sharp([frame1, frame2], { join: { animated: true } })
+      .gif()
+      .toBuffer()
+    await expect(compressReferenceImage(animated)).rejects.toThrow(
+      /dimensions.*exceed maximum/i
+    )
+  })
+
+  it('throws at the exact MAX_SAFE_INPUT_DIMENSION boundary (pixel bomb guard)', async () => {
+    // A 32 768-px wide image passes the old `>` check but should be rejected.
+    // Decoded at 32 768×100 RGBA that is ~13 MB, but the guard fires before
+    // any decode, so the test is cheap to run.
+    const atLimit = await sharp({
+      create: { width: 32_768, height: 100, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    })
+      .png()
+      .toBuffer()
+    await expect(compressReferenceImage(atLimit)).rejects.toThrow(
+      /dimensions.*exceed maximum/i
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// assertImageDimensions — memory-safety guard (pure, no bitmap allocation)
+//
+// Tested directly with plain numbers so the total-area branch can be exercised
+// without materialising a multi-hundred-megapixel bitmap in the test process.
+// ---------------------------------------------------------------------------
+
+describe('assertImageDimensions', () => {
+  it('accepts an image comfortably within both limits', () => {
+    expect(() => assertImageDimensions(4096, 4096, 'test')).not.toThrow()
+  })
+
+  it('rejects when a single axis reaches the per-side ceiling', () => {
+    expect(() => assertImageDimensions(32_768, 100, 'test')).toThrow(
+      /dimensions.*exceed maximum/i
+    )
+  })
+
+  it('rejects when the total area exceeds the max even though each axis is in-range', () => {
+    // 20000 × 20000 = 400 MP: both axes are below the 32 768 per-side ceiling
+    // yet the decoded area (~1.6 GB as RGBA) is a memory bomb.
+    expect(() => assertImageDimensions(20_000, 20_000, 'test')).toThrow(
+      /area.*exceeds maximum decodable area/i
+    )
+  })
+
+  it('accepts a large-but-thin image whose total area stays under the ceiling', () => {
+    // 30000 × 8000 = 240 MP < 268,402,689, and neither axis hits 32 768.
+    expect(() => assertImageDimensions(30_000, 8_000, 'test')).not.toThrow()
+  })
+
+  it('includes the provided context in the thrown message', () => {
+    expect(() => assertImageDimensions(20_000, 20_000, 'myContext')).toThrow(
+      /^myContext:/
     )
   })
 })

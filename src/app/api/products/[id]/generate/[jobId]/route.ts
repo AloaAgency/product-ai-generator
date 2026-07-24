@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
-
-const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60
+import { createSignedUrlMap } from '@/lib/gallery-media'
+import { logger } from '@/lib/server-logger'
 
 export async function GET(
   _request: NextRequest,
@@ -44,29 +44,17 @@ export async function GET(
       img.preview_storage_path,
     ].filter(Boolean)) as string[]
 
-    const videoPaths = videoItems
-      .map((img) => img.storage_path)
-      .filter(Boolean) as string[]
+    // Video thumbnails live in the generated-videos bucket alongside the
+    // videos themselves, so they must be signed there — not in the image bucket.
+    const videoPaths = videoItems.flatMap((img) => [
+      img.storage_path,
+      img.thumb_storage_path,
+    ].filter(Boolean)) as string[]
 
-    const [signedImagesResult, signedVideosResult] = await Promise.all([
-      imagePaths.length > 0
-        ? supabase.storage.from('generated-images').createSignedUrls(imagePaths, SIGNED_URL_TTL_SECONDS)
-        : Promise.resolve({ data: null }),
-      videoPaths.length > 0
-        ? supabase.storage.from('generated-videos').createSignedUrls(videoPaths, SIGNED_URL_TTL_SECONDS)
-        : Promise.resolve({ data: null }),
+    const [{ map: signedImagesMap }, { map: signedVideosMap }] = await Promise.all([
+      createSignedUrlMap(supabase, 'generated-images', imagePaths),
+      createSignedUrlMap(supabase, 'generated-videos', videoPaths),
     ])
-
-    const signedImagesMap = new Map<string, string>(
-      (signedImagesResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
-    )
-    const signedVideosMap = new Map<string, string>(
-      (signedVideosResult.data || [])
-        .filter((item) => item?.signedUrl && item?.path)
-        .map((item) => [item.path!, item.signedUrl])
-    )
 
     const signedImages = (images || []).map((img) => ({
       ...img,
@@ -79,13 +67,15 @@ export async function GET(
         ? (signedImagesMap.get(img.preview_storage_path) ?? null)
         : null,
       thumb_public_url: img.thumb_storage_path
-        ? (signedImagesMap.get(img.thumb_storage_path) ?? null)
+        ? (img.media_type === 'video'
+          ? (signedVideosMap.get(img.thumb_storage_path) ?? null)
+          : (signedImagesMap.get(img.thumb_storage_path) ?? null))
         : null,
     }))
 
     return NextResponse.json({ job, images: signedImages })
   } catch (err) {
-    console.error('[JobStatus] Error:', err)
+    logger.error('[JobStatus] Error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -125,13 +115,13 @@ export async function DELETE(
       .eq('id', jobId)
 
     if (deleteError) {
-      console.error('[Job DELETE]', deleteError)
+      logger.error('[Job DELETE]', deleteError)
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
     return NextResponse.json({ deleted: jobId })
   } catch (err) {
-    console.error('[Job DELETE]', err)
+    logger.error('[Job DELETE]', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

@@ -37,6 +37,7 @@ export default function GeneratePage({
   const { id } = use(params)
   const searchParams = useSearchParams()
   const initialPrompt = searchParams.get('prompt') ?? undefined
+  const initialTemplateId = searchParams.get('template') ?? undefined
   const initialReferenceSets = parseInitialReferenceSets(searchParams.get('reference_sets'))
   const [activeTab, setActiveTab] = useState<'image' | 'video'>('image')
 
@@ -75,6 +76,7 @@ export default function GeneratePage({
         <ImageGenerateTab
           productId={id}
           initialPrompt={initialPrompt}
+          initialTemplateId={initialTemplateId}
           initialReferenceSets={initialReferenceSets}
         />
       ) : (

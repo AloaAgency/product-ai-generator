@@ -1,7 +1,19 @@
 import type { NextRequest } from 'next/server'
 
-/** Cookie name used by the site-password auth layer. */
-export const AUTH_COOKIE_NAME = 'site-auth'
+/**
+ * Cookie name used by the site-password auth layer.
+ *
+ * The `__Host-` prefix makes the browser itself refuse the cookie unless it is
+ * set with Secure, Path=/, and no Domain attribute — so a regression that
+ * weakens those attributes fails loudly at the browser instead of silently
+ * shipping, and a sibling subdomain (relevant when deployed under a custom
+ * apex like aloa.agency) can never plant/override this cookie via a
+ * Domain-scoped copy (cookie tossing / session fixation).
+ *
+ * Renaming this constant invalidates all live sessions (users re-enter the
+ * site password once); keep the prefix if the base name ever changes.
+ */
+export const AUTH_COOKIE_NAME = '__Host-site-auth'
 
 /**
  * XOR-based timing-resistant string comparison.
@@ -18,11 +30,13 @@ export const AUTH_COOKIE_NAME = 'site-auth'
  */
 export function timingResistantEqual(provided: string, expected: string): boolean {
   const n = expected.length
+  const pLen = provided.length
   // Accumulate length mismatch into diff so we never return early based on length.
-  let diff = provided.length !== n ? 1 : 0
+  let diff = pLen !== n ? 1 : 0
   for (let i = 0; i < n; i++) {
-    // For shorter `provided`, wrap index so charCodeAt never returns NaN.
-    diff |= provided.charCodeAt(i % (provided.length || 1)) ^ expected.charCodeAt(i)
+    // Use 0 for out-of-bounds indices in `provided` instead of the modulo-wrap
+    // trick, which relied on silent NaN→0 coercion when provided is empty.
+    diff |= (i < pLen ? provided.charCodeAt(i) : 0) ^ expected.charCodeAt(i)
   }
   return diff === 0
 }
@@ -36,13 +50,17 @@ export function timingResistantEqual(provided: string, expected: string): boolea
  * This function is intentionally kept Edge Runtime-safe for future middleware use.
  *
  * Fails closed: if ADMIN_SECRET is not configured, all requests are denied.
+ * During rotation, ADMIN_SECRET_PREVIOUS is also accepted — mirrors
+ * `isAdminAuthorizedNode` / the rotation procedure in server-secrets.ts.
  */
 export function isAdminAuthorized(request: NextRequest): boolean {
   const adminSecret = process.env.ADMIN_SECRET
   if (!adminSecret) return false
   const provided = request.headers.get('x-admin-secret') ?? ''
   if (provided.length === 0) return false
-  return timingResistantEqual(provided, adminSecret)
+  if (timingResistantEqual(provided, adminSecret)) return true
+  const previousSecret = process.env.ADMIN_SECRET_PREVIOUS
+  return Boolean(previousSecret) && timingResistantEqual(provided, previousSecret as string)
 }
 
 /**

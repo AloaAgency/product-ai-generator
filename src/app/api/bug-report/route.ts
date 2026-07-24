@@ -6,35 +6,54 @@ import {
   MAX_BUG_REPORT_FILE_SIZE,
   MAX_BUG_REPORT_IMAGES,
   MAX_BUG_REPORT_TITLE_LENGTH,
+  hasAllowedBugReportFileSignature,
   normalizeBugReportMultiline,
   normalizeBugReportSingleLine,
 } from '@/components/bugReportWidget.helpers'
+import { redactSensitiveText } from '@/lib/redact-secrets'
+import { logger } from '@/lib/server-logger'
 
 const BFT_API_KEY = process.env.BFT_API_KEY?.replace(/"/g, '') || ''
 const BFT_BASE_URL = process.env.BFT_BASE_URL?.replace(/"/g, '') || ''
+
+// Bound outbound calls to the bug tracker so a hung/slow tracker fails fast
+// into the surrounding catch instead of holding the request open until the
+// platform maxDuration. Mirrors the AbortController timeout used for the
+// worker-kick fetch in video-job-request.ts.
+const BFT_REQUEST_TIMEOUT_MS = 15_000
+
+async function trackerFetch(input: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), BFT_REQUEST_TIMEOUT_MS)
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timeout)
+  }
+}
 
 interface ImageUpload {
   file: File
   caption: string
 }
 
-const SECRET_TEXT_PATTERNS = [
-  /([?&](?:access_token|api[_-]?key|authorization|signature|sig|token|x-amz-[^=]+|x-goog-[^=]+)=)[^&\s]+/gi,
-  /((?:api[_-]?key|authorization|secret|signature|token|cookie|set-cookie)\s*[:=]\s*)[^\s,;]+/gi,
-]
-
-const redactSensitiveText = (value: string) =>
-  SECRET_TEXT_PATTERNS.reduce((current, pattern) => current.replace(pattern, '$1[redacted]'), value)
-
+// Redaction is delegated to the shared implementation in redact-secrets.ts.
+// The local pattern list this replaced was weaker (no Bearer tokens, no raw
+// JWTs, no Google `AIza…` keys) — a drift risk this route can't afford since
+// it holds BFT_API_KEY and logs raw tracker responses.
 const getSafeBugReportError = (error: unknown) =>
   redactSensitiveText(error instanceof Error ? error.message : String(error ?? 'unknown error')).slice(0, 240)
 
-const validateBugReportImage = (file: File) => {
+const validateBugReportImage = async (file: File) => {
   if (!ALLOWED_BUG_REPORT_TYPES.includes(file.type)) {
     return 'Unsupported screenshot format'
   }
   if (file.size > MAX_BUG_REPORT_FILE_SIZE) {
     return 'Screenshot exceeds 5MB limit'
+  }
+  const header = new Uint8Array(await file.slice(0, 12).arrayBuffer())
+  if (!hasAllowedBugReportFileSignature(file.type, header)) {
+    return 'Screenshot content does not match its declared format'
   }
   return null
 }
@@ -51,7 +70,7 @@ async function uploadImageToTracker(itemId: string, image: ImageUpload): Promise
     formData.append('caption', image.caption)
     formData.append('uploaded_by', 'aloa-ai-product-imager')
 
-    const response = await fetch(`${BFT_BASE_URL}/public/items/${itemId}/attachments`, {
+    const response = await trackerFetch(`${BFT_BASE_URL}/public/items/${itemId}/attachments`, {
       method: 'POST',
       headers: { 'x-api-key': BFT_API_KEY },
       body: formData,
@@ -59,13 +78,13 @@ async function uploadImageToTracker(itemId: string, image: ImageUpload): Promise
 
     if (!response.ok) {
       const raw = await response.text()
-      console.error(`[BugReport] Upload failed (${response.status}): ${redactSensitiveText(raw)}`)
+      logger.error(`[BugReport] Upload failed (${response.status}): ${redactSensitiveText(raw)}`)
       return false
     }
 
     return true
   } catch (error) {
-    console.error('[BugReport] Upload exception:', getSafeBugReportError(error))
+    logger.error('[BugReport] Upload exception:', getSafeBugReportError(error))
     return false
   }
 }
@@ -98,7 +117,7 @@ export async function POST(request: NextRequest) {
           MAX_BUG_REPORT_CAPTION_LENGTH
         ) || `Screenshot ${i + 1}`
         if (file && file instanceof File) {
-          const imageError = validateBugReportImage(file)
+          const imageError = await validateBugReportImage(file)
           if (imageError) {
             return NextResponse.json({ success: false, message: `${file.name}: ${imageError}` }, { status: 400 })
           }
@@ -106,10 +125,21 @@ export async function POST(request: NextRequest) {
         }
       }
     } else {
-      const body = await request.json()
-      type = body.type
-      title = body.title
-      description = body.description
+      let parsedBody: unknown
+      try {
+        parsedBody = await request.json()
+      } catch {
+        return NextResponse.json(
+          { success: false, message: 'Invalid JSON in request body' },
+          { status: 400 }
+        )
+      }
+      const body = (parsedBody && typeof parsedBody === 'object' && !Array.isArray(parsedBody)
+        ? parsedBody
+        : {}) as { type?: string; title?: string; description?: string }
+      type = body.type as string
+      title = body.title as string
+      description = body.description as string
     }
 
     if (!type || !title || !description) {
@@ -142,7 +172,7 @@ export async function POST(request: NextRequest) {
     let itemId: string | null = null
 
     try {
-      const response = await fetch(`${BFT_BASE_URL}/public/items`, {
+      const response = await trackerFetch(`${BFT_BASE_URL}/public/items`, {
         method: 'POST',
         headers: {
           'x-api-key': BFT_API_KEY,
@@ -152,14 +182,18 @@ export async function POST(request: NextRequest) {
       })
 
       if (response.ok) {
+        // Parse defensively: a 200 with an empty/non-JSON body must not throw
+        // (it would leave trackerResponseOk in a torn state). The item was
+        // created either way, so we still report success — only attachment
+        // upload is skipped when the returned id can't be read.
+        const data = await response.json().catch(() => null)
+        itemId = data?.data?.id ?? null
         trackerResponseOk = true
-        const data = await response.json()
-        itemId = data?.data?.id
       } else {
-        console.error('Bug tracker API error:', redactSensitiveText(await response.text()))
+        logger.error('Bug tracker API error:', redactSensitiveText(await response.text()))
       }
     } catch (trackerError) {
-      console.error('Bug tracker API request failed:', getSafeBugReportError(trackerError))
+      logger.error('Bug tracker API request failed:', getSafeBugReportError(trackerError))
     }
 
     let imagesUploaded = 0
@@ -187,7 +221,7 @@ export async function POST(request: NextRequest) {
       { status: trackerResponseOk ? 200 : 202 }
     )
   } catch (error) {
-    console.error('Error submitting bug report:', getSafeBugReportError(error))
+    logger.error('Error submitting bug report:', getSafeBugReportError(error))
     return NextResponse.json(
       { success: false, message: 'Failed to submit report.' },
       { status: 500 }

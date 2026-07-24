@@ -2,13 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { requireUuid, sanitizePublicErrorMessage } from '@/lib/request-guards'
+import { logger } from '@/lib/server-logger'
 
 async function resolveProject(supabase: ReturnType<typeof createServiceClient>, projectId: string) {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from(T.projects)
     .select('id')
     .eq('id', projectId)
-    .single()
+    .maybeSingle()
+  // A failed lookup must surface as a 500, not masquerade as a 404.
+  if (error) throw new Error(`Failed to look up project: ${error.message}`)
   return data
 }
 
@@ -38,7 +41,7 @@ export async function GET(req: NextRequest) {
     if (error) throw error
     return NextResponse.json(data)
   } catch (err) {
-    console.error(`[ErrorLogs GET] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[ErrorLogs GET] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -67,7 +70,7 @@ export async function DELETE(req: NextRequest) {
     if (error) throw error
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error(`[ErrorLogs DELETE] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
+    logger.error(`[ErrorLogs DELETE] ${sanitizePublicErrorMessage(err, { fallback: 'Unexpected error' })}`)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

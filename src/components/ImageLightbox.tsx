@@ -2,6 +2,7 @@
 
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { FallbackImage } from '@/components/FallbackImage'
 import {
   AlertCircle,
   X,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-react'
 import {
   buildRegenerateUrl,
+  formatGeneratedAt,
   getFixImageHref,
   getFullImageUrl,
   getDisplayImageUrl,
@@ -60,6 +62,9 @@ export interface LightboxImage {
   approval_status?: ApprovalStatus
   prompt?: string | null
   productId?: string | null
+  // Timestamp the asset was generated (from generated_images.created_at). Shown in the
+  // header to help correlate assets with generation dates when troubleshooting billing.
+  created_at?: string | null
   // Reference sets attached to the job that produced this image, used to seed the regenerate form.
   reference_sets?: LightboxReferenceSet[] | null
 }
@@ -99,6 +104,13 @@ const LightboxThumbnailButton = memo(function LightboxThumbnailButton({
   const isApproved = approvalStatus === 'approved'
   const isRejected = approvalStatus === 'rejected'
   const isRequestChanges = approvalStatus === 'request_changes'
+  const approvalLabel = isApproved
+    ? 'approved'
+    : isRejected
+      ? 'rejected'
+      : isRequestChanges
+        ? 'changes requested'
+        : null
 
   return (
     <button
@@ -115,12 +127,22 @@ const LightboxThumbnailButton = memo(function LightboxThumbnailButton({
                 ? 'border-orange-500'
                 : 'border-gray-600 hover:border-gray-400'
       }`}
-      aria-label={`View image ${index + 1}`}
+      aria-label={`View image ${index + 1}${approvalLabel ? `, ${approvalLabel}` : ''}`}
+      aria-current={isActive ? 'true' : undefined}
       data-image-id={id}
     >
-      {thumbUrl && (
-        <img src={thumbUrl} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
-      )}
+      <FallbackImage
+        sources={[thumbUrl]}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        className="h-full w-full object-cover"
+        fallback={(
+          <span className="flex h-full w-full items-center justify-center bg-zinc-900 text-zinc-600">
+            <ImageOff className="h-4 w-4" />
+          </span>
+        )}
+      />
       {isApproved && (
         <div className="absolute inset-0 flex items-center justify-center bg-green-500/30">
           <Check className="w-4 h-4 text-green-500" />
@@ -161,6 +183,8 @@ export function ImageLightbox({
   const notesInputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const preloadCacheRef = useRef<Map<string, Promise<void>>>(new Map())
+  const copyResetTimeoutRef = useRef<number | null>(null)
+  const isUpdatingRef = useRef(false)
 
   const currentImage = images[currentIndex]
   const hasPrev = currentIndex > 0
@@ -188,13 +212,16 @@ export function ImageLightbox({
 
     const img = new window.Image()
     img.decoding = 'async'
-    img.src = url
 
     const pending = (typeof img.decode === 'function'
-      ? img.decode().catch(() => undefined)
+      ? (() => {
+          img.src = url
+          return img.decode().catch(() => undefined)
+        })()
       : new Promise<void>((resolve) => {
           img.onload = () => resolve()
           img.onerror = () => resolve()
+          img.src = url
         }))
       .finally(() => {
         preloadCacheRef.current.set(url, Promise.resolve())
@@ -206,6 +233,14 @@ export function ImageLightbox({
 
   useEffect(() => {
     dialogRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current)
+      }
+    }
   }, [])
 
   const handlePrev = useCallback(() => {
@@ -232,7 +267,8 @@ export function ImageLightbox({
   }, [])
 
   const runUpdatingAction = useCallback(async (action: () => Promise<void>) => {
-    if (!currentImage || isUpdating) return
+    if (!currentImage || isUpdatingRef.current) return
+    isUpdatingRef.current = true
     setIsUpdating(true)
     try {
       await action()
@@ -240,9 +276,10 @@ export function ImageLightbox({
     } catch (error) {
       setErrorNotice(error, 'Failed to update approval. Please try again.')
     } finally {
+      isUpdatingRef.current = false
       setIsUpdating(false)
     }
-  }, [currentImage, isUpdating, setErrorNotice])
+  }, [currentImage, setErrorNotice])
 
   const handleApprovalAction = useCallback(async (targetStatus: Exclude<ApprovalStatus, 'pending' | null>) => {
     if (!currentImage) return
@@ -298,29 +335,35 @@ export function ImageLightbox({
 
   const handleDownload = useCallback(async () => {
     if (!currentImage) return
-    let url = getDownloadImageUrl(currentImage)
-    if (!url && onRequestSignedUrls) {
-      const signed = await onRequestSignedUrls(currentImage.id)
-      url = getDownloadImageUrl(currentImage, signed)
-    }
-    if (!url) {
-      setActionNotice({ type: 'error', message: 'Download is unavailable for this image right now.' })
-      return
-    }
 
     try {
+      let url = getDownloadImageUrl(currentImage)
+      if (!url && onRequestSignedUrls) {
+        const signed = await onRequestSignedUrls(currentImage.id)
+        url = getDownloadImageUrl(currentImage, signed)
+      }
+      if (!url) {
+        setActionNotice({ type: 'error', message: 'Download is unavailable for this image right now.' })
+        return
+      }
+
       const fileName = currentImage.file_name || `product-gen-${currentImage.variation_number || 0}.png`
       const resp = await fetch(url)
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const blob = await resp.blob()
       const blobUrl = URL.createObjectURL(blob)
       const link = document.createElement('a')
-      link.href = blobUrl
-      link.download = fileName
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(blobUrl)
+      try {
+        link.href = blobUrl
+        link.download = fileName
+        document.body.appendChild(link)
+        link.click()
+      } finally {
+        if (link.parentNode) {
+          document.body.removeChild(link)
+        }
+        URL.revokeObjectURL(blobUrl)
+      }
       setActionNotice(null)
     } catch (error) {
       setActionNotice({
@@ -336,7 +379,13 @@ export function ImageLightbox({
       await navigator.clipboard.writeText(currentImage.prompt)
       setCopied(true)
       setActionNotice({ type: 'success', message: 'Prompt copied.' })
-      setTimeout(() => setCopied(false), 2000)
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current)
+      }
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopied(false)
+        copyResetTimeoutRef.current = null
+      }, 2000)
     } catch (error) {
       setErrorNotice(error, 'Copy failed. Please copy the prompt manually.')
     }
@@ -395,10 +444,10 @@ export function ImageLightbox({
         case 'requestChanges':
           void handleRequestChanges()
           break
+        case 'copyPrompt':
+          void handleCopyPrompt()
+          break
         case 'none':
-          if (e.key === 'p' || e.key === 'P') {
-            void handleCopyPrompt()
-          }
           break
       }
     }
@@ -409,10 +458,18 @@ export function ImageLightbox({
   // Fetch signed URLs when the current image changes and has no displayable URL
   useEffect(() => {
     if (!currentImage || !onRequestSignedUrls) return
+    let cancelled = false
     if (shouldRequestSignedUrls(currentImage, !!onRequestSignedUrls)) {
-      void onRequestSignedUrls(currentImage.id)
+      void onRequestSignedUrls(currentImage.id).catch((error) => {
+        if (!cancelled) {
+          setErrorNotice(error, 'Could not load the full-resolution image. Preview may be stale.')
+        }
+      })
     }
-  }, [currentImage, onRequestSignedUrls])
+    return () => {
+      cancelled = true
+    }
+  }, [currentImage, onRequestSignedUrls, setErrorNotice])
 
   // Start with a fast preview/thumbnail, then upgrade to full resolution only after it has decoded.
   useEffect(() => {
@@ -483,6 +540,7 @@ export function ImageLightbox({
     productId: currentImage.productId,
     imageId: currentImage.id,
   })
+  const generatedAt = formatGeneratedAt(currentImage.created_at)
 
   return (
     <div
@@ -500,7 +558,7 @@ export function ImageLightbox({
       >
         {/* Header */}
         <div className="flex items-center justify-between rounded-t-xl bg-zinc-900/80 px-3 py-2 sm:px-4 sm:py-3">
-          <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-4" aria-live="polite" aria-atomic="true">
             <span id={dialogTitleId} className="whitespace-nowrap text-sm font-medium text-zinc-100 sm:text-base">
               {displayName}
             </span>
@@ -512,11 +570,19 @@ export function ImageLightbox({
             <span className="whitespace-nowrap text-sm text-zinc-500">
               {currentIndex + 1} / {images.length}
             </span>
+            {generatedAt && (
+              <span
+                className="hidden whitespace-nowrap text-sm text-zinc-500 md:inline"
+                title={`Generated ${generatedAt.full}`}
+              >
+                {generatedAt.short}
+              </span>
+            )}
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white sm:min-h-0 sm:min-w-0"
             title="Close (Esc)"
             aria-label="Close lightbox"
           >
@@ -540,7 +606,7 @@ export function ImageLightbox({
               <button
                 type="button"
                 onClick={handleCopyPrompt}
-                className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white sm:min-h-0 sm:min-w-0"
                 title="Copy Prompt (P)"
                 aria-label="Copy prompt"
               >
@@ -549,8 +615,9 @@ export function ImageLightbox({
               {projectId && currentImage.productId && (
                 <a
                   href={buildRegenerateUrl({ projectId, image: currentImage })}
-                  className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white sm:min-h-0 sm:min-w-0"
                   title="Regenerate with this prompt"
+                  aria-label="Regenerate with this prompt"
                 >
                   <ExternalLink className="w-4 h-4" />
                 </a>
@@ -565,7 +632,7 @@ export function ImageLightbox({
             <button
               type="button"
               onClick={handlePrev}
-              className="absolute left-2 z-10 rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:left-4 sm:p-3"
+              className="absolute left-2 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:left-4 sm:p-3"
               aria-label="Previous image"
             >
               <ChevronLeft className="w-5 h-5 sm:w-6 sm:h-6" />
@@ -575,30 +642,37 @@ export function ImageLightbox({
             <button
               type="button"
               onClick={handleNext}
-              className="absolute right-2 z-10 rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:right-4 sm:p-3"
+              className="absolute right-2 z-10 inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-black/50 p-2 text-white transition-colors hover:bg-black/70 sm:right-4 sm:p-3"
               aria-label="Next image"
             >
               <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
           )}
 
-          {imageUrl ? (
-            <img
-              src={imageUrl}
+          <FallbackImage
+            sources={[
+              imageUrl,
+              currentImage.preview_signed_url,
+              currentImage.preview_public_url,
+              currentImage.thumb_signed_url,
+              currentImage.thumb_public_url,
+              currentImage.signed_url,
+              currentImage.public_url,
+            ]}
               alt={displayName}
               className="max-w-full max-h-full object-contain"
-            />
-          ) : (
-            <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-800 bg-zinc-900/40 px-6 py-8 text-center">
-              <div className="rounded-full bg-zinc-900 p-3">
-                <ImageOff className="h-6 w-6 text-zinc-500" />
+            fallback={(
+              <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-800 bg-zinc-900/40 px-6 py-8 text-center">
+                <div className="rounded-full bg-zinc-900 p-3">
+                  <ImageOff className="h-6 w-6 text-zinc-500" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-zinc-300">No image available</p>
+                  <p className="mt-1 text-xs text-zinc-500">This variation does not have a renderable preview yet.</p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm font-medium text-zinc-300">No image available</p>
-                <p className="mt-1 text-xs text-zinc-500">This variation does not have a renderable preview yet.</p>
-              </div>
-            </div>
-          )}
+            )}
+          />
 
           {isApproved && (
             <div className="absolute right-4 top-4 rounded-full bg-emerald-950/90 px-3 py-1.5 text-sm font-medium text-emerald-200">
@@ -654,8 +728,8 @@ export function ImageLightbox({
                 ? 'border-red-900/30 bg-red-950/20'
                 : 'border-emerald-900/30 bg-emerald-950/20'
             }`}
-            role="status"
-            aria-live="polite"
+            role={actionNotice.type === 'error' ? 'alert' : 'status'}
+            aria-live={actionNotice.type === 'error' ? 'assertive' : 'polite'}
           >
             <div
               className={`flex items-start gap-2 text-sm ${
@@ -675,7 +749,7 @@ export function ImageLightbox({
         {/* Footer toolbar */}
         <div className="flex flex-col items-stretch justify-between gap-2 rounded-b-xl bg-zinc-900/80 px-3 py-2 sm:flex-row sm:items-center sm:px-4 sm:py-3">
           {/* Thumbnail strip */}
-          <div className="flex max-w-full items-center gap-2 overflow-x-auto pb-1 sm:max-w-[50%]">
+          <div className="flex max-w-full items-center gap-2 overflow-x-auto scrollbar-hide pb-1 sm:max-w-[50%]">
             {thumbnailItems.map((item) => (
               <LightboxThumbnailButton
                 key={item.id}
@@ -689,18 +763,19 @@ export function ImageLightbox({
             ))}
           </div>
 
-          {/* Action buttons */}
-          <div className="flex items-center justify-end gap-2">
+          {/* Action buttons – scroll horizontally on narrow screens instead of wrapping/overflowing */}
+          <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide sm:justify-end">
             <button
               type="button"
               onClick={handleApprove}
               disabled={isUpdating}
-              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2 ${
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2 ${
                 isApproved
                   ? 'bg-emerald-600 text-white hover:bg-emerald-500'
                   : 'bg-zinc-700 text-zinc-200 hover:bg-emerald-600 hover:text-white'
               }`}
               title="Approve (Enter or A)"
+              aria-label="Approve image"
             >
               {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               <span className="hidden sm:inline">Approve</span>
@@ -709,12 +784,13 @@ export function ImageLightbox({
               type="button"
               onClick={handleReject}
               disabled={isUpdating}
-              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2 ${
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2 ${
                 isRejected
                   ? 'bg-red-600 text-white hover:bg-red-700'
                   : 'bg-zinc-700 text-zinc-200 hover:bg-red-600 hover:text-white'
               }`}
               title="Reject (R)"
+              aria-label="Reject image"
             >
               {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
               <span className="hidden sm:inline">Reject</span>
@@ -723,12 +799,13 @@ export function ImageLightbox({
               type="button"
               onClick={handleRequestChanges}
               disabled={isUpdating}
-              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2 ${
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2 ${
                 isRequestChanges
                   ? 'bg-amber-600 text-white hover:bg-amber-500'
                   : 'bg-zinc-700 text-zinc-200 hover:bg-amber-600 hover:text-white'
               }`}
               title="Request Changes (C)"
+              aria-label="Request changes to image"
             >
               {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <AlertTriangle className="w-4 h-4" />}
               <span className="hidden sm:inline">Changes</span>
@@ -738,8 +815,9 @@ export function ImageLightbox({
                 type="button"
                 onClick={handlePermanentDelete}
                 disabled={isUpdating}
-                className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-red-800 hover:text-white sm:gap-2 sm:px-4 sm:py-2"
+                className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-red-800 hover:text-white shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2"
                 title="Permanently Delete (Delete/Backspace)"
+                aria-label="Permanently delete image"
               >
                 {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                 <span className="hidden sm:inline">Delete</span>
@@ -748,8 +826,9 @@ export function ImageLightbox({
             {projectId && currentImage.productId && currentImage.prompt && (
               <a
                 href={buildRegenerateUrl({ projectId, image: currentImage })}
-                className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-blue-600 hover:text-white sm:gap-2 sm:px-4 sm:py-2"
+                className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-blue-600 hover:text-white shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2"
                 title="Regenerate with this prompt"
+                aria-label="Regenerate with this prompt"
               >
                 <RefreshCw className="w-4 h-4" />
                 <span className="hidden sm:inline">Regenerate</span>
@@ -758,8 +837,9 @@ export function ImageLightbox({
             <button
               type="button"
               onClick={handleDownload}
-              className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-blue-600 hover:text-white sm:gap-2 sm:px-4 sm:py-2"
+              className="flex items-center gap-1.5 rounded-lg bg-zinc-700 px-3 py-1.5 font-medium text-zinc-200 transition-colors hover:bg-blue-600 hover:text-white shrink-0 justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:gap-2 sm:px-4 sm:py-2"
               title="Download (D)"
+              aria-label="Download image"
             >
               <Download className="w-4 h-4" />
               <span className="hidden sm:inline">Download</span>

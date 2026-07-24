@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
+import { parseRequestBody } from '@/lib/request-guards'
+import { createAnthropicClient } from '@/lib/anthropic-client'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import { MAX_USER_PROMPT_LEN, SCENE_TITLE_SYSTEM_PROMPT, safeTextFromContent } from '@/lib/prompt-builder'
+import { logError } from '@/lib/error-logger'
+import { logger } from '@/lib/server-logger'
 
-const anthropic = new Anthropic()
+const anthropic = createAnthropicClient()
 
 export async function POST(request: NextRequest) {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
     const rawPrompt = body?.prompt_text
 
     if (!rawPrompt) {
@@ -33,7 +35,13 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     // Log the full error internally but never echo raw error messages back to
     // the client — they can contain API keys or internal query details.
-    console.error('[scene-title] Error:', err instanceof Error ? err.message : String(err))
+    logger.error('[scene-title] Error:', err instanceof Error ? err.message : String(err))
+    // Persist to the error log so AI failures here are observable alongside the
+    // sibling /api/ai/build-prompt and /api/ai/suggest-prompts routes.
+    await logError({
+      errorMessage: err instanceof Error ? err.message : 'Internal server error',
+      errorSource: 'api/ai/scene-title',
+    })
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

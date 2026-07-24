@@ -1,24 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import Anthropic from '@anthropic-ai/sdk'
+import { createAnthropicClient } from '@/lib/anthropic-client'
 import { CLAUDE_FAST_MODEL } from '@/lib/claude-models'
 import { buildRefinedPromptUserMessage, safeTextFromContent } from '@/lib/prompt-builder'
+import { parseRequestBody } from '@/lib/request-guards'
 import type { GlobalStyleSettings } from '@/lib/types'
 import { T } from '@/lib/db-tables'
 import { mergeStyles } from '@/lib/style-merge'
 import { logError } from '@/lib/error-logger'
+import { logger } from '@/lib/server-logger'
 
-const anthropic = new Anthropic()
+const anthropic = createAnthropicClient()
 
 export async function POST(request: NextRequest) {
   let product_id: string | undefined
 
-  let body: { product_id?: string; user_prompt?: string }
-  try {
-    body = await request.json()
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 })
-  }
+  // parseRequestBody rejects non-object bodies (null/array/primitive) with a 400
+  // instead of letting a later `body.product_id` access throw into the 500 catch.
+  const parsed = await parseRequestBody<{ product_id?: string; user_prompt?: string }>(request)
+  if (!parsed.ok) return parsed.response
+  const body = parsed.body
 
   try {
     product_id = body.product_id
@@ -33,16 +34,16 @@ export async function POST(request: NextRequest) {
 
     const supabase = createServiceClient()
 
-    // Single JOIN query — fetches product + parent project in one round-trip
+    // Single JOIN query — fetches product + parent project in one round-trip.
+    // Only the columns this route actually reads: name/description feed the
+    // user message, the two style blobs feed mergeStyles.
     const { data: product, error: productError } = await supabase
       .from(T.products)
-      .select(`id,name,description,project_id,global_style_settings,${T.projects}!fk_products_project(global_style_settings)`)
+      .select(`name,description,global_style_settings,${T.projects}!fk_products_project(global_style_settings)`)
       .eq('id', product_id)
       .single<{
-        id: string
         name: string
         description: string | null
-        project_id: string | null
         global_style_settings: GlobalStyleSettings | null
         prodai_projects: { global_style_settings: GlobalStyleSettings | null } | null
       }>()
@@ -70,7 +71,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     // Log the full error internally but never echo raw error messages back to
     // the client — they can contain API keys or internal query details.
-    console.error('[BuildPrompt] Error:', err instanceof Error ? err.message : String(err))
+    logger.error('[BuildPrompt] Error:', err instanceof Error ? err.message : String(err))
     await logError({
       productId: product_id,
       errorMessage: err instanceof Error ? err.message : 'Internal server error',

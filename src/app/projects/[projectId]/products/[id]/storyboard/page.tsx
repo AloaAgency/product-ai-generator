@@ -3,6 +3,7 @@
 import { use, useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
+import { api } from '@/lib/api-client'
 import type { Storyboard as StoryboardRecord, StoryboardScene } from '@/lib/types'
 import {
   Film,
@@ -30,15 +31,6 @@ type SignedImageUrls = {
 
 type Storyboard = StoryboardRecord
 
-const api = async (url: string, options?: RequestInit) => {
-  const res = await fetch(url, options)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || res.statusText)
-  }
-  return res.json()
-}
-
 // ---------------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------------
@@ -49,7 +41,9 @@ export default function StoryboardPage({
   params: Promise<{ projectId: string; id: string }>
 }) {
   const { id } = use(params)
-  const { galleryImages, loadingGallery, fetchGallery } = useAppStore()
+  const galleryImages = useAppStore((s) => s.galleryImages)
+  const loadingGallery = useAppStore((s) => s.loadingGallery)
+  const fetchGallery = useAppStore((s) => s.fetchGallery)
   const galleryImageItems = useMemo(
     () => galleryImages.filter((img) => img.media_type !== 'video'),
     [galleryImages]

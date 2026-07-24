@@ -6,6 +6,33 @@ export const MAX_BUG_REPORT_DESCRIPTION_LENGTH = 2000
 export const MAX_BUG_REPORT_CAPTION_LENGTH = 160
 const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g
 
+const hasPrefix = (bytes: ArrayLike<number>, prefix: readonly number[]) =>
+  bytes.length >= prefix.length && prefix.every((value, index) => bytes[index] === value)
+
+export const hasAllowedBugReportFileSignature = (
+  mimeType: string,
+  bytes: ArrayLike<number>
+) => {
+  switch (mimeType) {
+    case 'image/jpeg':
+      return hasPrefix(bytes, [0xff, 0xd8, 0xff])
+    case 'image/png':
+      return hasPrefix(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    case 'image/gif':
+      return hasPrefix(bytes, [0x47, 0x49, 0x46, 0x38, 0x37, 0x61])
+        || hasPrefix(bytes, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61])
+    case 'image/webp':
+      return bytes.length >= 12
+        && hasPrefix(bytes, [0x52, 0x49, 0x46, 0x46])
+        && bytes[8] === 0x57
+        && bytes[9] === 0x45
+        && bytes[10] === 0x42
+        && bytes[11] === 0x50
+    default:
+      return false
+  }
+}
+
 export interface SelectedBugReportImage {
   file: File
   preview: string
@@ -82,12 +109,23 @@ export const buildBugReportSubmission = ({
   imageCount: String(images.length),
 })
 
-export const buildSelectedBugReportImages = (files: File[]): SelectedBugReportImage[] =>
-  files.map((file) => ({
-    file,
-    preview: URL.createObjectURL(file),
-    caption: '',
-  }))
+export const buildSelectedBugReportImages = (files: File[]): SelectedBugReportImage[] => {
+  const images: SelectedBugReportImage[] = []
+
+  try {
+    for (const file of files) {
+      images.push({
+        file,
+        preview: URL.createObjectURL(file),
+        caption: '',
+      })
+    }
+    return images
+  } catch (error) {
+    releaseBugReportImagePreviews(images)
+    throw error
+  }
+}
 
 export const releaseBugReportImagePreviews = (images: Pick<SelectedBugReportImage, 'preview'>[]) => {
   images.forEach((image) => URL.revokeObjectURL(image.preview))

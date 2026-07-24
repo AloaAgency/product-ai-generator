@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { parseRequestBody, MAX_NAME_LENGTH, MAX_DESCRIPTION_LENGTH } from '@/lib/request-guards'
+import { logger } from '@/lib/server-logger'
 
 export async function PATCH(
   request: NextRequest,
@@ -9,10 +11,19 @@ export async function PATCH(
   try {
     const { id: productId, setId } = await params
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
+
+    if (typeof body.name === 'string' && body.name.length > MAX_NAME_LENGTH) {
+      return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (typeof body.description === 'string' && body.description.length > MAX_DESCRIPTION_LENGTH) {
+      return NextResponse.json({ error: `description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (body.name === undefined && body.description === undefined && body.is_active === undefined) {
+      return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 })
+    }
 
     // If setting is_active=true, deactivate other sets first
     if (body.is_active === true) {
@@ -37,7 +48,7 @@ export async function PATCH(
         .eq('product_id', productId)
         .eq('type', 'product')
 
-      if (deactivateError) { console.error('[ReferenceSet PATCH deactivate]', deactivateError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+      if (deactivateError) { logger.error('[ReferenceSet PATCH deactivate]', deactivateError); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     }
 
     const updates: Record<string, unknown> = {}
@@ -53,10 +64,10 @@ export async function PATCH(
       .select()
       .single()
 
-    if (error) { console.error('[ReferenceSet PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[ReferenceSet PATCH]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[ReferenceSet PATCH] Unexpected error:', err)
+    logger.error('[ReferenceSet PATCH] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -75,10 +86,10 @@ export async function DELETE(
       .eq('id', setId)
       .eq('product_id', productId)
 
-    if (error) { console.error('[ReferenceSet DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[ReferenceSet DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[ReferenceSet DELETE] Unexpected error:', err)
+    logger.error('[ReferenceSet DELETE] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

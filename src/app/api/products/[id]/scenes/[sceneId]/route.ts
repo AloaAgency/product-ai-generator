@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { normalizeDurationValue } from '@/lib/video-constants'
+import { parseRequestBody, MAX_PROMPT_TEXT_LENGTH, MAX_TITLE_LENGTH } from '@/lib/request-guards'
+import { logger } from '@/lib/server-logger'
 
 type Params = { params: Promise<{ id: string; sceneId: string }> }
 
@@ -9,10 +11,18 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   try {
     const { sceneId } = await params
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
+
+    if (typeof body.title === 'string' && body.title.length > MAX_TITLE_LENGTH) {
+      return NextResponse.json({ error: `title must be ${MAX_TITLE_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    for (const field of ['prompt_text', 'end_frame_prompt', 'motion_prompt'] as const) {
+      if (typeof body[field] === 'string' && (body[field] as string).length > MAX_PROMPT_TEXT_LENGTH) {
+        return NextResponse.json({ error: `${field} must be ${MAX_PROMPT_TEXT_LENGTH} characters or fewer` }, { status: 400 })
+      }
+    }
 
     // Fetch existing scene to resolve model, resolution, and frame info for duration normalization
     let existingScene: { generation_model?: string; video_resolution?: string; start_frame_image_id?: string; end_frame_image_id?: string } | null = null
@@ -29,7 +39,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const modelForDuration = typeof body.generation_model === 'string'
       ? body.generation_model
       : existingScene?.generation_model || 'veo3'
-    const resolutionForDuration = body.video_resolution !== undefined ? body.video_resolution : existingScene?.video_resolution
+    const resolutionForDuration = (body.video_resolution !== undefined ? body.video_resolution : existingScene?.video_resolution) as string | null | undefined
     const hasStartFrame = body.start_frame_image_id !== undefined ? !!body.start_frame_image_id : !!existingScene?.start_frame_image_id
     const hasEndFrame = body.end_frame_image_id !== undefined ? !!body.end_frame_image_id : !!existingScene?.end_frame_image_id
 
@@ -68,7 +78,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     if (error || !data) return NextResponse.json({ error: 'Scene not found' }, { status: 404 })
     return NextResponse.json(data)
   } catch (err) {
-    console.error('[Scene PATCH] Unexpected error:', err)
+    logger.error('[Scene PATCH] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -83,10 +93,10 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
       .delete()
       .eq('id', sceneId)
 
-    if (error) { console.error('[Scene DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Scene DELETE]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[Scene DELETE] Unexpected error:', err)
+    logger.error('[Scene DELETE] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

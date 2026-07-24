@@ -5,8 +5,12 @@ import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { ProjectHeader } from '@/components/ProjectHeader'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
-import { GalleryContextMenu, type ContextMenuAction } from '@/components/GalleryContextMenu'
+import { GalleryContextMenu, type ContextMenuAction, type ContextMenuMediaType } from '@/components/GalleryContextMenu'
+import { CreateVideoModal } from '@/components/CreateVideoModal'
+import { GenerationActivityModal } from '@/components/GenerationActivityModal'
 import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
+import { FallbackImage } from '@/components/FallbackImage'
+import { TransientToast } from '@/components/TransientToast'
 import type { GeneratedImage } from '@/lib/types'
 import {
   Filter,
@@ -17,7 +21,9 @@ import {
   X,
   Package,
   Trash2,
+  CalendarDays,
 } from 'lucide-react'
+import { logger } from '@/lib/logger'
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'request_changes'
 
@@ -73,7 +79,10 @@ export default function ProjectGalleryPage({
   const signedUrlRequestsRef = useRef<Record<string, Promise<SignedImageUrls | null>>>({})
   const batchSignedUrlRequestsRef = useRef<Record<string, Promise<Record<string, SignedImageUrls>>>>({})
   const loadMoreRef = useRef<HTMLDivElement>(null)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null; mediaType: ContextMenuMediaType } | null>(null)
+  const [videoModal, setVideoModal] = useState<{ productId: string; imageId: string; previewUrl: string | null; sourcePrompt: string | null } | null>(null)
+  const [toast, setToast] = useState<{ type: 'info' | 'error'; message: string } | null>(null)
+  const [activityOpen, setActivityOpen] = useState(false)
 
   useEffect(() => {
     signedUrlsRef.current = signedUrlsById
@@ -111,7 +120,7 @@ export default function ProjectGalleryPage({
         setRequestChangesCount(data.request_changes_count)
       }
     } catch (err) {
-      console.error('[ProjectGallery] Fetch error:', err)
+      logger.error('[ProjectGallery] Fetch error:', err)
       setProductGroups([])
     } finally {
       setLoading(false)
@@ -147,7 +156,7 @@ export default function ProjectGalleryPage({
       setCurrentOffset((prev) => prev + newImageCount)
       setHasMore(data.has_more ?? false)
     } catch (err) {
-      console.error('[ProjectGallery] Fetch more error:', err)
+      logger.error('[ProjectGallery] Fetch more error:', err)
     } finally {
       setLoadingMore(false)
     }
@@ -221,6 +230,7 @@ export default function ProjectGalleryPage({
       variation_number: img.variation_number,
       approval_status: img.approval_status ?? 'pending',
       notes: img.notes,
+      created_at: img.created_at,
       prompt: img._prompt,
       productId: img._productId,
     }))
@@ -269,7 +279,10 @@ export default function ProjectGalleryPage({
       body: JSON.stringify({ image_ids: pendingIds }),
     })
       .then(async (res) => {
-        if (!res.ok) return {}
+        if (!res.ok) {
+          setToast({ type: 'error', message: 'Failed to load image previews. Some images may not display.' })
+          return {}
+        }
         const data = await res.json() as { signed_urls?: Record<string, SignedImageUrls> }
         const updates = data.signed_urls ?? {}
         if (Object.keys(updates).length > 0) {
@@ -365,6 +378,19 @@ export default function ProjectGalleryPage({
         if (idx !== -1) setLightboxIndex(idx)
         break
       }
+      case 'create_video': {
+        const signed = await ensureSignedUrls(imageId)
+        const previewUrl =
+          img.thumb_public_url ??
+          img.preview_public_url ??
+          img.public_url ??
+          signed?.thumb_signed_url ??
+          signed?.preview_signed_url ??
+          signed?.signed_url ??
+          null
+        setVideoModal({ productId: img._productId, imageId, previewUrl, sourcePrompt: img._prompt ?? null })
+        break
+      }
       case 'approve':
         await handleApprovalChange(imageId, img.approval_status === 'approved' ? null : 'approved')
         break
@@ -391,7 +417,7 @@ export default function ProjectGalleryPage({
           document.body.removeChild(link)
           URL.revokeObjectURL(blobUrl)
         } catch (err) {
-          console.error('Download failed for image', imageId, err)
+          logger.error('Download failed for image', imageId, err)
         }
         break
       }
@@ -404,6 +430,18 @@ export default function ProjectGalleryPage({
         break
     }
   }, [allImageOnly, imageIndexById, handleApprovalChange, ensureSignedUrls, handleDelete])
+
+  const handlePlayVideo = useCallback(async (imageId: string, fallbackUrl: string | null) => {
+    if (fallbackUrl) {
+      setPlayingVideoUrl(fallbackUrl)
+      return
+    }
+
+    const signed = await ensureSignedUrls(imageId)
+    if (signed?.signed_url) {
+      setPlayingVideoUrl(signed.signed_url)
+    }
+  }, [ensureSignedUrls])
 
   const handleNameSave = async (name: string) => {
     await updateProject(projectId, { name })
@@ -537,6 +575,14 @@ export default function ProjectGalleryPage({
           )}
 
           <div className="ml-0 sm:ml-auto flex items-center gap-2">
+            <button
+              onClick={() => setActivityOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-1.5 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+              title="View assets generated per day"
+            >
+              <CalendarDays className="h-3.5 w-3.5" />
+              Activity
+            </button>
             {statusFilter === 'rejected' && totalImages > 0 && (
               <button
                 onClick={handleBulkDelete}
@@ -597,8 +643,8 @@ export default function ProjectGalleryPage({
                     <button
                       key={img.id}
                       onClick={() => {
-                        if (isVideo && img.public_url) {
-                          setPlayingVideoUrl(img.public_url)
+                        if (isVideo) {
+                          void handlePlayVideo(img.id, img.public_url)
                         } else if (globalIndex !== -1) {
                           setLightboxIndex(globalIndex)
                         }
@@ -606,7 +652,7 @@ export default function ProjectGalleryPage({
                       onContextMenu={(e) => {
                         if (isVideo) return
                         e.preventDefault()
-                        setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status })
+                        setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status, mediaType: 'image' })
                       }}
                       onMouseEnter={() => {
                         if (!isVideo) warmLightboxAssets(img.id)
@@ -614,7 +660,7 @@ export default function ProjectGalleryPage({
                       onFocus={() => {
                         if (!isVideo) warmLightboxAssets(img.id)
                       }}
-                      className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
+                      className={`group relative h-full w-full overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
                         isRejected
                           ? 'border-red-600/60 hover:border-red-500'
                           : isChanges
@@ -624,24 +670,18 @@ export default function ProjectGalleryPage({
                     >
                       {isVideo ? (
                         <>
-                          {img.thumb_public_url ? (
-                            /* eslint-disable-next-line @next/next/no-img-element */
-                            <img
-                              src={img.thumb_public_url}
-                              alt="Video thumbnail"
-                              loading="lazy"
-                              decoding="async"
-                              className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                            />
-                          ) : (
-                            <video
-                              src={`${img.public_url}#t=0.1`}
-                              preload="metadata"
-                              muted
-                              playsInline
-                              className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                            />
-                          )}
+                          <FallbackImage
+                            sources={[img.thumb_public_url]}
+                            alt="Video thumbnail"
+                            loading="lazy"
+                            decoding="async"
+                            className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                            fallback={(
+                              <div className="flex h-full w-full items-center justify-center">
+                                <Video className="h-8 w-8 text-zinc-600" />
+                              </div>
+                            )}
+                          />
                           <div className="absolute inset-0 flex items-center justify-center">
                             <div className="rounded-full bg-black/50 p-3">
                               <Play className="h-6 w-6 text-white fill-white" />
@@ -649,13 +689,17 @@ export default function ProjectGalleryPage({
                           </div>
                         </>
                       ) : (
-                        /* eslint-disable-next-line @next/next/no-img-element */
-                        <img
-                          src={img.thumb_public_url ?? img.preview_public_url ?? img.public_url ?? undefined}
+                        <FallbackImage
+                          sources={[img.thumb_public_url, img.preview_public_url, img.public_url]}
                           alt={`Variation ${img.variation_number}`}
                           loading="lazy"
                           decoding="async"
                           className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                          fallback={(
+                            <div className="flex h-full w-full items-center justify-center">
+                              <ImageIcon className="h-8 w-8 text-zinc-600" />
+                            </div>
+                          )}
                         />
                       )}
                       {isVideo && (
@@ -723,8 +767,41 @@ export default function ProjectGalleryPage({
           y={contextMenu.y}
           imageId={contextMenu.imageId}
           approvalStatus={contextMenu.approvalStatus}
+          mediaType={contextMenu.mediaType}
           onAction={handleContextMenuAction}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Generation activity (per-day) modal */}
+      {activityOpen && (
+        <GenerationActivityModal
+          projectId={projectId}
+          productFilter={productFilter}
+          mediaFilter={mediaFilter}
+          onClose={() => setActivityOpen(false)}
+        />
+      )}
+
+      {/* Turn-into-video modal */}
+      {videoModal && (
+        <CreateVideoModal
+          productId={videoModal.productId}
+          imageId={videoModal.imageId}
+          previewUrl={videoModal.previewUrl}
+          sourcePrompt={videoModal.sourcePrompt}
+          onClose={() => setVideoModal(null)}
+          onQueued={(message) => setToast({ type: 'info', message })}
+        />
+      )}
+
+      {/* Transient toast */}
+      {toast && (
+        <TransientToast
+          tone={toast.type}
+          message={toast.message}
+          icon={<Video className="h-4 w-4 shrink-0 text-purple-400" />}
+          onDismiss={() => setToast(null)}
         />
       )}
 

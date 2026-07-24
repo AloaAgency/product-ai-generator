@@ -4,8 +4,12 @@ import { use, useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useAppStore } from '@/lib/store'
 import { useModalShortcuts } from '@/hooks/useModalShortcuts'
 import { ImageLightbox, type LightboxImage, type ApprovalStatus } from '@/components/ImageLightbox'
-import { GalleryContextMenu, type ContextMenuAction } from '@/components/GalleryContextMenu'
+import { GalleryContextMenu, type ContextMenuAction, type ContextMenuMediaType } from '@/components/GalleryContextMenu'
+import { CreateVideoModal } from '@/components/CreateVideoModal'
+import { SquareGrid } from '@/components/SquareGrid'
 import { VirtualizedSquareGrid } from '@/components/VirtualizedSquareGrid'
+import { FallbackImage } from '@/components/FallbackImage'
+import { TransientToast } from '@/components/TransientToast'
 import type { PromptTemplate } from '@/lib/types'
 import {
   ArrowLeft,
@@ -27,7 +31,9 @@ import {
   Check,
 } from 'lucide-react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { logger } from '@/lib/logger'
+import { api, uploadToSignedUrl, cleanupImageRecord } from '@/lib/api-client'
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'request_changes'
 type SortOption = 'newest' | 'oldest' | 'variation'
@@ -55,6 +61,7 @@ export default function GalleryPage({
 }) {
   const { projectId, id } = use(params)
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   const products = useAppStore((state) => state.products)
   const fetchProducts = useAppStore((state) => state.fetchProducts)
@@ -74,7 +81,7 @@ export default function GalleryPage({
   const [mediaFilter, setMediaFilter] = useState<'all' | 'image' | 'video'>('all')
   const [jobFilter, setJobFilter] = useState<string>('all')
   const [sortOption, setSortOption] = useState<SortOption>('newest')
-  const [groupByScene, setGroupByScene] = useState(false)
+  const [groupByScene, setGroupByScene] = useState(searchParams.get('group') === 'scene')
   const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null)
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
@@ -88,7 +95,9 @@ export default function GalleryPage({
 
   const [uploadingGallery, setUploadingGallery] = useState(false)
   const galleryFileInputRef = useRef<HTMLInputElement>(null)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; imageId: string; approvalStatus: string | null; mediaType: ContextMenuMediaType } | null>(null)
+  const [videoModal, setVideoModal] = useState<{ imageId: string; previewUrl: string | null; sourcePrompt: string | null } | null>(null)
+  const [toast, setToast] = useState<{ type: 'info' | 'error'; message: string } | null>(null)
   const loadMoreRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -132,16 +141,27 @@ export default function GalleryPage({
       // Upload each file to its signed URL
       const fileArray = Array.from(fileList)
       const uploadedImageIds: string[] = []
+      const failedFileNames: string[] = []
       for (let i = 0; i < results.length; i++) {
         const result = results[i]
-        if (!result.signed_url) continue
         const file = fileArray[i]
-        await fetch(result.signed_url, {
-          method: 'PUT',
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
-          body: file,
+        if (!result.signed_url) {
+          failedFileNames.push(file.name)
+          continue
+        }
+        try {
+          await uploadToSignedUrl(result.signed_url, file, file.type)
+          if (result.image?.id) uploadedImageIds.push(result.image.id)
+        } catch {
+          failedFileNames.push(file.name)
+          if (result.image?.id) await cleanupImageRecord(result.image.id)
+        }
+      }
+      if (failedFileNames.length > 0) {
+        setToast({
+          type: 'error',
+          message: `Failed to upload ${failedFileNames.length} of ${results.length} file(s): ${failedFileNames.join(', ')}`,
         })
-        if (result.image?.id) uploadedImageIds.push(result.image.id)
       }
       // Generate thumbnails for uploaded images
       if (uploadedImageIds.length > 0) {
@@ -149,12 +169,21 @@ export default function GalleryPage({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ image_ids: uploadedImageIds }),
-        }).catch(() => {})
+        }).then((res) => {
+          if (!res.ok) throw new Error(`generate-thumbs responded ${res.status}`)
+        }).catch((err) => {
+          logger.error('[GalleryUpload] Thumbnail generation failed:', err)
+          setToast({ type: 'error', message: 'Images uploaded, but thumbnail generation failed. Previews may be missing.' })
+        })
       }
       // Refresh gallery
       await fetchGallery(id, { sort: sortOption })
     } catch (err) {
-      console.error('[GalleryUpload] Error:', err)
+      logger.error('[GalleryUpload] Error:', err)
+      setToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Upload failed',
+      })
     } finally {
       setUploadingGallery(false)
       if (galleryFileInputRef.current) galleryFileInputRef.current.value = ''
@@ -164,10 +193,12 @@ export default function GalleryPage({
   useEffect(() => {
     fetchGallery(id, { sort: sortOption })
     fetchGenerationJobs(id)
-    fetch(`/api/products/${id}/prompts`)
-      .then((r) => r.json())
+    api(`/api/products/${id}/prompts`)
       .then((data) => { if (Array.isArray(data)) setPromptTemplates(data) })
-      .catch(() => {})
+      .catch((err) => {
+        logger.error('[Gallery] Failed to load prompt templates:', err)
+        setToast({ type: 'error', message: 'Failed to load prompt templates' })
+      })
   }, [id, sortOption, fetchGallery, fetchGenerationJobs])
 
   useEffect(() => {
@@ -291,6 +322,7 @@ export default function GalleryPage({
         variation_number: img.variation_number,
         approval_status: img.approval_status ?? 'pending',
         notes: img.notes,
+        created_at: img.created_at,
         prompt: img.prompt ?? null,
         productId: id,
         reference_sets: (imgAny.reference_sets as LightboxImage['reference_sets']) ?? null,
@@ -341,7 +373,10 @@ export default function GalleryPage({
       body: JSON.stringify({ image_ids: pendingIds }),
     })
       .then(async (res) => {
-        if (!res.ok) return {}
+        if (!res.ok) {
+          setToast({ type: 'error', message: 'Failed to load image previews. Some images may not display.' })
+          return {}
+        }
         const data = await res.json() as { signed_urls?: Record<string, SignedImageUrls> }
         const updates = data.signed_urls ?? {}
         if (Object.keys(updates).length > 0) {
@@ -416,6 +451,19 @@ export default function GalleryPage({
         if (idx !== -1) setLightboxIndex(idx)
         break
       }
+      case 'create_video': {
+        const signed = await ensureSignedUrls(imageId)
+        const previewUrl =
+          img.thumb_public_url ??
+          img.preview_public_url ??
+          img.public_url ??
+          signed?.thumb_signed_url ??
+          signed?.preview_signed_url ??
+          signed?.signed_url ??
+          null
+        setVideoModal({ imageId, previewUrl, sourcePrompt: img.prompt ?? null })
+        break
+      }
       case 'approve':
         await updateImageApproval(imageId, img.approval_status === 'approved' ? null : 'approved')
         break
@@ -442,7 +490,7 @@ export default function GalleryPage({
           document.body.removeChild(link)
           URL.revokeObjectURL(blobUrl)
         } catch (err) {
-          console.error('Download failed for image', imageId, err)
+          logger.error('Download failed for image', imageId, err)
         }
         break
       }
@@ -521,41 +569,72 @@ export default function GalleryPage({
         URL.revokeObjectURL(blobUrl)
         await new Promise((resolve) => setTimeout(resolve, 300))
       } catch (err) {
-        console.error('Download failed for image', img.id, err)
+        logger.error('Download failed for image', img.id, err)
       }
     }
   }
 
+  const handlePlayVideo = useCallback(async (imageId: string, fallbackUrl: string | null) => {
+    if (fallbackUrl) {
+      setPlayingVideoUrl(fallbackUrl)
+      return
+    }
+
+    const signed = await ensureSignedUrls(imageId)
+    if (signed?.signed_url) {
+      setPlayingVideoUrl(signed.signed_url)
+    }
+  }, [ensureSignedUrls])
+
   useEffect(() => {
     let isMounted = true
     let prevHadActive = false
+    let prevProgressSignature = ''
 
     const hasActiveJobs = () => {
       const { generationJobs } = useAppStore.getState()
       return generationJobs.some((job) => job.status === 'pending' || job.status === 'running')
     }
 
+    const getProgressSignature = () => {
+      const { generationJobs } = useAppStore.getState()
+      return generationJobs
+        .filter((job) => job.status === 'pending' || job.status === 'running')
+        .map((job) => `${job.id}:${job.status}:${job.completed_count}:${job.failed_count}`)
+        .join('|')
+    }
+
     const poll = async () => {
+      // Don't poll while the tab is backgrounded — nothing is visible to update
+      // and it wastes network/CPU. We refresh immediately when the tab returns.
+      if (document.visibilityState !== 'visible') return
       await fetchGenerationJobs(id)
       const hasActive = hasActiveJobs()
+      const progressSignature = getProgressSignature()
       if (!isMounted) return
-      if (hasActive) {
+      if (hasActive && progressSignature !== prevProgressSignature) {
         await fetchGallery(id, { sort: sortOption })
       } else if (prevHadActive && !hasActive) {
         await fetchGallery(id, { sort: sortOption })
       }
       prevHadActive = hasActive
+      prevProgressSignature = progressSignature
     }
 
     const interval = setInterval(() => {
       void poll()
     }, 5000)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void poll()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     void poll()
 
     return () => {
       isMounted = false
       clearInterval(interval)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [id, sortOption, fetchGallery, fetchGenerationJobs])
 
@@ -842,7 +921,7 @@ export default function GalleryPage({
                     {group.images.length}
                   </span>
                 </div>
-                <VirtualizedSquareGrid
+                <SquareGrid
                   items={group.images}
                   getItemKey={(img) => img.id}
                   renderItem={(img) => {
@@ -862,11 +941,11 @@ export default function GalleryPage({
                         }}
                         onContextMenu={(e) => {
                           e.preventDefault()
-                          setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status })
+                          setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status, mediaType: (img.media_type as ContextMenuMediaType) ?? 'image' })
                         }}
                         onMouseEnter={() => warmLightboxAssets(img.id)}
                         onFocus={() => warmLightboxAssets(img.id)}
-                        className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
+                        className={`group relative h-full w-full overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
                           isSelected
                             ? 'border-blue-500 ring-2 ring-blue-500'
                             : isRejected
@@ -876,13 +955,17 @@ export default function GalleryPage({
                                 : 'border-zinc-800 hover:border-zinc-600'
                         }`}
                       >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={img.thumb_public_url ?? img.preview_public_url ?? img.public_url ?? undefined}
+                        <FallbackImage
+                          sources={[img.thumb_public_url, img.preview_public_url, img.public_url]}
                           alt={`Variation ${img.variation_number}`}
                           loading="lazy"
                           decoding="async"
                           className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                          fallback={(
+                            <div className="flex h-full w-full items-center justify-center">
+                              <ImageIcon className="h-8 w-8 text-zinc-600" />
+                            </div>
+                          )}
                         />
                         {selectMode && (
                           <div className="absolute top-2 left-2 z-10">
@@ -930,8 +1013,8 @@ export default function GalleryPage({
                     onClick={() => {
                       if (selectMode) {
                         toggleImageSelection(img.id)
-                      } else if (isVideo && img.public_url) {
-                        setPlayingVideoUrl(img.public_url)
+                      } else if (isVideo) {
+                        void handlePlayVideo(img.id, img.public_url)
                       } else {
                         if (imageIndex !== -1) setLightboxIndex(imageIndex)
                       }
@@ -939,7 +1022,7 @@ export default function GalleryPage({
                     onContextMenu={(e) => {
                       if (isVideo) return
                       e.preventDefault()
-                      setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status })
+                      setContextMenu({ x: e.clientX, y: e.clientY, imageId: img.id, approvalStatus: img.approval_status, mediaType: 'image' })
                     }}
                     onMouseEnter={() => {
                       if (!isVideo) warmLightboxAssets(img.id)
@@ -947,7 +1030,7 @@ export default function GalleryPage({
                     onFocus={() => {
                       if (!isVideo) warmLightboxAssets(img.id)
                     }}
-                    className={`group relative aspect-square overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
+                    className={`group relative h-full w-full overflow-hidden rounded-lg border bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 ${
                       isSelected
                         ? 'border-blue-500 ring-2 ring-blue-500'
                         : isRejected
@@ -959,24 +1042,18 @@ export default function GalleryPage({
                   >
                     {isVideo ? (
                       <>
-                        {img.thumb_public_url ? (
-                          /* eslint-disable-next-line @next/next/no-img-element */
-                          <img
-                            src={img.thumb_public_url}
-                            alt="Video thumbnail"
-                            loading="lazy"
-                            decoding="async"
-                            className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                          />
-                        ) : (
-                          <video
-                            src={`${img.public_url}#t=0.1`}
-                            preload="metadata"
-                            muted
-                            playsInline
-                            className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
-                          />
-                        )}
+                        <FallbackImage
+                          sources={[img.thumb_public_url]}
+                          alt="Video thumbnail"
+                          loading="lazy"
+                          decoding="async"
+                          className={`h-full w-full object-cover ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                          fallback={(
+                            <div className="flex h-full w-full items-center justify-center">
+                              <Video className="h-8 w-8 text-zinc-600" />
+                            </div>
+                          )}
+                        />
                         <div className="absolute inset-0 flex items-center justify-center">
                           <div className="rounded-full bg-black/50 p-3">
                             <Play className="h-6 w-6 text-white fill-white" />
@@ -984,13 +1061,17 @@ export default function GalleryPage({
                         </div>
                       </>
                     ) : (
-                      /* eslint-disable-next-line @next/next/no-img-element */
-                      <img
-                        src={img.thumb_public_url ?? img.preview_public_url ?? img.public_url ?? undefined}
+                      <FallbackImage
+                        sources={[img.thumb_public_url, img.preview_public_url, img.public_url]}
                         alt={`Variation ${img.variation_number}`}
                         loading="lazy"
                         decoding="async"
                         className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${isRejected || isChanges ? 'opacity-60' : ''}`}
+                        fallback={(
+                          <div className="flex h-full w-full items-center justify-center">
+                            <ImageIcon className="h-8 w-8 text-zinc-600" />
+                          </div>
+                        )}
                       />
                     )}
                     {selectMode && (
@@ -1098,8 +1179,31 @@ export default function GalleryPage({
           y={contextMenu.y}
           imageId={contextMenu.imageId}
           approvalStatus={contextMenu.approvalStatus}
+          mediaType={contextMenu.mediaType}
           onAction={handleContextMenuAction}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Turn-into-video modal */}
+      {videoModal && (
+        <CreateVideoModal
+          productId={id}
+          imageId={videoModal.imageId}
+          previewUrl={videoModal.previewUrl}
+          sourcePrompt={videoModal.sourcePrompt}
+          onClose={() => setVideoModal(null)}
+          onQueued={(message) => setToast({ type: 'info', message })}
+        />
+      )}
+
+      {/* Transient toast */}
+      {toast && (
+        <TransientToast
+          tone={toast.type}
+          message={toast.message}
+          icon={<Video className="h-4 w-4 shrink-0 text-purple-400" />}
+          onDismiss={() => setToast(null)}
         />
       )}
 

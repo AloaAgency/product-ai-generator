@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useAppStore } from '@/lib/store'
-import { AlertTriangle, ChevronDown, ChevronUp, RefreshCw, Trash2 } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronUp, Loader2, RefreshCw, Trash2 } from 'lucide-react'
+import { getSafeErrorMessage } from './errorDisplay.helpers'
 import {
   ERROR_LOGS_PAGE_SIZE,
   getNextVisibleErrorLogCount,
@@ -22,14 +23,30 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
   const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set())
   const [visibleCount, setVisibleCount] = useState(ERROR_LOGS_PAGE_SIZE)
   const [clearing, setClearing] = useState(false)
+  const [panelError, setPanelError] = useState<string | null>(null)
 
   useEffect(() => {
-    void fetchErrorLogs(projectId)
+    let cancelled = false
+    void fetchErrorLogs(projectId).catch((error) => {
+      if (!cancelled) {
+        setPanelError(
+          getSafeErrorMessage(
+            error instanceof Error ? error.message : null,
+            'Failed to load error logs. Please try again.'
+          )
+        )
+        setExpanded(true)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
   }, [projectId, fetchErrorLogs])
 
   useEffect(() => {
     setVisibleCount(ERROR_LOGS_PAGE_SIZE)
     setExpandedEntries(new Set())
+    setPanelError(null)
   }, [projectId, errorLogs.length])
 
   const visibleLogs = useMemo(() => getVisibleErrorLogs(errorLogs, visibleCount), [errorLogs, visibleCount])
@@ -37,14 +54,24 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
   const hasMoreLogs = hasMoreErrorLogs(visibleCount, errorLogs.length)
 
   const handleClear = useCallback(async () => {
-    if (!confirm('Clear all error logs for this project?')) return
+    if (clearing) return
+    if (!window.confirm('Clear all error logs for this project?')) return
     setClearing(true)
+    setPanelError(null)
     try {
       await clearErrorLogs(projectId)
+    } catch (error) {
+      setPanelError(
+        getSafeErrorMessage(
+          error instanceof Error ? error.message : null,
+          'Failed to clear error logs. Please try again.'
+        )
+      )
+      setExpanded(true)
     } finally {
       setClearing(false)
     }
-  }, [clearErrorLogs, projectId])
+  }, [clearErrorLogs, clearing, projectId])
 
   const toggleEntry = useCallback((id: string) => {
     setExpandedEntries((prev) => {
@@ -62,10 +89,19 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
   const handleRefresh = useCallback(() => {
     setVisibleCount(ERROR_LOGS_PAGE_SIZE)
     setExpandedEntries(new Set())
-    void fetchErrorLogs(projectId)
+    setPanelError(null)
+    void fetchErrorLogs(projectId).catch((error) => {
+      setPanelError(
+        getSafeErrorMessage(
+          error instanceof Error ? error.message : null,
+          'Failed to refresh error logs. Please try again.'
+        )
+      )
+      setExpanded(true)
+    })
   }, [fetchErrorLogs, projectId])
 
-  if (!shouldShowErrorLogsPanel(errorLogs.length, loadingErrorLogs)) return null
+  if (!shouldShowErrorLogsPanel(errorLogs.length, loadingErrorLogs, panelError)) return null
 
   return (
     <div className="mb-4 rounded-lg border border-red-900/40 bg-red-950/20">
@@ -111,10 +147,20 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
             </button>
           </div>
 
+          {panelError && (
+            <div
+              className="mb-3 flex items-start gap-2 rounded-lg border border-red-900/40 bg-red-950/30 px-3 py-2 text-xs text-red-200"
+              role="alert"
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
+              <span className="break-words">{panelError}</span>
+            </div>
+          )}
+
           <div className="max-h-64 space-y-2 overflow-y-auto">
             {loadingErrorLogs && visibleLogs.length === 0 ? (
               <div className="flex items-center justify-center py-8">
-                <RefreshCw className="h-5 w-5 animate-spin text-zinc-500" />
+                <Loader2 className="h-5 w-5 animate-spin text-zinc-500" />
               </div>
             ) : visibleLogs.length === 0 ? (
               <div className="rounded-lg border border-dashed border-red-900/30 bg-red-950/10 px-4 py-6 text-center">

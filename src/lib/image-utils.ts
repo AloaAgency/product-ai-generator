@@ -9,6 +9,7 @@ import { tmpdir } from 'os'
 import { join, dirname, basename } from 'path'
 import { randomUUID } from 'crypto'
 import { writeFile, readFile, unlink, access } from 'fs/promises'
+import { logger } from '@/lib/server-logger'
 
 // Resolve ffmpeg path: try ffmpeg-static first (checking the file exists),
 // then fall back to system ffmpeg
@@ -82,7 +83,7 @@ export const resolveExtension = (mimeType: string): string => {
 
 /**
  * Build a descriptive filename for generated product images
- * Format: product-{variation:02d}-{slugified-prompt}-{timestamp}.{ext}
+ * Format: gen-{variation:02d}-{slugified-prompt}-{timestamp}.{ext}
  */
 export const buildImageFileName = (
   variationNumber: number,
@@ -135,13 +136,25 @@ export const buildPreviewPath = (storagePath: string, extension: string): string
 
 // Hard ceiling applied before any Sharp pipeline runs. Prevents memory
 // exhaustion if upstream size limits (e.g. multipart validation) are bypassed.
-const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
+// Exported so callers holding a not-yet-materialised source (e.g. a downloaded
+// Blob) can reject oversized payloads before copying them into a Buffer.
+export const MAX_BUFFER_BYTES = 100 * 1024 * 1024 // 100 MB
 
 // Decoded-dimension guard for user-supplied images. A file that is small on
 // disk but claims huge pixel dimensions (a "pixel bomb") would pass the buffer
 // size check yet still exhaust memory during decode. We cap each axis at 32 k
 // pixels (≈8× the max output dimension) before any Sharp pipeline executes.
 const MAX_SAFE_INPUT_DIMENSION = 32_768
+
+// Total decoded-area guard. The per-axis ceiling alone permits an image where
+// neither side exceeds MAX_SAFE_INPUT_DIMENSION yet the product is enormous
+// (e.g. 20000×20000 ≈ 400 MP ≈ 1.6 GB once decoded to RGBA). Sharp would reject
+// such a file at decode time via its own limitInputPixels default, but only
+// after this module has already read metadata — and the failure surfaces as a
+// generic downstream "Sharp encode failed". We cap the total at Sharp's own
+// default (0x3FFF² = 268,402,689) so nothing Sharp would have accepted is newly
+// rejected; we simply fail earlier, before any decode, with a clear message.
+const MAX_SAFE_INPUT_PIXELS = 268_402_689 // 0x3FFF² — matches Sharp's default limitInputPixels
 
 function assertBufferSize(buffer: Buffer, context: string): void {
   if (buffer.length === 0) throw new Error(`${context}: buffer is empty`)
@@ -152,39 +165,120 @@ function assertBufferSize(buffer: Buffer, context: string): void {
   }
 }
 
+// Shared dimension assertion used by assertInputDimensions and
+// compressReferenceImage (which already has metadata in hand). Keeping a
+// single implementation prevents the two call-sites from diverging if the
+// threshold changes. Exported so the guard can be unit-tested with plain
+// numbers, without materialising a multi-hundred-megapixel bitmap in memory.
+export function assertImageDimensions(w: number, h: number, context: string): void {
+  if (w >= MAX_SAFE_INPUT_DIMENSION || h >= MAX_SAFE_INPUT_DIMENSION) {
+    throw new Error(
+      `${context}: image dimensions ${w}x${h} exceed maximum allowed (${MAX_SAFE_INPUT_DIMENSION}px per side)`
+    )
+  }
+  // Guard the total decoded area even when each axis is individually in-range.
+  if (w * h > MAX_SAFE_INPUT_PIXELS) {
+    throw new Error(
+      `${context}: image area ${w}x${h} (${w * h}px) exceeds maximum decodable area (${MAX_SAFE_INPUT_PIXELS}px)`
+    )
+  }
+}
+
+// Reads only the image header (fast) — no pixel data is decoded. Wraps Sharp's
+// metadata() so every validation path in this module reports an unreadable
+// file with the same contextualised message.
+async function readImageMetadata(buffer: Buffer, context: string): Promise<sharp.Metadata> {
+  try {
+    return await sharp(buffer).metadata()
+  } catch (err) {
+    // Keep Sharp's own diagnosis (e.g. "Input buffer contains unsupported image
+    // format") — matching how encodeWebP surfaces its failures — so operators
+    // can distinguish a truncated upload from an unsupported codec.
+    const detail = err instanceof Error && err.message ? ` — ${err.message}` : ''
+    throw new Error(
+      `${context}: could not read image metadata (file may be corrupt or unsupported)${detail}`
+    )
+  }
+}
+
+// Guards against pixel bombs: files whose compressed size passes the buffer
+// check but whose decoded dimensions would exhaust available memory. Must be
+// called before any Sharp decode pipeline.
+async function assertInputDimensions(buffer: Buffer, context: string): Promise<void> {
+  const meta = await readImageMetadata(buffer, context)
+  assertImageDimensions(meta.width ?? 0, meta.height ?? 0, context)
+}
+
 /** Shared return shape for all Sharp encode operations. */
 export type ImageResult = { buffer: Buffer; mimeType: string; extension: string }
+
+const THUMB_WIDTH = 480
+const THUMB_QUALITY = 72
+const PREVIEW_WIDTH = 1600
+const PREVIEW_QUALITY = 82
+
+// Encode-only Sharp pipeline. Callers MUST run assertBufferSize +
+// assertInputDimensions on the source first — this is split out so functions
+// producing multiple outputs from one buffer can validate it once instead of
+// paying a metadata decode per output.
+async function encodeWebP(
+  buffer: Buffer,
+  width: number,
+  quality: number,
+  context: string
+): Promise<ImageResult> {
+  let outBuffer: Buffer
+  try {
+    outBuffer = await sharp(buffer)
+      .rotate()
+      .resize({ width, withoutEnlargement: true })
+      .webp({ quality })
+      .toBuffer()
+  } catch (err) {
+    throw new Error(
+      `${context}: Sharp encode failed — ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
+  if (outBuffer.length === 0) {
+    throw new Error(`${context}: Sharp encode produced empty buffer`)
+  }
+  return { buffer: outBuffer, mimeType: 'image/webp', extension: 'webp' }
+}
 
 /** Resize an image buffer to a WebP of the given width and quality. */
 async function resizeToWebP(buffer: Buffer, width: number, quality: number): Promise<ImageResult> {
   assertBufferSize(buffer, 'resizeToWebP')
-  const outBuffer = await sharp(buffer)
-    .rotate()
-    .resize({ width, withoutEnlargement: true })
-    .webp({ quality })
-    .toBuffer()
-  return { buffer: outBuffer, mimeType: 'image/webp', extension: 'webp' }
+  await assertInputDimensions(buffer, 'resizeToWebP')
+  return encodeWebP(buffer, width, quality, 'resizeToWebP')
 }
 
 /**
  * Generate a resized thumbnail buffer (480px WebP)
  */
-export const createThumbnail = (buffer: Buffer, width = 480): Promise<ImageResult> =>
-  resizeToWebP(buffer, width, 72)
+export const createThumbnail = (buffer: Buffer, width = THUMB_WIDTH): Promise<ImageResult> =>
+  resizeToWebP(buffer, width, THUMB_QUALITY)
 
 /**
  * Generate a resized preview buffer (1600px WebP)
  */
-export const createPreview = (buffer: Buffer, width = 1600): Promise<ImageResult> =>
-  resizeToWebP(buffer, width, 82)
+export const createPreview = (buffer: Buffer, width = PREVIEW_WIDTH): Promise<ImageResult> =>
+  resizeToWebP(buffer, width, PREVIEW_QUALITY)
 
 /**
  * Generate thumbnail and preview in parallel from the same source buffer.
- * Equivalent to calling createThumbnail + createPreview concurrently —
- * cuts Sharp processing time roughly in half vs sequential calls.
+ * Validates the shared source once (one metadata decode instead of two),
+ * then runs both encodes concurrently.
  */
-export const createThumbnailAndPreview = (buffer: Buffer): Promise<[ImageResult, ImageResult]> =>
-  Promise.all([createThumbnail(buffer), createPreview(buffer)])
+export const createThumbnailAndPreview = async (
+  buffer: Buffer
+): Promise<[ImageResult, ImageResult]> => {
+  assertBufferSize(buffer, 'createThumbnailAndPreview')
+  await assertInputDimensions(buffer, 'createThumbnailAndPreview')
+  return Promise.all([
+    encodeWebP(buffer, THUMB_WIDTH, THUMB_QUALITY, 'createThumbnailAndPreview'),
+    encodeWebP(buffer, PREVIEW_WIDTH, PREVIEW_QUALITY, 'createThumbnailAndPreview'),
+  ])
+}
 
 /** Thresholds for reference image compression */
 const REF_MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
@@ -216,6 +310,18 @@ export type CompressResult = {
   wasCompressed: boolean
 }
 
+// Result for the two "keep the original" paths (already within limits, or
+// re-encoding did not shrink the file). A single constructor keeps the
+// mime/extension mapping identical between them.
+const passthroughResult = (buffer: Buffer, format: string): CompressResult => ({
+  buffer,
+  mimeType: FORMAT_MIME_MAP[format] ?? 'application/octet-stream',
+  extension: format,
+  originalSize: buffer.length,
+  compressedSize: buffer.length,
+  wasCompressed: false,
+})
+
 /**
  * Compress a reference image if it exceeds size/dimension thresholds.
  * Returns the original buffer unchanged when already within limits.
@@ -223,35 +329,31 @@ export type CompressResult = {
 export const compressReferenceImage = async (buffer: Buffer): Promise<CompressResult> => {
   assertBufferSize(buffer, 'compressReferenceImage')
   const originalSize = buffer.length
-  let meta: sharp.Metadata
-  try {
-    meta = await sharp(buffer).metadata()
-  } catch {
-    throw new Error('compressReferenceImage: could not read image metadata (file may be corrupt or unsupported)')
-  }
+  const meta = await readImageMetadata(buffer, 'compressReferenceImage')
   if (!meta.format || !ALLOWED_REF_FORMATS.has(meta.format)) {
     throw new Error(`compressReferenceImage: unsupported format '${meta.format ?? 'unknown'}'`)
   }
+  const format = meta.format
   const w = meta.width ?? 0
   const h = meta.height ?? 0
-  if (w > MAX_SAFE_INPUT_DIMENSION || h > MAX_SAFE_INPUT_DIMENSION) {
-    throw new Error(
-      `compressReferenceImage: image dimensions ${w}x${h} exceed maximum allowed (${MAX_SAFE_INPUT_DIMENSION}px per side)`
-    )
-  }
+  assertImageDimensions(w, h, 'compressReferenceImage')
 
   const needsResize = w > REF_MAX_DIMENSION || h > REF_MAX_DIMENSION
   const needsCompress = originalSize > REF_MAX_FILE_SIZE
 
   if (!needsResize && !needsCompress) {
-    return {
-      buffer,
-      mimeType: (meta.format && FORMAT_MIME_MAP[meta.format]) ?? 'application/octet-stream',
-      extension: meta.format ?? 'bin',
-      originalSize,
-      compressedSize: originalSize,
-      wasCompressed: false,
-    }
+    return passthroughResult(buffer, format)
+  }
+
+  // Animated/multi-page inputs (GIF, animated WebP) are returned untouched.
+  // Sharp decodes only the first page by default, so re-encoding would
+  // silently flatten the animation to a static frame — and the caller then
+  // deletes the original from storage, making the frame loss permanent.
+  // Decoding with `animated: true` instead is not memory-safe here: the
+  // decoded footprint scales with frame count, bypassing the per-page area
+  // guard above (e.g. a 4096px 100-frame GIF decodes to several GB).
+  if ((meta.pages ?? 1) > 1) {
+    return passthroughResult(buffer, format)
   }
 
   // Always rotate first to honour EXIF orientation before any resize operation.
@@ -259,21 +361,24 @@ export const compressReferenceImage = async (buffer: Buffer): Promise<CompressRe
   if (needsResize) {
     pipeline.resize({ width: REF_MAX_DIMENSION, height: REF_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
   }
-  const compressed = await pipeline.webp({ quality: 90 }).toBuffer()
+  let compressed: Buffer
+  try {
+    compressed = await pipeline.webp({ quality: 90 }).toBuffer()
+  } catch (err) {
+    throw new Error(
+      `compressReferenceImage: Sharp encode failed — ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
+  if (compressed.length === 0) {
+    throw new Error('compressReferenceImage: Sharp encode produced empty buffer')
+  }
 
   // Only replace the original when the output is actually smaller. Re-encoding
   // an already-optimised file (e.g. a small PNG or a high-quality WebP) can
   // produce a larger output, which would inflate storage and trigger a needless
   // DB update without any benefit.
   if (compressed.length >= originalSize) {
-    return {
-      buffer,
-      mimeType: (meta.format && FORMAT_MIME_MAP[meta.format]) ?? 'application/octet-stream',
-      extension: meta.format ?? 'bin',
-      originalSize,
-      compressedSize: originalSize,
-      wasCompressed: false,
-    }
+    return passthroughResult(buffer, format)
   }
 
   return {
@@ -309,7 +414,7 @@ function runFfmpegExtract(inputPath: string, outputPath: string): Promise<void> 
  */
 export const extractVideoThumbnail = async (
   videoBuffer: Buffer,
-  width = 480
+  width = THUMB_WIDTH
 ): Promise<ImageResult> => {
   assertBufferSize(videoBuffer, 'extractVideoThumbnail')
 
@@ -320,19 +425,46 @@ export const extractVideoThumbnail = async (
   const tmpFrame = join(tmpdir(), `frame-${id}.png`)
 
   try {
-    await writeFile(tmpVideo, videoBuffer)
+    try {
+      await writeFile(tmpVideo, videoBuffer)
+    } catch (err) {
+      throw new Error(
+        `extractVideoThumbnail: failed to stage temp video — ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+
     await runFfmpegExtract(tmpVideo, tmpFrame)
 
-    const frameBuffer = await readFile(tmpFrame)
-    const thumb = await sharp(frameBuffer)
-      .rotate()
-      .resize({ width, withoutEnlargement: true })
-      .webp({ quality: 72 })
-      .toBuffer()
+    // ffmpeg can exit 0 yet leave no frame on disk (e.g. a seek past the end of
+    // a truncated clip). Surface that as a clear "no output frame" error rather
+    // than letting a raw ENOENT from readFile bubble up.
+    let frameBuffer: Buffer
+    try {
+      frameBuffer = await readFile(tmpFrame)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code
+      throw new Error(
+        code === 'ENOENT'
+          ? 'extractVideoThumbnail: ffmpeg produced no output frame'
+          : `extractVideoThumbnail: failed to read extracted frame — ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
 
-    return { buffer: thumb, mimeType: 'image/webp', extension: 'webp' }
+    assertBufferSize(frameBuffer, 'extractVideoThumbnail:frame')
+    await assertInputDimensions(frameBuffer, 'extractVideoThumbnail:frame')
+    return await encodeWebP(frameBuffer, width, THUMB_QUALITY, 'extractVideoThumbnail')
   } finally {
-    await unlink(tmpVideo).catch(() => {})
-    await unlink(tmpFrame).catch(() => {})
+    // Best-effort temp cleanup. A missing file (ENOENT) is expected when the
+    // frame was never written (e.g. ffmpeg failed before producing output), so
+    // we ignore it; any other failure leaks a file in /tmp and is worth a warn.
+    await Promise.all([
+      unlink(tmpVideo).catch(reportTempCleanupFailure),
+      unlink(tmpFrame).catch(reportTempCleanupFailure),
+    ])
   }
+}
+
+function reportTempCleanupFailure(err: NodeJS.ErrnoException): void {
+  if (err?.code === 'ENOENT') return
+  logger.warn('extractVideoThumbnail: failed to remove temp file:', err)
 }

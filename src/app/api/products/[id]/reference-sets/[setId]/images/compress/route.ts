@@ -2,15 +2,25 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
 import { processReferenceImageCompression } from '@/lib/reference-image-compression'
+import { mapWithConcurrency } from '@/lib/concurrency'
+import { isAdminAuthorizedNode } from '@/lib/server-secrets'
+import { logger } from '@/lib/server-logger'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
 export const dynamic = 'force-dynamic'
 
+// Bounded: each item holds a full-size image in memory during Sharp re-encode.
+const COMPRESS_CONCURRENCY = 3
+
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string; setId: string }> }
 ) {
+  if (!isAdminAuthorizedNode(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   try {
     const { setId } = await params
     const supabase = createServiceClient()
@@ -22,7 +32,7 @@ export async function POST(
       .order('display_order', { ascending: true })
 
     if (error) {
-      console.error('[ReferenceImagesCompress GET]', error)
+      logger.error('[ReferenceImagesCompress GET]', error)
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
     }
 
@@ -30,15 +40,16 @@ export async function POST(
       return NextResponse.json({ total: 0, compressed: 0, skipped: 0, errors: 0, results: [] })
     }
 
+    // processReferenceImageCompression reports failures via the result's
+    // error field rather than throwing, so the pool never short-circuits.
+    const results = await mapWithConcurrency(images, COMPRESS_CONCURRENCY, (img) =>
+      processReferenceImageCompression(img.id, img.storage_path)
+    )
+
     let compressed = 0
     let skipped = 0
     let errors = 0
-    const results = []
-
-    for (const img of images) {
-      const result = await processReferenceImageCompression(img.id, img.storage_path)
-      results.push(result)
-
+    for (const result of results) {
       if (result.error) {
         errors++
       } else if (result.wasCompressed) {
@@ -56,7 +67,7 @@ export async function POST(
       results,
     })
   } catch (err) {
-    console.error('[ReferenceImagesCompress] Unexpected error:', err)
+    logger.error('[ReferenceImagesCompress] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

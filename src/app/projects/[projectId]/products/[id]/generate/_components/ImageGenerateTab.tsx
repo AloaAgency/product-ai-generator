@@ -50,6 +50,7 @@ export type InitialReferenceSetSelection = {
 interface ImageGenerateTabProps {
   productId: string
   initialPrompt?: string
+  initialTemplateId?: string
   initialReferenceSets?: InitialReferenceSetSelection[]
 }
 
@@ -131,28 +132,27 @@ const distributeBudget = (
 export function ImageGenerateTab({
   productId,
   initialPrompt,
+  initialTemplateId,
   initialReferenceSets,
 }: ImageGenerateTabProps) {
-  const {
-    promptTemplates,
-    referenceSets,
-    referenceImages,
-    currentJob,
-    currentProduct,
-    aiLoading,
-    fetchPromptTemplates,
-    createPromptTemplate,
-    updatePromptTemplate,
-    fetchReferenceSets,
-    fetchReferenceImages,
-    startGeneration,
-    fetchJobStatus,
-    retryGenerationJob,
-    buildPrompt,
-    suggestPrompts,
-    updateImageApproval,
-    deleteImage,
-  } = useAppStore()
+  const promptTemplates = useAppStore((s) => s.promptTemplates)
+  const referenceSets = useAppStore((s) => s.referenceSets)
+  const referenceImages = useAppStore((s) => s.referenceImages)
+  const currentJob = useAppStore((s) => s.currentJob)
+  const currentProduct = useAppStore((s) => s.currentProduct)
+  const aiLoading = useAppStore((s) => s.aiLoading)
+  const fetchPromptTemplates = useAppStore((s) => s.fetchPromptTemplates)
+  const createPromptTemplate = useAppStore((s) => s.createPromptTemplate)
+  const updatePromptTemplate = useAppStore((s) => s.updatePromptTemplate)
+  const fetchReferenceSets = useAppStore((s) => s.fetchReferenceSets)
+  const fetchReferenceImages = useAppStore((s) => s.fetchReferenceImages)
+  const startGeneration = useAppStore((s) => s.startGeneration)
+  const fetchJobStatus = useAppStore((s) => s.fetchJobStatus)
+  const retryGenerationJob = useAppStore((s) => s.retryGenerationJob)
+  const buildPrompt = useAppStore((s) => s.buildPrompt)
+  const suggestPrompts = useAppStore((s) => s.suggestPrompts)
+  const updateImageApproval = useAppStore((s) => s.updateImageApproval)
+  const deleteImage = useAppStore((s) => s.deleteImage)
 
   const [prompt, setPrompt] = useState('')
   const [variationCountInput, setVariationCountInput] = useState('15')
@@ -165,6 +165,7 @@ export function ImageGenerateTab({
   const [refSlots, setRefSlots] = useState<RefSlot[]>([])
   const [didInitRefSlots, setDidInitRefSlots] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [generateError, setGenerateError] = useState<string | null>(null)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
   const [templateName, setTemplateName] = useState('')
@@ -210,10 +211,11 @@ export function ImageGenerateTab({
     fetchReferenceSets(productId)
   }, [productId, fetchPromptTemplates, fetchReferenceSets])
 
-  // Pre-fill prompt from query param
+  // Pre-fill prompt (and originating template) from query params
   useEffect(() => {
     if (initialPrompt && !prompt) {
       setPrompt(initialPrompt)
+      if (initialTemplateId) setLoadedTemplateId(initialTemplateId)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPrompt])
@@ -348,6 +350,8 @@ export function ImageGenerateTab({
       }
       setGenerating(false)
     }
+    // Only react to status transitions, not every poll update to the job object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentJob?.status])
 
   const handleRefine = async () => {
@@ -409,9 +413,13 @@ export function ImageGenerateTab({
     }
 
     setGenerating(true)
+    setGenerateError(null)
     try {
       const job = await startGeneration(productId, {
         prompt_text: finalPrompt,
+        // Validated against fetched templates so a stale deep-link id can't
+        // reach the API and violate the FK on insert.
+        prompt_template_id: loadedTemplate?.id,
         variation_count: variationCountValue,
         resolution,
         aspect_ratio: aspectRatio,
@@ -423,7 +431,10 @@ export function ImageGenerateTab({
         style: photoStyle || undefined,
       })
       setActiveJobId(job.id)
-    } catch {
+    } catch (err) {
+      // Surface the failure instead of silently resetting — a swallowed error
+      // here once masked an entire image-generation outage.
+      setGenerateError(err instanceof Error ? err.message : 'Failed to start generation. Please try again.')
       setGenerating(false)
     }
   }
@@ -455,6 +466,7 @@ export function ImageGenerateTab({
       variation_number: img.variation_number,
       approval_status: img.approval_status ?? 'pending',
       notes: img.notes,
+      created_at: img.created_at,
     }))
   }, [currentJob?.images, signedUrlsById])
 
@@ -1278,6 +1290,12 @@ export function ImageGenerateTab({
           )}
           {generating ? 'Generating...' : 'Generate Images'}
         </button>
+        {generateError && (
+          <div className="flex items-start gap-2 rounded-md border border-red-900/60 bg-red-950/50 px-3 py-2 text-xs text-red-300">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span><span className="font-medium">Couldn&apos;t start generation:</span> {generateError}</span>
+          </div>
+        )}
         {!generating && !aiLoading && disabledReasons.length > 0 && (
           <div className="flex items-start gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-400">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-yellow-500 mt-0.5" />

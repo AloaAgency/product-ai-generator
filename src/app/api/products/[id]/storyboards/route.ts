@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { T } from '@/lib/db-tables'
+import { parseRequestBody, isUuid, MAX_LIST_ROWS, MAX_NAME_LENGTH, MAX_STORYBOARD_IMAGES } from '@/lib/request-guards'
+import { logger } from '@/lib/server-logger'
 
 export async function GET(
   _request: NextRequest,
@@ -15,11 +17,12 @@ export async function GET(
       .select('*')
       .eq('product_id', productId)
       .order('created_at', { ascending: true })
+      .limit(MAX_LIST_ROWS)
 
-    if (error) { console.error('[Storyboards GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Storyboards GET]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data || [])
   } catch (err) {
-    console.error('[Storyboards GET] Unexpected error:', err)
+    logger.error('[Storyboards GET] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -31,17 +34,25 @@ export async function POST(
   try {
     const { id: productId } = await params
     const supabase = createServiceClient()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let body: any = {}
-    try { body = await request.json() }
-    catch { return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 }) }
+    const parsed = await parseRequestBody(request)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.body
     const { name, image_ids } = body
 
-    if (!name || !Array.isArray(image_ids) || image_ids.length === 0) {
+    if (!name || typeof name !== 'string' || !Array.isArray(image_ids) || image_ids.length === 0) {
       return NextResponse.json(
         { error: 'name and image_ids are required' },
         { status: 400 }
       )
+    }
+    if (name.length > MAX_NAME_LENGTH) {
+      return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 })
+    }
+    if (image_ids.length > MAX_STORYBOARD_IMAGES) {
+      return NextResponse.json({ error: `image_ids cannot contain more than ${MAX_STORYBOARD_IMAGES} entries` }, { status: 400 })
+    }
+    if (!image_ids.every((value) => typeof value === 'string' && isUuid(value))) {
+      return NextResponse.json({ error: 'image_ids must be an array of image UUIDs' }, { status: 400 })
     }
 
     const { data, error } = await supabase
@@ -55,10 +66,10 @@ export async function POST(
       .select()
       .single()
 
-    if (error) { console.error('[Storyboards POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
+    if (error) { logger.error('[Storyboards POST]', error); return NextResponse.json({ error: 'Internal server error' }, { status: 500 }) }
     return NextResponse.json(data, { status: 201 })
   } catch (err) {
-    console.error('[Storyboards POST] Unexpected error:', err)
+    logger.error('[Storyboards POST] Unexpected error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

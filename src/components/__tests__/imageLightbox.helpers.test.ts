@@ -54,6 +54,14 @@ test('image URL helpers reject unsafe protocols and preserve safe absolute or re
     '/api/images/123'
   )
   assert.equal(
+    getDisplayImageUrl(buildImage({ public_url: '//attacker.example/image.png' })),
+    null
+  )
+  assert.equal(
+    getDisplayImageUrl(buildImage({ public_url: '/\\attacker.example/image.png' })),
+    null
+  )
+  assert.equal(
     getLightboxThumbnailUrl(buildImage({ thumb_public_url: 'https://example.com/thumb.png' })),
     'https://example.com/thumb.png'
   )
@@ -88,6 +96,22 @@ test('keyboard navigation prevents scroll and supports first/last shortcuts', ()
   assert.deepEqual(
     getKeyboardAction({ key: 'End', isNotesFocused: false, isRejected: false, hasDelete: false }),
     { action: 'last', preventDefault: true }
+  )
+})
+
+test('keyboard copy-prompt shortcut maps to a dedicated action without preventing default', () => {
+  assert.deepEqual(
+    getKeyboardAction({ key: 'p', isNotesFocused: false, isRejected: false, hasDelete: false }),
+    { action: 'copyPrompt', preventDefault: false }
+  )
+  assert.deepEqual(
+    getKeyboardAction({ key: 'P', isNotesFocused: false, isRejected: false, hasDelete: false }),
+    { action: 'copyPrompt', preventDefault: false }
+  )
+  // While typing a note, "p" must remain a normal character, not a copy shortcut.
+  assert.deepEqual(
+    getKeyboardAction({ key: 'p', isNotesFocused: true, isRejected: false, hasDelete: false }),
+    { action: 'none', preventDefault: false }
   )
 })
 

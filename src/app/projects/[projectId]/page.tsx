@@ -34,20 +34,7 @@ export default function ProjectDetailPage({
     fetchProducts(projectId)
   }, [projectId, fetchProject, fetchProducts])
 
-  const handleSubmitModal = useCallback(() => {
-    if (name.trim() && !creating) {
-      const fakeEvent = { preventDefault: () => {} } as React.FormEvent
-      handleCreate(fakeEvent)
-    }
-  }, [name, creating])
-
-  useModalShortcuts({
-    isOpen: showModal,
-    onClose: () => setShowModal(false),
-    onSubmit: handleSubmitModal,
-  })
-
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleCreate = useCallback(async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
     setCreating(true)
@@ -63,7 +50,20 @@ export default function ProjectDetailPage({
     } finally {
       setCreating(false)
     }
-  }
+  }, [name, description, projectId, createProduct])
+
+  const handleSubmitModal = useCallback(() => {
+    if (name.trim() && !creating) {
+      const fakeEvent = { preventDefault: () => {} } as React.FormEvent
+      handleCreate(fakeEvent)
+    }
+  }, [name, creating, handleCreate])
+
+  useModalShortcuts({
+    isOpen: showModal,
+    onClose: () => setShowModal(false),
+    onSubmit: handleSubmitModal,
+  })
 
   const handleNameSave = async (newName: string) => {
     await updateProject(projectId, { name: newName })
