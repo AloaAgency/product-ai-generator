@@ -345,7 +345,7 @@ export function BugReportWidget() {
                         <button
                           type="button"
                           onClick={() => removeImage(index)}
-                          className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"
+                          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"
                           aria-label={`Remove screenshot ${index + 1}`}
                         >
                           <Trash2 className="h-4 w-4" />

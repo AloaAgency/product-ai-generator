@@ -81,7 +81,7 @@ export function ProjectHeader({
           <div>
             <Link
               href="/"
-              className="mb-1 inline-flex items-center gap-1.5 text-sm text-zinc-500 transition-colors hover:text-zinc-300"
+              className="mb-1 inline-flex min-h-11 items-center gap-1.5 text-sm text-zinc-500 transition-colors hover:text-zinc-300 sm:min-h-0"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               All Projects
@@ -129,7 +129,7 @@ export function ProjectHeader({
               )}
               <Link
                 href={`/projects/${projectId}/settings`}
-                className="rounded-lg px-2 py-1 text-xs text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
+                className="inline-flex min-h-11 items-center rounded-lg px-2 py-1 text-xs text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300 sm:min-h-0"
               >
                 Settings
               </Link>
@@ -138,7 +138,7 @@ export function ProjectHeader({
               <p className="mt-1 text-sm text-zinc-500">{projectDescription}</p>
             )}
           </div>
-          {actions && <div className="flex items-center gap-2">{actions}</div>}
+          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
         </div>
       </div>
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
@@ -152,7 +152,7 @@ export function ProjectHeader({
               <Link
                 key={tab.href}
                 href={tab.href}
-                className={`relative px-4 py-2.5 text-sm font-medium transition-colors ${
+                className={`relative flex min-h-11 items-center px-4 py-2.5 text-sm font-medium transition-colors ${
                   isActive
                     ? 'text-zinc-100'
                     : 'text-zinc-500 hover:text-zinc-300'
