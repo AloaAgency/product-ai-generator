@@ -90,7 +90,7 @@ export function GenerationActivityModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-end justify-center pt-[env(safe-area-inset-top)] sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby={dialogTitleId}
@@ -99,12 +99,12 @@ export function GenerationActivityModal({
       <div className="fixed inset-0 bg-black/70" onClick={onClose} />
       <div
         ref={dialogRef}
-        className="relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 shadow-xl shadow-black/50"
+        className="relative z-10 flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-t-xl border border-zinc-800 bg-zinc-900 pb-[env(safe-area-inset-bottom)] shadow-xl shadow-black/50 sm:max-h-[85dvh] sm:rounded-xl sm:pb-0"
         onClick={(e) => e.stopPropagation()}
         tabIndex={-1}
       >
         {/* Header */}
-        <div className="flex items-start justify-between border-b border-zinc-800 px-5 py-4">
+        <div className="flex shrink-0 items-start justify-between border-b border-zinc-800 px-4 py-4 sm:px-5">
           <div className="flex items-start gap-3">
             <div className="mt-0.5 rounded-lg bg-zinc-800 p-2">
               <CalendarDays className="h-4 w-4 text-zinc-300" />
@@ -128,7 +128,7 @@ export function GenerationActivityModal({
         </div>
 
         {/* Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-5">
           {loading ? (
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-10 text-center" role="status">
               <Loader2 className="mx-auto h-6 w-6 animate-spin text-zinc-500" />

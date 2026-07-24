@@ -73,7 +73,7 @@ export default function ReferenceLightbox({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4"
+      className="fixed inset-0 z-50 flex items-stretch justify-center pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby={dialogTitleId}
@@ -81,12 +81,12 @@ export default function ReferenceLightbox({
       <div className="fixed inset-0 bg-black/90" onClick={onClose} />
       <div
         ref={dialogRef}
-        className="relative z-10 flex h-full max-h-[90vh] w-full max-w-5xl flex-col"
+        className="relative z-10 flex h-full max-h-full w-full max-w-5xl flex-col sm:max-h-[90dvh]"
         onClick={(e) => e.stopPropagation()}
         tabIndex={-1}
       >
-        <div className="flex items-center justify-between rounded-t-xl bg-zinc-900/80 px-3 py-2 sm:px-4 sm:py-3">
-          <div className="flex min-w-0 items-center gap-2 sm:gap-4" aria-live="polite" aria-atomic="true">
+        <div className="flex items-center justify-between bg-zinc-900/80 px-3 py-2 sm:rounded-t-xl sm:px-4 sm:py-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-4" aria-live="polite" aria-atomic="true">
             <span id={dialogTitleId} className="truncate text-sm font-medium text-zinc-100">
               {currentImage.file_name ?? `Image ${currentIndex + 1}`}
             </span>

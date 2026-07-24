@@ -45,6 +45,7 @@ export const MENU_ITEM_HEIGHT_PX = 34
 export const MENU_ITEM_TOUCH_HEIGHT_PX = 44
 export const MENU_TOUCH_LAYOUT_MAX_VIEWPORT_WIDTH_PX = 640
 export const MENU_SEPARATOR_HEIGHT_PX = 9
+export const MENU_VIEWPORT_MARGIN_PX = 8
 
 export const getMenuItemHeightPx = (viewportWidth: number) =>
   viewportWidth < MENU_TOUCH_LAYOUT_MAX_VIEWPORT_WIDTH_PX ? MENU_ITEM_TOUCH_HEIGHT_PX : MENU_ITEM_HEIGHT_PX
@@ -73,12 +74,22 @@ export const getGalleryContextMenuPosition = ({
 }) => {
   const estimatedHeight =
     itemCount * getMenuItemHeightPx(viewportWidth) + MENU_DIVIDER_ACTIONS.length * MENU_SEPARATOR_HEIGHT_PX + 8
-  const adjustedX = x + MENU_MIN_WIDTH_PX > viewportWidth ? x - MENU_MIN_WIDTH_PX : x
-  const adjustedY = y + estimatedHeight > viewportHeight ? y - estimatedHeight : y
+  const preferredX =
+    x + MENU_MIN_WIDTH_PX + MENU_VIEWPORT_MARGIN_PX > viewportWidth ? x - MENU_MIN_WIDTH_PX : x
+  const preferredY =
+    y + estimatedHeight + MENU_VIEWPORT_MARGIN_PX > viewportHeight ? y - estimatedHeight : y
+  const maxX = Math.max(
+    MENU_VIEWPORT_MARGIN_PX,
+    viewportWidth - MENU_MIN_WIDTH_PX - MENU_VIEWPORT_MARGIN_PX
+  )
+  const maxY = Math.max(
+    MENU_VIEWPORT_MARGIN_PX,
+    viewportHeight - estimatedHeight - MENU_VIEWPORT_MARGIN_PX
+  )
 
   return {
-    x: Math.max(0, adjustedX),
-    y: Math.max(0, adjustedY),
+    x: Math.min(maxX, Math.max(MENU_VIEWPORT_MARGIN_PX, preferredX)),
+    y: Math.min(maxY, Math.max(MENU_VIEWPORT_MARGIN_PX, preferredY)),
   }
 }
 

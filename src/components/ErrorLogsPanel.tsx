@@ -108,7 +108,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
       <button
         type="button"
         onClick={handleToggleExpanded}
-        className="flex min-h-11 w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-red-400 hover:bg-red-950/30 transition-colors rounded-lg"
+        className="flex min-h-11 w-full items-center gap-2 rounded-lg px-4 py-2.5 text-left text-sm font-medium text-red-400 transition-colors hover:bg-red-950/30"
         aria-expanded={expanded}
         aria-controls={panelId}
       >
@@ -178,14 +178,14 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
                 >
                   <button
                     type="button"
-                    className="flex w-full items-start gap-2 text-left"
+                    className="flex min-h-11 w-full items-start gap-2 text-left"
                     onClick={() => toggleEntry(log.id)}
                     aria-expanded={expandedEntries.has(log.id)}
                     aria-controls={log.safeContext ? `${panelId}-${log.id}` : undefined}
                     disabled={!log.safeContext}
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 text-zinc-500">
+                      <div className="flex flex-wrap items-center gap-2 text-zinc-500">
                         <span>{new Date(log.created_at).toLocaleString()}</span>
                         {log.error_source && (
                           <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-400">
@@ -208,7 +208,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
                   {expandedEntries.has(log.id) && log.safeContext && (
                     <pre
                       id={`${panelId}-${log.id}`}
-                      className="mt-2 max-h-40 overflow-auto rounded bg-zinc-900/80 p-2 text-zinc-400"
+                      className="mt-2 max-h-40 max-w-full overflow-y-auto whitespace-pre-wrap break-all rounded bg-zinc-900/80 p-2 text-zinc-400"
                     >
                       {log.safeContext}
                     </pre>

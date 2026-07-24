@@ -78,17 +78,17 @@ export function ProjectHeader({
     <header className="border-b border-zinc-800">
       <div className="px-4 sm:px-6 py-3 sm:py-4">
         <div className="mx-auto flex max-w-6xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
+          <div className="min-w-0 flex-1">
             <Link
               href="/"
-              className="mb-1 inline-flex min-h-11 items-center gap-1.5 text-sm text-zinc-500 transition-colors hover:text-zinc-300 sm:min-h-0"
+              className="mb-1 inline-flex min-h-11 items-center gap-1.5 rounded-lg text-sm text-zinc-500 transition-colors hover:text-zinc-300 sm:min-h-0"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               All Projects
             </Link>
-            <div className="flex items-center gap-3">
+            <div className="flex min-w-0 items-center gap-2 sm:gap-3">
               {editingName ? (
-                <div>
+                <div className="min-w-0 flex-1">
                   <label htmlFor="project-name-input" className="sr-only">Project name</label>
                   <input
                     id="project-name-input"
@@ -103,7 +103,7 @@ export function ProjectHeader({
                       if (e.key === 'Enter') void handleNameSave()
                       if (e.key === 'Escape') handleCancelEditing()
                     }}
-                    className="rounded bg-zinc-800 px-2 py-1 text-xl font-semibold tracking-tight text-zinc-100 outline-none focus:ring-1 focus:ring-blue-500"
+                    className="min-h-11 w-full min-w-0 rounded bg-zinc-800 px-2 py-1 text-xl font-semibold tracking-tight text-zinc-100 outline-none focus:ring-1 focus:ring-blue-500"
                     aria-invalid={nameError ? 'true' : 'false'}
                     aria-describedby={nameError ? 'project-name-error' : undefined}
                     autoFocus
@@ -117,28 +117,32 @@ export function ProjectHeader({
               ) : (
                 <button
                   type="button"
-                  className="cursor-pointer text-left text-xl font-semibold tracking-tight transition-colors hover:text-blue-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
+                  className="min-h-11 min-w-0 flex-1 cursor-pointer rounded-lg text-left text-xl font-semibold tracking-tight transition-colors hover:text-blue-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
                   onClick={handleStartEditing}
                   title="Click to edit"
                   aria-label={`Edit project name${projectName ? `: ${projectName}` : ''}`}
                 >
-                  <span className="text-xl font-semibold tracking-tight">
+                  <span className="block break-words text-xl font-semibold tracking-tight">
                     {projectName ?? 'Loading...'}
                   </span>
                 </button>
               )}
               <Link
                 href={`/projects/${projectId}/settings`}
-                className="inline-flex min-h-11 items-center rounded-lg px-2 py-1 text-xs text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300 sm:min-h-0"
+                className="inline-flex min-h-11 shrink-0 items-center rounded-lg px-2 py-1 text-xs text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300 sm:min-h-0"
               >
                 Settings
               </Link>
             </div>
             {projectDescription && (
-              <p className="mt-1 text-sm text-zinc-500">{projectDescription}</p>
+              <p className="mt-1 break-words text-sm text-zinc-500">{projectDescription}</p>
             )}
           </div>
-          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+          {actions && (
+            <div className="flex w-full flex-wrap items-center gap-2 [&>a]:min-h-11 [&>button]:min-h-11 sm:w-auto sm:justify-end">
+              {actions}
+            </div>
+          )}
         </div>
       </div>
       <div className="mx-auto max-w-6xl px-4 sm:px-6">

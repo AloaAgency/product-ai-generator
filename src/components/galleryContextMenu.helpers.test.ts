@@ -33,7 +33,7 @@ describe('galleryContextMenu.helpers', () => {
         viewportWidth: 800,
         viewportHeight: 500,
       })
-    ).toEqual({ x: 0, y: 0 })
+    ).toEqual({ x: 8, y: 8 })
   })
 
   it('estimates taller menu items on touch-sized viewports so bottom menus flip sooner', () => {

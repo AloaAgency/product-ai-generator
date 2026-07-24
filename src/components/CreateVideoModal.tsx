@@ -34,9 +34,9 @@ const DEFAULT_MOTION_PROMPT =
   'Bring this product image to life with subtle, natural, cinematic motion. Keep the product, composition, and branding consistent and in focus.'
 
 const fieldClassName =
-  'w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none'
+  'w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-base text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none sm:text-sm'
 const selectClassName =
-  'w-full min-h-11 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-200 outline-none focus:border-purple-500'
+  'min-h-11 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-base text-zinc-200 outline-none focus:border-purple-500 sm:text-sm'
 
 interface CreateVideoModalProps {
   productId: string
@@ -61,6 +61,9 @@ export function CreateVideoModal({
   const updatePromptTemplate = useAppStore((s) => s.updatePromptTemplate)
   const promptTemplates = useAppStore((s) => s.promptTemplates)
   const dialogTitleId = useId()
+  const advancedSettingsId = useId()
+  const resolutionId = useId()
+  const aspectRatioId = useId()
 
   const [motionPrompt, setMotionPrompt] = useState('')
   const [resolution, setResolution] = useState(DEFAULT_VEO.resolution)
@@ -183,18 +186,18 @@ export function CreateVideoModal({
 
   return (
     <div
-      className="fixed inset-0 z-[110] flex items-end justify-center bg-black/80 p-3 sm:items-center sm:p-4"
+      className="fixed inset-0 z-[110] flex items-end justify-center bg-black/80 pt-[env(safe-area-inset-top)] sm:items-center sm:p-4"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-labelledby={dialogTitleId}
     >
       <div
-        className="relative flex max-h-[calc(100vh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 sm:max-h-[88vh]"
+        className="relative flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-t-xl border border-zinc-700 bg-zinc-900 sm:max-h-[88dvh] sm:rounded-xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-5 py-4">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-zinc-800 px-4 py-4 sm:px-5">
           <div className="flex items-center gap-2">
             <Video className="h-5 w-5 text-purple-400" />
             <h2 id={dialogTitleId} className="text-sm font-semibold text-zinc-100">Turn image into video</h2>
@@ -209,7 +212,7 @@ export function CreateVideoModal({
           </button>
         </div>
 
-        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4 sm:px-5">
           {error && (
             <div
               className="flex items-start gap-2 rounded-lg border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300"
@@ -245,6 +248,7 @@ export function CreateVideoModal({
             <div className="relative">
               <select
                 className={`${selectClassName} appearance-none pr-10`}
+                aria-label="Load a saved motion prompt"
                 value={loadedTemplateId ?? ''}
                 onChange={(e) => {
                   const tmpl = videoTemplates.find((t) => t.id === e.target.value)
@@ -271,6 +275,7 @@ export function CreateVideoModal({
           <textarea
             rows={4}
             className={`${fieldClassName} resize-none`}
+            aria-label="Motion prompt"
             placeholder="Describe the motion (optional) — e.g. 'slow push-in, product slowly rotating, soft drifting light'"
             value={motionPrompt}
             onChange={(e) => {
@@ -299,7 +304,8 @@ export function CreateVideoModal({
                 value={templateName}
                 onChange={(e) => setTemplateName(e.target.value)}
                 maxLength={MAX_NAME_LENGTH}
-                className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none"
+                className="min-h-11 flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-base text-zinc-100 placeholder-zinc-500 focus:border-purple-500 focus:outline-none sm:text-sm"
+                aria-label="Saved prompt name"
                 autoFocus
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && templateName.trim()) {
@@ -353,18 +359,22 @@ export function CreateVideoModal({
           {/* Advanced settings */}
           <div className="border-t border-zinc-800 pt-3">
             <button
+              type="button"
               onClick={() => setShowAdvanced((v) => !v)}
-              className="inline-flex min-h-11 items-center gap-2 text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-200 sm:min-h-0"
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg pr-2 text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-200 sm:min-h-0"
+              aria-expanded={showAdvanced}
+              aria-controls={advancedSettingsId}
             >
               <SlidersHorizontal className="h-3.5 w-3.5" />
               Advanced settings
               <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
             </button>
             {showAdvanced && (
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div id={advancedSettingsId} className="mt-3 grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
-                  <span className="text-[11px] uppercase tracking-wide text-zinc-500">Resolution</span>
+                  <label htmlFor={resolutionId} className="text-xs uppercase tracking-wide text-zinc-500">Resolution</label>
                   <select
+                    id={resolutionId}
                     value={resolution}
                     onChange={(e) => setResolution(e.target.value)}
                     className={selectClassName}
@@ -375,8 +385,9 @@ export function CreateVideoModal({
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-[11px] uppercase tracking-wide text-zinc-500">Aspect ratio</span>
+                  <label htmlFor={aspectRatioId} className="text-xs uppercase tracking-wide text-zinc-500">Aspect ratio</label>
                   <select
+                    id={aspectRatioId}
                     value={aspectRatio}
                     onChange={(e) => setAspectRatio(e.target.value)}
                     className={selectClassName}
@@ -386,7 +397,7 @@ export function CreateVideoModal({
                     ))}
                   </select>
                 </div>
-                <p className="text-[10px] text-zinc-500 sm:col-span-2">
+                <p className="text-xs text-zinc-500 sm:col-span-2">
                   Veo 3.1 · 8s (fixed when using a start frame) · audio handled automatically.
                 </p>
               </div>
@@ -395,7 +406,7 @@ export function CreateVideoModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 border-t border-zinc-800 px-5 py-4">
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-zinc-800 px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4 sm:px-5 sm:pb-4">
           <button
             onClick={onClose}
             className="inline-flex min-h-11 items-center justify-center rounded-lg border border-zinc-700 px-4 py-2.5 text-sm text-zinc-300 transition-colors hover:bg-zinc-800"
