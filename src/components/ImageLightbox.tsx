@@ -544,7 +544,7 @@ export function ImageLightbox({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4"
+      className="fixed inset-0 z-50 flex items-stretch justify-center pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby={dialogTitleId}
@@ -552,14 +552,14 @@ export function ImageLightbox({
       <div className="fixed inset-0 bg-black/90" onClick={onClose} />
       <div
         ref={dialogRef}
-        className="relative z-10 flex h-full max-h-[90vh] w-full max-w-6xl flex-col"
+        className="relative z-10 flex h-full max-h-full w-full max-w-6xl flex-col sm:max-h-[90dvh]"
         onClick={(e) => e.stopPropagation()}
         tabIndex={-1}
       >
         {/* Header */}
-        <div className="flex items-center justify-between rounded-t-xl bg-zinc-900/80 px-3 py-2 sm:px-4 sm:py-3">
-          <div className="flex min-w-0 items-center gap-2 sm:gap-4" aria-live="polite" aria-atomic="true">
-            <span id={dialogTitleId} className="whitespace-nowrap text-sm font-medium text-zinc-100 sm:text-base">
+        <div className="flex items-center justify-between bg-zinc-900/80 px-3 py-2 sm:rounded-t-xl sm:px-4 sm:py-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-4" aria-live="polite" aria-atomic="true">
+            <span id={dialogTitleId} className="min-w-0 truncate text-sm font-medium text-zinc-100 sm:text-base">
               {displayName}
             </span>
             {promptName && (
@@ -592,11 +592,11 @@ export function ImageLightbox({
 
         {/* Prompt section – collapsed by default, capped height when expanded */}
         {currentImage.prompt && (
-          <div className="flex items-start gap-3 border-b border-zinc-800 bg-zinc-900/60 px-4 py-2">
+          <div className="flex items-start gap-3 border-b border-zinc-800 bg-zinc-900/60 px-3 py-2 sm:px-4">
             <button
               type="button"
               onClick={() => setPromptExpanded(!promptExpanded)}
-              className={`flex-1 cursor-pointer text-left text-sm text-zinc-300 ${promptExpanded ? 'max-h-20 overflow-y-auto' : 'overflow-hidden whitespace-nowrap text-ellipsis'}`}
+              className={`min-w-0 flex-1 cursor-pointer text-left text-sm text-zinc-300 ${promptExpanded ? 'max-h-20 overflow-y-auto' : 'overflow-hidden whitespace-nowrap text-ellipsis'}`}
               aria-expanded={promptExpanded}
               aria-label={promptExpanded ? 'Collapse prompt' : 'Expand prompt'}
             >
@@ -693,31 +693,33 @@ export function ImageLightbox({
 
         {/* Notes input (for rejected or request_changes) */}
         {showNotesInput && (
-          <div className="flex items-center gap-3 border-t border-zinc-800 bg-zinc-900/60 px-4 py-2">
+          <div className="flex flex-col gap-2 border-t border-zinc-800 bg-zinc-900/60 px-3 py-3 sm:flex-row sm:items-center sm:gap-3 sm:px-4 sm:py-2">
             <span className={`shrink-0 text-sm ${isRequestChanges ? 'text-amber-400' : 'text-red-400'}`}>
               {isRequestChanges ? 'Requested changes:' : 'Reason:'}
             </span>
-            <input
-              ref={notesInputRef}
-              type="text"
-              value={notesValue}
-              onChange={(e) => setNotesValue(e.target.value)}
-              onBlur={() => void handleSaveNotes()}
-              maxLength={300}
-              placeholder={isRequestChanges ? 'Describe changes needed...' : 'Optional rejection reason...'}
-              className={`flex-1 rounded-lg border bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none ${
-                isRequestChanges ? 'border-zinc-700 focus:border-amber-500' : 'border-zinc-700 focus:border-red-500'
-              }`}
-            />
-            {isRequestChanges && fixImageHref && (
-              <a
-                href={fixImageHref}
-                className="flex shrink-0 items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-amber-500"
-              >
-                <Wand2 className="w-3.5 h-3.5" />
-                Fix
-              </a>
-            )}
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <input
+                ref={notesInputRef}
+                type="text"
+                value={notesValue}
+                onChange={(e) => setNotesValue(e.target.value)}
+                onBlur={() => void handleSaveNotes()}
+                maxLength={300}
+                placeholder={isRequestChanges ? 'Describe changes needed...' : 'Optional rejection reason...'}
+                className={`min-h-11 min-w-0 flex-1 rounded-lg border bg-zinc-800 px-3 py-2 text-base text-zinc-200 placeholder:text-zinc-500 focus:outline-none sm:min-h-0 sm:py-1.5 sm:text-sm ${
+                  isRequestChanges ? 'border-zinc-700 focus:border-amber-500' : 'border-zinc-700 focus:border-red-500'
+                }`}
+              />
+              {isRequestChanges && fixImageHref && (
+                <a
+                  href={fixImageHref}
+                  className="inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-amber-500 sm:min-h-0"
+                >
+                  <Wand2 className="w-3.5 h-3.5" />
+                  Fix
+                </a>
+              )}
+            </div>
           </div>
         )}
 
@@ -747,7 +749,7 @@ export function ImageLightbox({
         )}
 
         {/* Footer toolbar */}
-        <div className="flex flex-col items-stretch justify-between gap-2 rounded-b-xl bg-zinc-900/80 px-3 py-2 sm:flex-row sm:items-center sm:px-4 sm:py-3">
+        <div className="flex flex-col items-stretch justify-between gap-2 bg-zinc-900/80 px-3 py-2 sm:flex-row sm:items-center sm:rounded-b-xl sm:px-4 sm:py-3">
           {/* Thumbnail strip */}
           <div className="flex max-w-full items-center gap-2 overflow-x-auto scrollbar-hide pb-1 sm:max-w-[50%]">
             {thumbnailItems.map((item) => (
