@@ -693,7 +693,7 @@ export function ImageLightbox({
 
         {/* Notes input (for rejected or request_changes) */}
         {showNotesInput && (
-          <div className="flex items-center gap-3 border-t border-zinc-800 bg-zinc-900/60 px-4 py-2">
+          <div className="flex flex-col gap-2 border-t border-zinc-800 bg-zinc-900/60 px-4 py-2 sm:flex-row sm:items-center sm:gap-3">
             <span className={`shrink-0 text-sm ${isRequestChanges ? 'text-amber-400' : 'text-red-400'}`}>
               {isRequestChanges ? 'Requested changes:' : 'Reason:'}
             </span>
@@ -705,14 +705,14 @@ export function ImageLightbox({
               onBlur={() => void handleSaveNotes()}
               maxLength={300}
               placeholder={isRequestChanges ? 'Describe changes needed...' : 'Optional rejection reason...'}
-              className={`flex-1 rounded-lg border bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none ${
+              className={`min-h-11 w-full rounded-lg border bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none sm:min-h-0 sm:flex-1 ${
                 isRequestChanges ? 'border-zinc-700 focus:border-amber-500' : 'border-zinc-700 focus:border-red-500'
               }`}
             />
             {isRequestChanges && fixImageHref && (
               <a
                 href={fixImageHref}
-                className="flex shrink-0 items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-amber-500"
+                className="flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-amber-500 sm:min-h-0"
               >
                 <Wand2 className="w-3.5 h-3.5" />
                 Fix
