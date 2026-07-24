@@ -131,7 +131,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
               type="button"
               onClick={handleRefresh}
               disabled={loadingErrorLogs}
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-md bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700 disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-md bg-zinc-800 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700 disabled:opacity-50 sm:min-h-9"
             >
               <RefreshCw className={`h-3 w-3 ${loadingErrorLogs ? 'animate-spin' : ''}`} />
               Refresh
@@ -140,7 +140,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
               type="button"
               onClick={handleClear}
               disabled={clearing || errorLogs.length === 0}
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-md bg-red-900/40 px-3 py-2 text-xs font-medium text-red-300 transition-colors hover:bg-red-900/60 disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-md bg-red-900/40 px-2.5 py-1.5 text-xs font-medium text-red-300 transition-colors hover:bg-red-900/60 disabled:opacity-50 sm:min-h-9"
             >
               <Trash2 className="h-3 w-3" />
               Clear All
@@ -220,7 +220,7 @@ export default function ErrorLogsPanel({ projectId }: { projectId: string }) {
               <button
                 type="button"
                 onClick={() => setVisibleCount((prev) => getNextVisibleErrorLogCount(prev, errorLogs.length))}
-                className="min-h-11 w-full rounded-md border border-red-900/30 bg-red-950/20 px-3 py-2 text-xs font-medium text-red-200 transition-colors hover:bg-red-950/30"
+                className="min-h-11 w-full rounded-md border border-red-900/30 bg-red-950/20 px-3 py-2 text-xs font-medium text-red-200 transition-colors hover:bg-red-950/30 sm:min-h-0"
               >
                 Load more ({getRemainingErrorLogCount(visibleCount, errorLogs.length)} remaining)
               </button>

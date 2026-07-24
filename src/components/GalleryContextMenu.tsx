@@ -104,7 +104,7 @@ export function GalleryContextMenu({ x, y, imageId, approvalStatus, mediaType = 
             }}
             type="button"
             onClick={() => handleAction(item.action)}
-            className={`flex min-h-11 w-full items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-zinc-700 ${
+            className={`flex min-h-11 w-full items-center gap-3 px-3 py-1.5 text-sm transition-colors hover:bg-zinc-700 sm:min-h-0 ${
               item.className ?? 'text-zinc-200'
             }`}
             role="menuitem"
