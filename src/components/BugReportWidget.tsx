@@ -181,7 +181,7 @@ export function BugReportWidget() {
           setFormError(null)
           setIsOpen(true)
         }}
-        className="fixed bottom-6 right-6 z-40 inline-flex min-h-12 min-w-12 items-center justify-center rounded-full bg-blue-600 p-3 text-white shadow-lg transition-all hover:scale-105 hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
+        className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-40 inline-flex min-h-12 min-w-12 items-center justify-center rounded-full bg-blue-600 p-3 text-white shadow-lg transition-all hover:scale-105 hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 sm:bottom-6 sm:right-6"
         title="Report Bug / Request Feature"
         aria-label="Report a bug or request a feature"
         aria-haspopup="dialog"
@@ -200,7 +200,7 @@ export function BugReportWidget() {
       {isOpen && (
         <div
           id={dialogId}
-          className="fixed inset-0 z-[100] flex items-center justify-center"
+          className="fixed inset-0 z-[100] flex items-end justify-center pt-[env(safe-area-inset-top)] sm:items-center"
           role="dialog"
           aria-modal="true"
           aria-labelledby={dialogTitleId}
@@ -210,16 +210,16 @@ export function BugReportWidget() {
 
           <div
             ref={dialogRef}
-            className="relative z-10 mx-4 flex max-h-[90vh] w-full max-w-lg flex-col overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl"
+            className="relative z-10 flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-t-xl border border-zinc-800 bg-zinc-900 shadow-2xl sm:mx-4 sm:max-h-[90dvh] sm:rounded-xl"
             onClick={(e) => e.stopPropagation()}
             tabIndex={-1}
           >
-            <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
-              <div className="flex items-center gap-3">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-zinc-800 px-4 py-4 sm:px-5">
+              <div className="flex min-w-0 flex-1 items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-500/10 text-blue-400">
                   <MessageSquarePlus className="h-5 w-5" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <h2 id={dialogTitleId} className="text-lg font-semibold text-zinc-100">Submit Feedback</h2>
                   <p id={dialogDescriptionId} className="text-sm text-zinc-500">
                     Report a bug or request a feature with optional screenshots.
@@ -237,7 +237,11 @@ export function BugReportWidget() {
               </button>
             </div>
 
-            <form ref={formRef} onSubmit={handleSubmit} className="space-y-5 p-5">
+            <form
+              ref={formRef}
+              onSubmit={handleSubmit}
+              className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4 sm:p-5"
+            >
               {formError && (
                 <div
                   className="flex items-start gap-2 rounded-lg border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300"
@@ -256,7 +260,7 @@ export function BugReportWidget() {
                     type="button"
                     onClick={() => setType('bug')}
                     aria-pressed={type === 'bug'}
-                    className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
+                    className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border px-2 py-2 text-sm font-medium transition-colors sm:px-4 ${
                       type === 'bug'
                         ? 'border-red-800 bg-red-950/30 text-red-300'
                         : 'border-zinc-700 bg-zinc-800 text-zinc-300 hover:border-zinc-600 hover:text-zinc-100'
@@ -269,7 +273,7 @@ export function BugReportWidget() {
                     type="button"
                     onClick={() => setType('feature')}
                     aria-pressed={type === 'feature'}
-                    className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
+                    className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg border px-2 py-2 text-sm font-medium transition-colors sm:px-4 ${
                       type === 'feature'
                         ? 'border-blue-800 bg-blue-950/30 text-blue-300'
                         : 'border-zinc-700 bg-zinc-800 text-zinc-300 hover:border-zinc-600 hover:text-zinc-100'
@@ -290,7 +294,7 @@ export function BugReportWidget() {
                   value={title}
                   onChange={(e) => setTitle(clampBugReportText(stripBugReportControlChars(e.target.value), MAX_BUG_REPORT_TITLE_LENGTH))}
                   placeholder={type === 'bug' ? 'Brief description of the issue' : 'Brief description of the feature'}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500"
+                  className="min-h-11 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-base text-zinc-100 placeholder-zinc-500 outline-none transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500 sm:text-sm"
                   maxLength={MAX_BUG_REPORT_TITLE_LENGTH}
                   required
                 />
@@ -308,7 +312,7 @@ export function BugReportWidget() {
                     : 'What feature would you like? Why would it be helpful?'
                   }
                   rows={4}
-                  className="w-full resize-none rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500"
+                  className="w-full resize-none rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-base text-zinc-100 placeholder-zinc-500 outline-none transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500 sm:text-sm"
                   maxLength={MAX_BUG_REPORT_DESCRIPTION_LENGTH}
                   required
                 />
@@ -338,14 +342,14 @@ export function BugReportWidget() {
                             value={img.caption}
                             onChange={(e) => updateImageCaption(index, e.target.value)}
                             placeholder="Add a caption (optional)"
-                            className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500"
+                            className="min-h-11 w-full rounded-md border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-base text-zinc-100 placeholder-zinc-500 outline-none transition-colors focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500 sm:min-h-0 sm:text-sm"
                             maxLength={MAX_BUG_REPORT_CAPTION_LENGTH}
                           />
                         </div>
                         <button
                           type="button"
                           onClick={() => removeImage(index)}
-                          className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"
+                          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"
                           aria-label={`Remove screenshot ${index + 1}`}
                         >
                           <Trash2 className="h-4 w-4" />

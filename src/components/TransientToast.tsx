@@ -43,12 +43,16 @@ export function TransientToast({
     )
 
   return (
-    <div className="fixed bottom-4 left-1/2 z-[120] -translate-x-1/2 px-4" role="status" aria-live="polite">
+    <div
+      className="fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-[120] flex justify-center px-4"
+      role="status"
+      aria-live="polite"
+    >
       <div
-        className={`flex items-center gap-3 rounded-lg border bg-zinc-900 px-4 py-3 text-sm text-zinc-100 shadow-xl shadow-black/50 ${TOAST_BORDER_BY_TONE[tone]}`}
+        className={`flex min-w-0 max-w-lg flex-1 items-center gap-3 rounded-lg border bg-zinc-900 px-3 py-2 text-sm text-zinc-100 shadow-xl shadow-black/50 sm:px-4 sm:py-3 ${TOAST_BORDER_BY_TONE[tone]}`}
       >
         {leadingIcon}
-        <span className="flex-1">{message}</span>
+        <span className="min-w-0 flex-1 break-words">{message}</span>
         <button
           type="button"
           onClick={onDismiss}
