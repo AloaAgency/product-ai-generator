@@ -73,7 +73,18 @@ export async function POST(request: NextRequest, { params }: Params) {
       jobId = newJob.id
     }
 
-    const results = await Promise.all(files.map(async (file) => {
+    // variation_number must be unique per (job_id, media_type) — uq_generated_images_job_variation_media.
+    // All manual uploads share one placeholder job, so continue from the current max.
+    const { data: maxRow } = await supabase
+      .from(T.generated_images)
+      .select('variation_number')
+      .eq('job_id', jobId)
+      .order('variation_number', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const baseVariation = (maxRow?.variation_number ?? -1) + 1
+
+    const results = await Promise.all(files.map(async (file, index) => {
       const extension = file.file_name.includes('.')
         ? `.${file.file_name.split('.').pop()?.toLowerCase()}`
         : ''
@@ -99,7 +110,7 @@ export async function POST(request: NextRequest, { params }: Params) {
           mime_type: file.mime_type,
           file_size: file.file_size || null,
           media_type: 'image',
-          variation_number: 0,
+          variation_number: baseVariation + index,
           approval_status: 'pending',
         })
         .select()
