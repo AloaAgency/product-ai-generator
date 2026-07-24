@@ -17,23 +17,47 @@ describe('galleryContextMenu.helpers', () => {
   it('repositions menus that would overflow the viewport and clamps negative coordinates', () => {
     expect(
       getGalleryContextMenuPosition({
-        x: 350,
+        x: 750,
         y: 280,
         itemCount: 6,
-        viewportWidth: 400,
+        viewportWidth: 800,
         viewportHeight: 300,
       })
-    ).toEqual({ x: 150, y: 32 })
+    ).toEqual({ x: 550, y: 32 })
 
     expect(
       getGalleryContextMenuPosition({
         x: -10,
         y: -20,
         itemCount: 2,
-        viewportWidth: 500,
+        viewportWidth: 800,
         viewportHeight: 500,
       })
     ).toEqual({ x: 0, y: 0 })
+  })
+
+  it('estimates taller menu items on touch-sized viewports so bottom menus flip sooner', () => {
+    // 6 items * 44px + 4 separators * 9px + 8px padding = 308px on a phone.
+    expect(
+      getGalleryContextMenuPosition({
+        x: 20,
+        y: 400,
+        itemCount: 6,
+        viewportWidth: 390,
+        viewportHeight: 700,
+      })
+    ).toEqual({ x: 20, y: 92 })
+
+    // The same tap point on a desktop viewport keeps the 34px estimate (248px).
+    expect(
+      getGalleryContextMenuPosition({
+        x: 20,
+        y: 400,
+        itemCount: 6,
+        viewportWidth: 1280,
+        viewportHeight: 700,
+      })
+    ).toEqual({ x: 20, y: 400 })
   })
 
   it('wraps keyboard focus consistently for arrows and tab navigation', () => {

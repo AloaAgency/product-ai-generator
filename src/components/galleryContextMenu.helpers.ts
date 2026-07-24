@@ -39,7 +39,15 @@ export const MENU_ITEMS: ContextMenuItem[] = [
 
 export const MENU_MIN_WIDTH_PX = 200
 export const MENU_ITEM_HEIGHT_PX = 34
+// Below Tailwind's `sm` breakpoint the menu items grow to a 44px touch target,
+// so the position estimate has to grow with them or bottom-of-screen menus
+// overflow the viewport on phones.
+export const MENU_ITEM_TOUCH_HEIGHT_PX = 44
+export const MENU_TOUCH_LAYOUT_MAX_VIEWPORT_WIDTH_PX = 640
 export const MENU_SEPARATOR_HEIGHT_PX = 9
+
+export const getMenuItemHeightPx = (viewportWidth: number) =>
+  viewportWidth < MENU_TOUCH_LAYOUT_MAX_VIEWPORT_WIDTH_PX ? MENU_ITEM_TOUCH_HEIGHT_PX : MENU_ITEM_HEIGHT_PX
 
 // Actions that render a separator immediately above them. Used by the menu to
 // draw dividers and by the position estimate to reserve their vertical space.
@@ -64,7 +72,7 @@ export const getGalleryContextMenuPosition = ({
   viewportHeight: number
 }) => {
   const estimatedHeight =
-    itemCount * MENU_ITEM_HEIGHT_PX + MENU_DIVIDER_ACTIONS.length * MENU_SEPARATOR_HEIGHT_PX + 8
+    itemCount * getMenuItemHeightPx(viewportWidth) + MENU_DIVIDER_ACTIONS.length * MENU_SEPARATOR_HEIGHT_PX + 8
   const adjustedX = x + MENU_MIN_WIDTH_PX > viewportWidth ? x - MENU_MIN_WIDTH_PX : x
   const adjustedY = y + estimatedHeight > viewportHeight ? y - estimatedHeight : y
 
