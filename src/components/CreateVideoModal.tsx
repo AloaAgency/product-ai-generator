@@ -354,7 +354,7 @@ export function CreateVideoModal({
           <div className="border-t border-zinc-800 pt-3">
             <button
               onClick={() => setShowAdvanced((v) => !v)}
-              className="inline-flex items-center gap-2 text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-200"
+              className="inline-flex min-h-11 items-center gap-2 text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-200 sm:min-h-0"
             >
               <SlidersHorizontal className="h-3.5 w-3.5" />
               Advanced settings
